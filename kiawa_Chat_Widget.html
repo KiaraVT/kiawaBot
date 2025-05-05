@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Twitch Chat</title>
+      <style>
+          img {vertical-align:middle}
+      </style>
+      <script>
+        const ws = new WebSocket('ws://localhost:8080');
+
+        ws.onopen = () => {
+          console.log('Connected to WebSocket server');
+        };
+
+        ws.onmessage = event => {
+          const data = JSON.parse(event.data) ; // Parse the JSON string
+//          const dataContainer = document.getElementById('data-container');
+//          dataContainer.innerHTML += `<p>${data.message} - ${data.timestamp}</p>`;
+          addMessage(data.tags, data.tags["display-name"],data.message)
+        };
+
+        ws.onclose = () => {
+          console.log('Disconnected from WebSocket server');
+        };
+
+        ws.onerror = error => {
+           console.error('WebSocket error:', error);
+        };
+
+        //these variables are used to get to the emote image urls
+        const urlFront="https://static-cdn.jtvnw.net/emoticons/v2/"
+        const urlBack="/default/light/"
+        const emoteSmall="2.0"
+        const emoteBig="3.0"
+
+        //this function is used to sort an array high to low
+        function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
+
+        // Function to add a new message to the chat window
+        function addMessage(tags, username, message) {
+          const chatMessages = document.getElementById('chat-messages');
+
+          //Check for emotes
+
+          if (tags.emotes){
+
+            //run through the emote object and pull out each emote as its own array entry
+            const emoteList=[];
+            for (const emote of Object.entries(tags.emotes)) {
+
+              for (let i=0;emote[1].length>i;i++) {
+                  const emoteURL=urlFront + emote[0] + urlBack + emoteBig
+                  let [startIndex,endIndex]=emote[1][i].split("-")
+                  startIndex=Number(startIndex)
+                  endIndex=Number(endIndex)+1
+                  emoteList.push({emoteURL,startIndex,endIndex})
+              }
+            }
+            emoteList.sort(compareStartIndex);
+            //regex replace text with an img
+            const messageParts=[];
+                  for (const emoteImage of emoteList) {
+                    const emoteHTML = `<img src=${emoteImage.emoteURL} width= "32" height= "32">`
+
+                    //the part before the emote code
+
+                    //the part after the emote code
+                    let messageBack= message.slice(emoteImage.endIndex)
+                    messageBack=messageBack.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+                    messageParts.unshift(messageBack);
+                    messageParts.unshift(emoteHTML);
+
+                    message=message.slice(0, emoteImage.startIndex)
+                  }
+                  message=message.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+                  messageParts.unshift(message);
+                  message=messageParts.join("")
+          }
+
+          else {
+            message=message.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+          }
+
+
+          //push the chat message to the webpage
+          const newMessage = document.createElement('p');
+          newMessage.innerHTML = `${username}: ${message}`;
+          chatMessages.appendChild(newMessage);
+          document.scrollingElement.scrollTop = 999999
+        }
+
+        //next steps
+        //Add in font customization
+        //adjust spacing of emotes (vertical and horizontal, may be text line based)
+        //add in badges (sub badges, mod icons, checkmarks, whatever)
+        //add in colors for names
+        //add cool html effects like marquee
+        //add cool way for text to enter scrollingElement (slide from left or right)
+        //make text start from the bottom
+        //add in events (like subs, raids, cheers, etc. etc.)
+        //giant emotes
+        //text shadow
+        //text color
+        //put it on github silly
+        //sizing, size to custom resolutions to fit within layouts
+        //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
+        //horizontal chat
+        //fun things for events (TM)
+
+      </script>
+    </head>
+    <body>
+      <div id="chat-messages"></div>
+
+
+    </body>
+    </html>
