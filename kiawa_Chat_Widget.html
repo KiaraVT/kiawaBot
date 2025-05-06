@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
       <title>Twitch Chat</title>
-      <style>
+      <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+      <style type="text/css">
           img {
                   vertical-align: middle;
               }
@@ -35,7 +36,7 @@
             }
 
       </style>
-      <script>
+      <script type="text/javascript">
         const ws = new WebSocket('ws://192.168.1.65:8080');
 
         ws.onopen = () => {
