@@ -9,11 +9,14 @@
           #chat-messages{
                   vertical-align: bottom;
                   height: 500px;
+                  width:300px;
                   overflow: hidden;
                   display: flex;
                   align-items: start;
                   justify-content: end;
                   flex-direction: column;
+                  margin-top: 0px;
+                  margin-bottom: 0px;
               }
 
       </style>
@@ -104,9 +107,16 @@
           username=`<span style="color:${userColor}">${username}</span>`
           //push the chat message to the webpage
           const newMessage = document.createElement('p');
+
           newMessage.innerHTML = `${username}: ${message}`;
           chatMessages.appendChild(newMessage);
           document.scrollingElement.scrollTop = 999999
+        //  let messagesSent=(Array.prototype.slice.call(chatMessages.children, -5));
+          //kchatMessages.innerHTML = ""
+        //  chatMessages.append(messagesSent)
+          //const children = Array.from(chatMessages.children);
+          chatMessages.replaceChildren(...Array.prototype.slice.call(chatMessages.children, -30))
+          //children.slice(-30)
         }
 
         //next steps
