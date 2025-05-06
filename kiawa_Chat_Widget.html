@@ -6,6 +6,16 @@
           img {
                   vertical-align: middle;
               }
+          #chat-messages{
+                  vertical-align: bottom;
+                  height: 500px;
+                  overflow: hidden;
+                  display: flex;
+                  align-items: start;
+                  justify-content: end;
+                  flex-direction: column;
+              }
+
       </style>
       <script>
         const ws = new WebSocket('ws://localhost:8080');
@@ -46,6 +56,9 @@
           let userColor=tags.color;
           if (userColor===null){
             userColor='#FFFFFF'
+          }
+          if (username==='kiawa_bot'){
+            userColor='#105584'
           }
           //Check for emotes
 
@@ -119,8 +132,9 @@
       </script>
     </head>
     <body>
-      <div id="chat-messages"></div>
+      <div id="chat-messages">
 
+      </div>
 
     </body>
     </html>
