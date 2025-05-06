@@ -42,6 +42,11 @@
         function addMessage(tags, username, message) {
           const chatMessages = document.getElementById('chat-messages');
 
+          //pull the userid color
+          let userColor=tags.color;
+          if (userColor===null){
+            userColor='#FFFFFF'
+          }
           //Check for emotes
 
           if (tags.emotes){
@@ -82,8 +87,8 @@
           else {
             message=message.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
           }
-
-
+          //make color html for username
+          username=`<span style="color:${userColor}">${username}</span>`
           //push the chat message to the webpage
           const newMessage = document.createElement('p');
           newMessage.innerHTML = `${username}: ${message}`;
@@ -92,6 +97,7 @@
         }
 
         //next steps
+        //custom avatars
         //Add in font customization
         //adjust spacing of emotes (vertical and horizontal, may be text line based)
         //add in badges (sub badges, mod icons, checkmarks, whatever)
@@ -108,6 +114,7 @@
         //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
         //horizontal chat
         //fun things for events (TM)
+        //find a good neutral color for those without color/assign a random color that persists through multiple chat messages
 
       </script>
     </head>
