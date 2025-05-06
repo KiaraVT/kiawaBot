@@ -6,6 +6,15 @@
           img {
                   vertical-align: middle;
               }
+          .emote{
+          width: 28px;
+          aspect-ratio: 1;
+
+          }
+          .emote-big{
+            width: 112px;
+            aspect-ratio: 1;
+          }
           #chat-messages{
                   vertical-align: bottom;
                   height: 500px;
@@ -15,6 +24,7 @@
                   align-items: start;
                   justify-content: end;
                   flex-direction: column;
+                  /*remove width, set flex-direction to row, then add with to chat message in order to make chat horizontal*/
               }
             .chat-message{
               padding: 0.2em;
@@ -59,7 +69,7 @@
         // Function to add a new message to the chat window
         function addMessage(tags, username, message) {
           const chatMessages = document.getElementById('chat-messages');
-
+          console.log(tags)
           //pull the userid color
           let userColor=tags.color;
           if (userColor===null){
@@ -88,9 +98,19 @@
             //regex replace text with an img
             const messageParts=[];
                   for (const emoteImage of emoteList) {
-                    const emoteHTML = `<img src=${emoteImage.emoteURL} width= "28" height= "28">`
 
                     //the part before the emote code
+                    const emoteElement = document.createElement("img");
+                    emoteElement.src=`${emoteImage.emoteURL}`
+
+                    //assign emote class for basic formatting
+                    emoteElement.classList.add("emote")
+
+                    //check if this was a big emote redeem, then assign the big emote class to enlarge
+                    if (tags["msg-id"]==="gigantified-emote-message"){
+                        emoteElement.classList.add("emote-big")
+                    }
+                    const emoteHTML = emoteElement.outerHTML;
 
                     //the part after the emote code
                     let messageBack= message.slice(emoteImage.endIndex)
@@ -124,17 +144,15 @@
 
         //next steps
         //custom avatars
-        //Add in font customization
         //add in badges (sub badges, mod icons, checkmarks, whatever)
         //add cool html effects like marquee
         //add cool way for text to enter scrollingElement (slide from left or right)
         //add in events (like subs, raids, cheers, etc. etc.)
-        //giant emotes
         //sizing, size to custom resolutions to fit within layouts
         //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
         //horizontal chat
         //fun things for events (TM)
-        //find a good neutral color for those without color/assign a random color that persists through multiple chat messages
+        //assign a random color that persists through multiple chat messages
 
       </script>
     </head>
