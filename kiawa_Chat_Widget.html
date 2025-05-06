@@ -15,13 +15,18 @@
                   align-items: start;
                   justify-content: end;
                   flex-direction: column;
-                  margin-top: 0px;
-                  margin-bottom: 0px;
               }
+            .chat-message{
+              padding: 0.2em;
+              color: #FFFFFF;
+              font-family: sans-serif; font-weight: 600;
+              text-shadow: -1px -1px 0 black, 1px -1px 0 black, 1px 1px 0 black, -1px 1px 0 black;
+
+            }
 
       </style>
       <script>
-        const ws = new WebSocket('ws://localhost:8080');
+        const ws = new WebSocket('ws://192.168.1.65:8080');
 
         ws.onopen = () => {
           console.log('Connected to WebSocket server');
@@ -58,7 +63,7 @@
           //pull the userid color
           let userColor=tags.color;
           if (userColor===null){
-            userColor='#FFFFFF'
+            userColor='#bbbbbb'
           }
           if (username==='kiawa_bot'){
             userColor='#105584'
@@ -83,7 +88,7 @@
             //regex replace text with an img
             const messageParts=[];
                   for (const emoteImage of emoteList) {
-                    const emoteHTML = `<img src=${emoteImage.emoteURL} width= "32" height= "32">`
+                    const emoteHTML = `<img src=${emoteImage.emoteURL} width= "28" height= "28">`
 
                     //the part before the emote code
 
@@ -106,33 +111,25 @@
           //make color html for username
           username=`<span style="color:${userColor}">${username}</span>`
           //push the chat message to the webpage
-          const newMessage = document.createElement('p');
-
+          const newMessage = document.createElement('div');
+          newMessage.classList.add("chat-message")
           newMessage.innerHTML = `${username}: ${message}`;
           chatMessages.appendChild(newMessage);
-          document.scrollingElement.scrollTop = 999999
-        //  let messagesSent=(Array.prototype.slice.call(chatMessages.children, -5));
-          //kchatMessages.innerHTML = ""
-        //  chatMessages.append(messagesSent)
-          //const children = Array.from(chatMessages.children);
+
+
+          //if chat messages exceed 30, trim the list down
           chatMessages.replaceChildren(...Array.prototype.slice.call(chatMessages.children, -30))
-          //children.slice(-30)
+          document.scrollingElement.scrollTop = 999999
         }
 
         //next steps
         //custom avatars
         //Add in font customization
-        //adjust spacing of emotes (vertical and horizontal, may be text line based)
         //add in badges (sub badges, mod icons, checkmarks, whatever)
-        //add in colors for names
         //add cool html effects like marquee
         //add cool way for text to enter scrollingElement (slide from left or right)
-        //make text start from the bottom
         //add in events (like subs, raids, cheers, etc. etc.)
         //giant emotes
-        //text shadow
-        //text color
-        //put it on github silly
         //sizing, size to custom resolutions to fit within layouts
         //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
         //horizontal chat
