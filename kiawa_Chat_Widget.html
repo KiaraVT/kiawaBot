@@ -12,14 +12,21 @@
           aspect-ratio: 1;
 
           }
+          .badges{
+          width: 1em;
+          aspect-ratio: 1;
+          margin-right: 2px;
+          position: relative; bottom: 2px;
+
+          }
           .emote-big{
             width: 112px;
             aspect-ratio: 1;
           }
           #chat-messages{
                   vertical-align: bottom;
-                  height: 500px;
-                  width:300px;
+                  height: 1000px;
+                  width:600px;
                   overflow: hidden;
                   display: flex;
                   align-items: start;
@@ -30,8 +37,8 @@
             .chat-message{
               padding: 0.2em;
               color: #FFFFFF;
-              font-family: sans-serif; font-weight: 600;
-              text-shadow: -1px -1px 0 black, 1px -1px 0 black, 1px 1px 0 black, -1px 1px 0 black;
+              font-family: sans-serif; font-weight: 600; font-size: 30px;
+              text-shadow: -1px -1px 0 black, 1px -1px 0 black, 1px 1px 0 black, -1px 1px 0 black; /* update shadow to be based on font*/
 
             }
 
@@ -79,8 +86,56 @@
           if (username==='kiawa_bot'){
             userColor='#105584'
           }
-          //Check for emotes
+          //get badge images, if any
+          let badgeIcons=""
+          if (tags.badges){
+                let chatBadges=[];
+                //predictions up here
+                if (tags.badges.founder){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/511b78a9-ab37-472f-9569-457753bbe7d3/3")
+                }
+                if (tags.badges.broadcaster){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/3")
+                }
+                if (tags.badges.moderator){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/3")
+                }
+                if (tags.badges.vip){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/3")
+                }
+                //sub badges go here
+                //misc other badges go at the end
 
+                if (tags.badges.partner){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/3")
+                }
+
+                if (tags.badges.staff){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d97c37bd-a6f5-4c38-8f57-4e4bef88af34/3")
+                }
+
+                if (tags.badges["artist-badge"]){
+                  console.log(tags.badges)
+                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/4300a897-03dc-4e83-8c0e-c332fee7057f/3")
+                }
+                for (const chatBadge of chatBadges) {
+
+                  //the part before the emote code
+                  const badgeElement = document.createElement("img");
+                  badgeElement.src=`${chatBadge}`
+
+                  //assign emote class for basic formatting
+                  badgeElement.classList.add("badges")
+                  badgeIcons=badgeIcons+badgeElement.outerHTML;
+                }
+          }
+          //Check for emotes
           if (tags.emotes){
 
             //run through the emote object and pull out each emote as its own array entry
@@ -134,7 +189,7 @@
           //push the chat message to the webpage
           const newMessage = document.createElement('div');
           newMessage.classList.add("chat-message")
-          newMessage.innerHTML = `${username}: ${message}`;
+          newMessage.innerHTML = `${badgeIcons}${username}: ${message}`;
           chatMessages.appendChild(newMessage);
 
 
@@ -151,7 +206,6 @@
         //add in events (like subs, raids, cheers, etc. etc.)
         //sizing, size to custom resolutions to fit within layouts
         //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
-        //horizontal chat
         //fun things for events (TM)
         //assign a random color that persists through multiple chat messages
 
