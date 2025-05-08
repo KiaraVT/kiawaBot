@@ -24,7 +24,7 @@ const t1Value = 3.60;
 const t2Value = 6.00;
 const t3Value = 17.50;
 const primeValue = 2.50;
-
+const broadcasterID=37055465;
 //details for Twitch OAuth
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -238,6 +238,22 @@ function getChannelInfo(broadcaster_id) {
             .catch(error => reject(error))
     });
 }
+
+function getChannelBadges(broadcaster_id) {
+    return new Promise((resolve, reject) => {
+        apiGetRequest('badges', { broadcaster_id: broadcaster_id })
+            .then(data => resolve(data.data))
+            .catch(error => reject(error))
+    });
+}
+let channelBadges=[]
+getChannelBadges(broadcasterID)
+.then(channelBadges => {
+    console.log('Got channel badges!', channelBadges);
+})
+.catch(error => {
+    console.log(error);
+});
 
 function serverBoop(user_id, duration, reason) {
     return new Promise((resolve, reject) => {
@@ -526,9 +542,9 @@ client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
-
+    //send to websocket
     if (websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({ channel, tags, message }));
+        websocket.send(JSON.stringify({ channel, tags, message, channelBadges }));
         console.log('tags')
     } else {
         //console.log('WebSocket is not connected. Message not sent.');
