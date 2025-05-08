@@ -54,7 +54,7 @@
           const data = JSON.parse(event.data) ; // Parse the JSON string
 //          const dataContainer = document.getElementById('data-container');
 //          dataContainer.innerHTML += `<p>${data.message} - ${data.timestamp}</p>`;
-          addMessage(data.tags, data.tags["display-name"],data.message)
+          addMessage(data.tags, data.tags["display-name"],data.message, data.channelBadges)
         };
 
         ws.onclose = () => {
@@ -75,9 +75,9 @@
         function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
 
         // Function to add a new message to the chat window
-        function addMessage(tags, username, message) {
+        function addMessage(tags, username, message, channelBadges) {
+          console.log(channelBadges)
           const chatMessages = document.getElementById('chat-messages');
-          console.log(tags)
           //pull the userid color
           let userColor=tags.color;
           if (userColor===null){
@@ -92,38 +92,37 @@
                 let chatBadges=[];
                 //predictions up here
                 if (tags.badges.founder){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/511b78a9-ab37-472f-9569-457753bbe7d3/3")
                 }
+
                 if (tags.badges.broadcaster){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/3")
                 }
+
                 if (tags.badges.moderator){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/3")
                 }
+
                 if (tags.badges.vip){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/3")
                 }
                 //sub badges go here
                 //misc other badges go at the end
 
                 if (tags.badges.partner){
-                  console.log(tags.badges)
+
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/3")
                 }
 
                 if (tags.badges.staff){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d97c37bd-a6f5-4c38-8f57-4e4bef88af34/3")
                 }
 
                 if (tags.badges["artist-badge"]){
-                  console.log(tags.badges)
                 chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/4300a897-03dc-4e83-8c0e-c332fee7057f/3")
                 }
+
+                //combine all the chat badges into one line of html
                 for (const chatBadge of chatBadges) {
 
                   //the part before the emote code
