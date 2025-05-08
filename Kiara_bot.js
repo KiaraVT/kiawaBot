@@ -852,7 +852,7 @@ client.on('message', async (channel, tags, message, self) => {
 
             //generate a random quote if no number specified
             if (quote_ID === '') {
-                var quote_ID = Math.floor(Math.random() * quote_Count) + 1;
+                var quote_ID = Math.floor(Math.random() * quote_Count + 1);
             }
 
 
