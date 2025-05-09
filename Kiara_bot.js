@@ -241,19 +241,20 @@ function getChannelInfo(broadcaster_id) {
 
 function getChannelBadges(broadcaster_id) {
     return new Promise((resolve, reject) => {
-        apiGetRequest('badges', { broadcaster_id: broadcaster_id })
+        apiGetRequest('chat/badges', { broadcaster_id: broadcaster_id })
             .then(data => resolve(data.data))
             .catch(error => reject(error))
     });
 }
-let channelBadges=[]
-getChannelBadges(broadcasterID)
-.then(channelBadges => {
-    console.log('Got channel badges!', channelBadges);
-})
-.catch(error => {
-    console.log(error);
-});
+
+function getGlobalBadges(broadcaster_id) {
+    return new Promise((resolve, reject) => {
+        apiGetRequest('chat/badges/global', { broadcaster_id: broadcaster_id })
+            .then(data => resolve(data.data))
+            .catch(error => reject(error))
+    });
+}
+
 
 function serverBoop(user_id, duration, reason) {
     return new Promise((resolve, reject) => {
@@ -348,7 +349,6 @@ const config = {
     },
     listener: { type: "websocket" },
 };
-console.log(config)
 tes = new TES(config)
 try {
     const tes = new TES(config);
@@ -380,13 +380,6 @@ const socket = new WebSocket.Server({ port: 8080 });
 socket.on('connection', ws => {
     websocket = ws
     console.log('Client connected');
-    // Send data to the client every 3 seconds
-    //setInterval(() => {
-    //    const data = { message: 'Hello from server!', timestamp: new Date() };
-    //ws.send(JSON.stringify(data)); // Send data as a JSON string
-    //    ws.send(JSON.stringify('this is a test'));
-    //  }, 10000);
-    // Send data as a JSON string
     ws.on('close', () => {
         console.log('Client disconnected');
     });
@@ -535,20 +528,24 @@ function updateIncentiveFile() {
         }
     });
 }
-
-
+let channelBadges;
 //connect to chat
 client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
     //send to websocket
+    if (!channelBadges){
+        channelBadges=[];
+        channelBadges.push(...await getChannelBadges(broadcasterID));
+        channelBadges.push(...await getGlobalBadges(""));
+    }
     if (websocket && websocket.readyState === WebSocket.OPEN) {
         websocket.send(JSON.stringify({ channel, tags, message, channelBadges }));
-        console.log('tags')
     } else {
         //console.log('WebSocket is not connected. Message not sent.');
     }
+
     ///////////////////////////////////
     //                               //
     //                               //
