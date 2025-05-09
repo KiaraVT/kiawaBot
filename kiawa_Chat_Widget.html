@@ -5,42 +5,47 @@
       <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
       <style type="text/css">
           img {
-                  vertical-align: middle;
-              }
+                vertical-align: middle;
+          }
+
           .emote{
-          width: 28px;
-          aspect-ratio: 1;
+                width: 1.1em;
+                aspect-ratio: 1;
 
           }
+
           .badges{
-          width: 1em;
-          aspect-ratio: 1;
-          margin-right: 2px;
-          position: relative; bottom: 2px;
+                width: 1em;
+                aspect-ratio: 1;
+                margin-right: 2px;
+                position: relative; bottom: 2px;
 
           }
+
           .emote-big{
-            width: 112px;
-            aspect-ratio: 1;
+                width: 3em;
+                aspect-ratio: 1;
           }
-          #chat-messages{
-                  vertical-align: bottom;
-                  height: 1000px;
-                  width:600px;
-                  overflow: hidden;
-                  display: flex;
-                  align-items: start;
-                  justify-content: end;
-                  flex-direction: column;
-                  /*remove width, set flex-direction to row, then add with to chat message in order to make chat horizontal*/
-              }
-            .chat-message{
-              padding: 0.2em;
-              color: #FFFFFF;
-              font-family: sans-serif; font-weight: 600; font-size: 30px;
-              text-shadow: -1px -1px 0 black, 1px -1px 0 black, 1px 1px 0 black, -1px 1px 0 black; /* update shadow to be based on font*/
 
-            }
+          #chat-messages{
+                vertical-align: bottom;
+                height: 1000px;
+                width:600px;
+                overflow: hidden;
+                display: flex;
+                align-items: start;
+                justify-content: end;
+                flex-direction: column;
+                /*remove width, set flex-direction to row, then add with to chat message in order to make chat horizontal*/
+          }
+
+          .chat-message{
+                padding: 0.2em;
+                color: #FFFFFF;
+                font-family: sans-serif; font-weight: 600; font-size: 30px;
+                text-shadow: -1px -1px 0 black, 1px -1px 0 black, 1px 1px 0 black, -1px 1px 0 black; /* update shadow to be based on font*/
+
+          }
 
       </style>
       <script type="text/javascript">
@@ -52,8 +57,6 @@
 
         ws.onmessage = event => {
           const data = JSON.parse(event.data) ; // Parse the JSON string
-//          const dataContainer = document.getElementById('data-container');
-//          dataContainer.innerHTML += `<p>${data.message} - ${data.timestamp}</p>`;
           addMessage(data.tags, data.tags["display-name"],data.message, data.channelBadges)
         };
 
@@ -67,16 +70,15 @@
 
         //these variables are used to get to the emote image urls
         const urlFront="https://static-cdn.jtvnw.net/emoticons/v2/"
-        const urlBack="/default/light/"
-        const emoteSmall="2.0"
-        const emoteBig="3.0"
+        const urlBack="/default/light/3.0"
 
         //this function is used to sort an array high to low
         function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
 
         // Function to add a new message to the chat window
         function addMessage(tags, username, message, channelBadges) {
-          console.log(channelBadges)
+          //console.log(channelBadges)
+          //console.log(tags)
           const chatMessages = document.getElementById('chat-messages');
           //pull the userid color
           let userColor=tags.color;
@@ -88,40 +90,21 @@
           }
           //get badge images, if any
           let badgeIcons=""
+          let subBadgeID=""
+          let badgeURL=""
           if (tags.badges){
+                //define the container for all of the badge urls
                 let chatBadges=[];
-                //predictions up here
-                if (tags.badges.founder){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/511b78a9-ab37-472f-9569-457753bbe7d3/3")
-                }
 
-                if (tags.badges.broadcaster){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/3")
-                }
-
-                if (tags.badges.moderator){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/3")
-                }
-
-                if (tags.badges.vip){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/3")
-                }
-                //sub badges go here
-                //misc other badges go at the end
-
-                if (tags.badges.partner){
-
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/3")
-                }
-
-                if (tags.badges.staff){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/d97c37bd-a6f5-4c38-8f57-4e4bef88af34/3")
-                }
-
-                if (tags.badges["artist-badge"]){
-                chatBadges.push("https://static-cdn.jtvnw.net/badges/v1/4300a897-03dc-4e83-8c0e-c332fee7057f/3")
-                }
-
+                  //run through the list of global and channel badges, compare message tags for set Id and version Id of the badges for the user
+                  for (const [setId, versionId] of Object.entries(tags.badges)) {
+                    const set=Object.entries(channelBadges).find(([arrayIndex, cb]) => cb.set_id == setId);
+                    const version =Object.entries(set[1].versions).find(([arrayIndex, v])=> v.id==versionId);
+                    console.log(version)
+                    const imageUrl= version[1].image_url_4x;
+                    console.log(imageUrl)
+                    chatBadges.push(imageUrl);
+                  }
                 //combine all the chat badges into one line of html
                 for (const chatBadge of chatBadges) {
 
@@ -142,7 +125,7 @@
             for (const emote of Object.entries(tags.emotes)) {
 
               for (let i=0;emote[1].length>i;i++) {
-                  const emoteURL=urlFront + emote[0] + urlBack + emoteBig
+                  const emoteURL=urlFront + emote[0] + urlBack
                   let [startIndex,endIndex]=emote[1][i].split("-")
                   startIndex=Number(startIndex)
                   endIndex=Number(endIndex)+1
@@ -204,7 +187,6 @@
         //add cool way for text to enter scrollingElement (slide from left or right)
         //add in events (like subs, raids, cheers, etc. etc.)
         //sizing, size to custom resolutions to fit within layouts
-        //make this work on network on not on local pc because kiara has a 2 pc setup and the bot does not run on the stream pc
         //fun things for events (TM)
         //assign a random color that persists through multiple chat messages
 
