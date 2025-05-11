@@ -44,7 +44,16 @@ const scopes = [
     'moderator:read:shoutouts',
     'moderation:read',
     'channel:moderate',
-    'moderator:manage:banned_users'
+    'moderator:manage:banned_users',
+    'user:read:chat',
+    'channel:bot',
+    'moderator:read:blocked_terms',
+    'moderator:read:chat_settings',
+    'moderator:read:unban_requests',
+    'moderator:read:banned_users',
+    'moderator:read:chat_messages',
+    'moderator:read:moderators',
+    'moderator:read:vips'
 ]
 //Variables for the !server command
 var servers = ["the Hyrule", "the BOP", "the Eorzean", "the Aether",
@@ -92,7 +101,7 @@ authListener.get("/", (req, res) => {
 });
 
 //Begin the auth process by opening the user's browser to the consent screen
-function startAuth() {
+async function startAuth() {
 
     const authQueryString = querystring.stringify({
         response_type: 'code',
@@ -101,7 +110,8 @@ function startAuth() {
         scope: scopes.join(' ')
     });
     const authUrl = "https://id.twitch.tv/oauth2/authorize?" + authQueryString.replace(/&/g, "^&");
-    spawn('cmd', ["/c", "start", authUrl]);
+    await spawn('cmd', ["/c", "start", authUrl]);
+    console.log('made it to end of startauth')
 }
 
 //exchange the authorization code we get from Twitch when the user consents to get an Access Token
@@ -312,7 +322,6 @@ function handleInitialAuthValidation() {
         });
 
 }
-
 //start up the auth file handler and attach the function that responds to changes
 const authData = new AuthDataHelper();
 
@@ -337,7 +346,6 @@ if (!fs.existsSync('./data/incentives.txt')) {
 }
 if (this.statusCallback) this.statusCallback("loaded");
 
-//startAuth()
 //LISTENING SECTION
 
 const config = {
@@ -349,9 +357,10 @@ const config = {
     },
     listener: { type: "websocket" },
 };
-tes = new TES(config)
+//tes = new TES(config)
+let tes;
 try {
-    const tes = new TES(config);
+    tes = new TES(config);
 } catch (e) {
     //let's assume any error here is due to a bad access token and re-auth
     startAuth()
@@ -447,6 +456,32 @@ tes.on('channel.subscribe', event => {
 });
 
 /***************************************
+ *        Mod Action                   *
+ ***************************************/
+tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.env.BROADCASTER_ID})
+    .then(handleSubSuccess)
+     .catch(handleSubFailure);
+
+ tes.on('channel.chat.message_delete', messageDelete => {
+   if (websocket && websocket.readyState === WebSocket.OPEN) {
+       websocket.send(JSON.stringify({ kiawaAction: "Message_Delete", messageDelete}));
+   }
+   else {
+   }
+ });
+
+ tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
+     .then(handleSubSuccess)
+      .catch(handleSubFailure);
+tes.on('channel.moderate', modAction => {
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+          websocket.send(JSON.stringify({ kiawaAction: "Mod_Action", modAction}));
+      }
+      else {
+      }
+});
+
+/***************************************
  *           Gift Sub(s)               *
  ***************************************/
 //Gift Sub
@@ -539,9 +574,12 @@ client.on('message', async (channel, tags, message, self) => {
         channelBadges=[];
         channelBadges.push(...await getChannelBadges(broadcasterID));
         channelBadges.push(...await getGlobalBadges(""));
+
+
+
     }
     if (websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({ channel, tags, message, channelBadges }));
+        websocket.send(JSON.stringify({ kiawaAction: "Message",channel, tags, message, channelBadges }));
     } else {
         //console.log('WebSocket is not connected. Message not sent.');
     }
