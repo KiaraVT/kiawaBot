@@ -271,7 +271,7 @@ const allBadges = {};
 /**
  * Add a badge API request's response data to the provided target object.
  * @param {Object} target - The target object to add the badge data to.
- * @param {Object} source - The source object containing the Twitch badge data.
+ * @param {Object[]} source - The source object containing the Twitch badge data.
  */
 function addTwitchBadges(target, source) {
     for (const { set_id, versions } of source) {
@@ -311,8 +311,8 @@ async function getBadgeVersion(set_id, version_id) {
 
             // merge all kinds of badges into tempBadges first, so we don't partially fill allBadges and have an error partway through
             const tempBadges = {};
-            addTwitchBadges(tempBadges, channelBadges);
             addTwitchBadges(tempBadges, globalBadges);
+            addTwitchBadges(tempBadges, channelBadges);
 
             // merge tempBadges into allBadges
             Object.assign(allBadges, tempBadges);
