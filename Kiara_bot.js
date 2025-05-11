@@ -249,21 +249,90 @@ function getChannelInfo(broadcaster_id) {
     });
 }
 
-function getChannelBadges(broadcaster_id) {
+// #region ==================== BADGES =====================
+
+/**
+ * Map of badge set IDs and version IDs to the original version objects from Twitch.
+ * Easier data structure to work with than the original API response.
+ * @example
+ * {
+ *   "bits": {
+ *     "1": {
+ *       "image_url_4x": "https://path.to/some/badge.jpg",
+ *       // many other properties
+ *     },
+ *     // many other versions
+ *   },
+ *   // many other sets
+ * }
+ */
+const allBadges = {};
+
+/**
+ * Add a badge API request's response data to the provided target object.
+ * @param {Object} target - The target object to add the badge data to.
+ * @param {Object[]} source - The source object containing the Twitch badge data.
+ */
+function addTwitchBadges(target, source) {
+    for (const { set_id, versions } of source) {
+        if (!target[set_id]) {
+            // if the set_id doesn't exist in target, create an empty placeholder for later
+            target[set_id] = {};
+        }
+        versions.forEach(version => {
+            target[set_id][version.id] = version;
+        });
+    }
+}
+
+function getChannelBadges() {
     return new Promise((resolve, reject) => {
-        apiGetRequest('chat/badges', { broadcaster_id: broadcaster_id })
+        apiGetRequest("chat/badges", { broadcaster_id: broadcasterID })
             .then(data => resolve(data.data))
             .catch(error => reject(error))
     });
 }
 
-function getGlobalBadges(broadcaster_id) {
+function getGlobalBadges() {
     return new Promise((resolve, reject) => {
-        apiGetRequest('chat/badges/global', { broadcaster_id: broadcaster_id })
+        apiGetRequest("chat/badges/global")
             .then(data => resolve(data.data))
             .catch(error => reject(error))
     });
 }
+
+async function getBadgeVersion(set_id, version_id) {
+    // if there are no badges loaded yet...
+    if (Object.keys(allBadges).length < 1) {
+        try {
+            // fetch badges from Twitch API
+            const channelBadges = await getChannelBadges();
+            const globalBadges = await getGlobalBadges();
+
+            // merge all kinds of badges into tempBadges first, so we don't partially fill allBadges and have an error partway through
+            const tempBadges = {};
+            addTwitchBadges(tempBadges, globalBadges);
+            addTwitchBadges(tempBadges, channelBadges);
+
+            // merge tempBadges into allBadges
+            Object.assign(allBadges, tempBadges);
+        }
+        catch (error) {
+            console.log("Total failure fetching badges:", error);
+        }
+    }
+    const set = allBadges[set_id];
+    if (set) {
+        const version = set[version_id];
+        if (version) {
+            return version;
+        }
+    }
+    console.log(`Badge version not found for set_id: ${set_id}, version_id: ${version_id}`);
+    return undefined;
+}
+
+// #endregion ==================== BADGES =====================
 
 
 function serverBoop(user_id, duration, reason) {
@@ -563,23 +632,23 @@ function updateIncentiveFile() {
         }
     });
 }
-let channelBadges;
+
 //connect to chat
 client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
     //send to websocket
-    if (!channelBadges){
-        channelBadges=[];
-        channelBadges.push(...await getChannelBadges(broadcasterID));
-        channelBadges.push(...await getGlobalBadges(""));
-
-
-
-    }
     if (websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({ kiawaAction: "Message",channel, tags, message, channelBadges }));
+        const messageBadges = [];
+        for (const [setId, versionId] of Object.entries(tags.badges)) {
+            const version = await getBadgeVersion(setId, versionId);
+            if (version) {
+                messageBadges.push(version);
+            }
+        }
+
+        websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
     } else {
         //console.log('WebSocket is not connected. Message not sent.');
     }
