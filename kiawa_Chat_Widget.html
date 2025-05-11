@@ -9,7 +9,7 @@
           }
 
           .emote{
-                width: 1.1em;
+                width: 1.4em;
                 aspect-ratio: 1;
 
           }
@@ -57,7 +57,19 @@
 
         ws.onmessage = event => {
           const data = JSON.parse(event.data) ; // Parse the JSON string
+          if (data.kiawaAction ==="Message_Delete"){
+            deleteMessage(data.messageDelete)
+          }
+          else if (data.kiawaAction==="Mod_Action"){
+              userBanned(data.modAction)
+          }
+          else if(data.kiawaAction==="Message"){
           addMessage(data.tags, data.tags["display-name"],data.message, data.channelBadges)
+          }
+          else{
+            console.log('unhandled kiawa Action')
+            console.log(data)
+          }
         };
 
         ws.onclose = () => {
@@ -74,35 +86,59 @@
 
         //this function is used to sort an array high to low
         function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
+        function userBanned(data){
+          const clone=[...document.getElementById('chat-messages').children];
+          for (const messageElement of clone){
 
+              if (messageElement.getAttribute('userID')===data.timeout.user_id){
+
+              //deleteshit
+              messageElement.remove();
+              }
+
+          }
+        }
+        function deleteMessage(data) {
+            for (const messageElement of document.getElementById('chat-messages').children){
+
+                if (messageElement.getAttribute('messageID')===data.message_id){
+
+                //deleteshit
+                messageElement.remove();
+                }
+
+            }
+        }
         // Function to add a new message to the chat window
         function addMessage(tags, username, message, channelBadges) {
-          //console.log(channelBadges)
-          //console.log(tags)
           const chatMessages = document.getElementById('chat-messages');
           //pull the userid color
           let userColor=tags.color;
+          const messageID=tags.id;
           if (userColor===null){
             userColor='#bbbbbb'
           }
           if (username==='kiawa_bot'){
             userColor='#105584'
           }
+
           //get badge images, if any
-          let badgeIcons=""
-          let subBadgeID=""
-          let badgeURL=""
+          let badgeIcons="";
+          let subBadgeID="";
+          let badgeURL="";
           if (tags.badges){
                 //define the container for all of the badge urls
                 let chatBadges=[];
-
+                  console.log(channelBadges)
                   //run through the list of global and channel badges, compare message tags for set Id and version Id of the badges for the user
                   for (const [setId, versionId] of Object.entries(tags.badges)) {
                     const set=Object.entries(channelBadges).find(([arrayIndex, cb]) => cb.set_id == setId);
-                    const version =Object.entries(set[1].versions).find(([arrayIndex, v])=> v.id==versionId);
+                    console.log(set)
+                    if (!set) continue;
+                    const version =Object.entries(set[1].versions).find(([arrayIndex, v])=> v.id == versionId);
                     console.log(version)
+                    if (!version) continue;
                     const imageUrl= version[1].image_url_4x;
-                    console.log(imageUrl)
                     chatBadges.push(imageUrl);
                   }
                 //combine all the chat badges into one line of html
@@ -171,9 +207,10 @@
           //push the chat message to the webpage
           const newMessage = document.createElement('div');
           newMessage.classList.add("chat-message")
+          newMessage.setAttribute('messageID',messageID)
+          newMessage.setAttribute('userID',tags["user-id"])
           newMessage.innerHTML = `${badgeIcons}${username}: ${message}`;
           chatMessages.appendChild(newMessage);
-
 
           //if chat messages exceed 30, trim the list down
           chatMessages.replaceChildren(...Array.prototype.slice.call(chatMessages.children, -30))
