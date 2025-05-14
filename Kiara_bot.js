@@ -285,7 +285,7 @@ function addTwitchBadges(target, source) {
     }
 }
 
-function getChannelBadges() {
+function getChannelBadges(broadcasterID) {
     return new Promise((resolve, reject) => {
         apiGetRequest("chat/badges", { broadcaster_id: broadcasterID })
             .then(data => resolve(data.data))
@@ -306,7 +306,7 @@ async function getBadgeVersion(set_id, version_id) {
     if (Object.keys(allBadges).length < 1) {
         try {
             // fetch badges from Twitch API
-            const channelBadges = await getChannelBadges();
+            const channelBadges = await getChannelBadges(broadcasterID);
             const globalBadges = await getGlobalBadges();
 
             // merge all kinds of badges into tempBadges first, so we don't partially fill allBadges and have an error partway through
@@ -641,12 +641,15 @@ client.on('message', async (channel, tags, message, self) => {
     //send to websocket
     if (websocket && websocket.readyState === WebSocket.OPEN) {
         const messageBadges = [];
+        if (tags.badges){
         for (const [setId, versionId] of Object.entries(tags.badges)) {
+            //parse out the badges that are part of this message
             const version = await getBadgeVersion(setId, versionId);
             if (version) {
                 messageBadges.push(version);
             }
         }
+       }
 
         websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
     } else {
