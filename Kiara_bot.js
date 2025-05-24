@@ -452,11 +452,11 @@ tes.on("connection_lost", (subscriptions) => {
             .catch(handleSubFailure);
     });
 });
-let websocket
+let websockets=[];
 // setup websocket server for chat widget
 const socket = new WebSocket.Server({ port: 8080 });
 socket.on('connection', ws => {
-    websocket = ws
+    websockets.push(ws);
     console.log('Client connected');
     ws.on('close', () => {
         console.log('Client disconnected');
@@ -639,21 +639,22 @@ client.connect();
 //message handler
 client.on('message', async (channel, tags, message, self) => {
     //send to websocket
-    if (websocket && websocket.readyState === WebSocket.OPEN) {
-        const messageBadges = [];
-        if (tags.badges){
-        for (const [setId, versionId] of Object.entries(tags.badges)) {
-            //parse out the badges that are part of this message
-            const version = await getBadgeVersion(setId, versionId);
-            if (version) {
-                messageBadges.push(version);
+    for (const websocket of websockets){
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            const messageBadges = [];
+            if (tags.badges){
+            for (const [setId, versionId] of Object.entries(tags.badges)) {
+                //parse out the badges that are part of this message
+                const version = await getBadgeVersion(setId, versionId);
+                if (version) {
+                    messageBadges.push(version);
+                }
             }
+           }
+          websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
+        } else {
+            //console.log('WebSocket is not connected. Message not sent.');
         }
-       }
-
-        websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
-    } else {
-        //console.log('WebSocket is not connected. Message not sent.');
     }
 
     ///////////////////////////////////
