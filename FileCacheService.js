@@ -51,7 +51,6 @@ export function buildFileCache(filePath) {
 		// make a method wrapper that also writes any data changes to the filesystem
 		function buildFileCachingHook(method) {
 			return function fileCachingHook() {
-				console.log("hook called for", method)
 				const result = Reflect[method].apply(cache, arguments); // do the original method call
 				writeFileJson(absolutePath, cache); // write the updated cache object out to disk
 				return result; // return whatever the original method would have returned
