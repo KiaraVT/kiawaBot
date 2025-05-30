@@ -47,13 +47,69 @@
 
       </style>
       <script type="text/javascript">
-        const ws = new WebSocket('ws://192.168.1.65:8080');
+        class ChatBotConnectionManager {
+          /** @typedef {(messageEvent: MessageEvent<string>) => any} MessageHandler */
+          
+          /** @type {WebSocket} */
+          #websocket;
+          
+          /** @type {URL} */
+          #url;
+          
+          /** @type {MessageHandler} */
+          #messageHandler;
 
-        ws.onopen = () => {
-          console.log('Connected to WebSocket server');
-        };
+          /**
+           * 
+           * @param {string | URL} url 
+           * @param {MessageHandler} messageHandler 
+           */
+          constructor(url, messageHandler) {
+            // save parameters for making new WebSockets now and possibly later
+            this.#url = new URL(url);
+            this.#messageHandler = messageHandler;
+            
+            // keep an eye on the WebSocket and reconnect it if needed
+            setInterval(() => !this.#isConnected() && this.#reconnect(), 3000);
+            // ...and start it up immediately instead of 3000 millis from now
+            this.#reconnect();
+          }
+          
+          #isConnected() {
+            // don't wanna keep starting over if CONNECTING state takes longer than 3000 millis
+            return [WebSocket.CONNECTING, WebSocket.OPEN, WebSocket.CLOSING].includes(this.#websocket?.readyState);
+          }
 
-        ws.onmessage = event => {
+          #reconnect() {
+            try {
+              this.#websocket?.close();
+            }
+            catch (e) {
+              // don't care if closing fails; we're about to replace it one way or another
+            }
+            const ws = new WebSocket(this.#url);
+            ws.onopen = event => {
+              console.log("Connected to Kiara_bot!");
+            };
+
+            ws.onmessage = messageEvent => {
+              this.#messageHandler?.(messageEvent)
+            };
+
+            ws.onclose = closeEvent => {
+              console.log("Disconnected from Kiara_bot.  Should reconnect shortly.", closeEvent);
+            };
+
+            ws.onerror = event => {
+              console.error("WebSocket error.  Should reconnect shortly.", event);
+            };
+            
+            this.#websocket = ws;
+          }
+        }
+        
+        new ChatBotConnectionManager("ws://192.168.1.65:8080", event => {
+          /** @type {({kiawaAction: string, [key: string]: any})} */
           const data = JSON.parse(event.data) ; // Parse the JSON string
           if (data.kiawaAction ==="Message_Delete"){
             deleteMessage(data.messageDelete)
@@ -68,15 +124,7 @@
             console.log('unhandled kiawa Action')
             console.log(data)
           }
-        };
-
-        ws.onclose = () => {
-          console.log('Disconnected from WebSocket server');
-        };
-
-        ws.onerror = error => {
-           console.error('WebSocket error:', error);
-        };
+        });
 
         //these variables are used to get to the emote image urls
         const urlFront="https://static-cdn.jtvnw.net/emoticons/v2/"
