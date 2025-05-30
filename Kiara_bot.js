@@ -532,22 +532,26 @@ tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.
      .catch(handleSubFailure);
 
  tes.on('channel.chat.message_delete', messageDelete => {
+   for (const websocket of websockets){
    if (websocket && websocket.readyState === WebSocket.OPEN) {
        websocket.send(JSON.stringify({ kiawaAction: "Message_Delete", messageDelete}));
    }
    else {
    }
+ }
  });
 
  tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
      .then(handleSubSuccess)
       .catch(handleSubFailure);
 tes.on('channel.moderate', modAction => {
+  for (const websocket of websockets){
       if (websocket && websocket.readyState === WebSocket.OPEN) {
           websocket.send(JSON.stringify({ kiawaAction: "Mod_Action", modAction}));
       }
       else {
       }
+    }
 });
 
 /***************************************
