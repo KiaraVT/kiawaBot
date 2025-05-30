@@ -20,6 +20,7 @@ const querystring = require('qs');
 const spawn = require('child_process').spawn;
 //Include line reading module
 const fs = require('fs');
+const { getFileCache } = require("./FileCacheService");
 const t1Value = 3.60;
 const t2Value = 6.00;
 const t3Value = 17.50;
@@ -652,6 +653,15 @@ client.on('message', async (channel, tags, message, self) => {
             }
            }
           websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
+          try {
+            const lastChatTimestamps = getFileCache("lastChatTimestamps.json");
+            const displayName = tags["display-name"];
+            lastChatTimestamps[displayName] = new Date();
+          }
+          catch (e) {
+            // oops, don't worry about it for this example
+            // console.log("something went wrong saving last timestamp?", e);
+          }
         } else {
             //console.log('WebSocket is not connected. Message not sent.');
         }
