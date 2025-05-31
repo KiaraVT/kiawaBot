@@ -418,41 +418,63 @@ if (this.statusCallback) this.statusCallback("loaded");
 
 //LISTENING SECTION
 
-const config = {
-    identity: {
-        id: process.env.CLIENT_ID,
-        secret: process.env.CLIENT_SECRET,
-        accessToken: authData.read('twitch.access_token'),
-        refreshToken: authData.read('twitch.refresh_token')
-    },
-    listener: { type: "websocket", port: "8082" },
-};
-//tes = new TES(config)
-let tes;
-try {
-    tes = new TES(config);
-} catch (e) {
-    //let's assume any error here is due to a bad access token and re-auth
-    startAuth()
-}
+/** @type {(type: string, condition: object, callback: (event: Event) => any) => void} */
+const handleWithTes = (() => {
+    
+    try {
+        /** @type {{type: string, condition: object, callback: (event: Event) => any}[]} */
+        const pendingSubscriptions = [];
+        const tes = new TES({
+            identity: {
+                id: process.env.CLIENT_ID,
+                secret: process.env.CLIENT_SECRET,
+                accessToken: authData.read('twitch.access_token'),
+                refreshToken: authData.read('twitch.refresh_token')
+            },
+            listener: { type: "websocket", port: 8082 },
+        });
 
+        // TES and Twitch got disconnected - TES will handle reconnecting but not inherently resubscribing.
+        tes.on("connection_lost", async (subscriptions) => {
+            // Resubscribe to all event subscriptions
+            Object.values(subscriptions).forEach(subscription => {
+                pendingSubscriptions.push({type: subscription.type, condition: subscription.condition, version: subscription.version});
+            });
+        });
+        
+        // Kiara had success with doing these faster, but Twitch docs say the limit is 20 subscriptions per 10 seconds.
+        // May need to increase this delay if the number of subscriptions goes up.
+        const subscriptionDelayMillis = 100;
+        
+        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
+        setInterval(async () => {
+            const input = pendingSubscriptions.shift();
+            if (input) {
+                tes.on(input.type, input.callback);
+                try {
+                    const subscription = await tes.subscribe(input.type, input.condition, input.version);
+                    console.log("Subscription to event channel successful", subscription);
+                }
+                catch (error) {
+                    console.log("Error subscribing to event channel.  Will try again shortly.", error);
+                    pendingSubscriptions.push({type: input.type, condition: input.condition, version: input.version});
+                }
+            }
+        }, subscriptionDelayMillis); 
+
+        return (type, condition, callback) => {
+            pendingSubscriptions.push({type, condition, callback});
+        }
+    } catch (error) {
+        //let's assume any error here is due to a bad access token and re-auth
+        const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
+        warning();
+        startAuth();
+        return warning;
+    }
+})();
 const subCondition = { broadcaster_user_id: process.env.BROADCASTER_ID };
-const handleSubSuccess = async function(subscription) {
-    //const token = await tes.getAccessToken();
-    console.log(`Subscription to event channel successful`, subscription);
-}
-const handleSubFailure = function(err) {
-    console.log(`error subscribing to event channel`, err);
-}
 
-tes.on("connection_lost", (subscriptions) => {
-    //resubscribe to all event subscriptions
-    Object.values(subscriptions).forEach((subscription) => {
-        tes.subscribe(subscription.type, subscription.condition)
-            .then(handleSubSuccess)
-            .catch(handleSubFailure);
-    });
-});
 let websockets=[];
 // setup websocket server for chat widget
 const socket = new WebSocket.Server({ port: 8080 });
@@ -468,12 +490,7 @@ console.log('WebSocket server started on port 8080');
 /***************************************
  *          Channel Updates             *
  ***************************************/
-// tes.subscribe('channel.update', subCondition)
-//     .then(handleSubSuccess)
-//     .catch(handleSubFailure);
-//
-//
-// tes.on('channel.update', event => {
+// handleWithTes("channel.update", subCondition, event => {
 //     //Handle received Channel Update events
 //     console.log(`${event.broadcaster_user_name}'s new title is ${event.title}`);
 //     console.log(event);
@@ -483,11 +500,7 @@ console.log('WebSocket server started on port 8080');
 /***************************************
  *          New Follower               *
  ***************************************/
-// tes.subscribe('channel.follow', subCondition)
-//     .then(handleSubSuccess)
-//     .catch(handleSubFailure);
-//
-// tes.on('channel.follow', event => {
+// handleWithTes("channel.follow", subCondition, event => {
 //     //Handle received New Follower events
 //     console.log(event);
 // });
@@ -495,11 +508,7 @@ console.log('WebSocket server started on port 8080');
 /***************************************
  *          Cheer (Bits)               *
  ***************************************/
-tes.subscribe('channel.cheer', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure);
-
-tes.on('channel.cheer', event => {
+handleWithTes("channel.cheer", subCondition, event => {
     //Handle received Cheer events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -515,11 +524,7 @@ tes.on('channel.cheer', event => {
 /***************************************
  *        New Subscriber               *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.subscribe', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),100);
-
-tes.on('channel.subscribe', event => {
+handleWithTes("channel.subscribe", subCondition, event => {
     //Handle received New Subscriber events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -528,12 +533,7 @@ tes.on('channel.subscribe', event => {
 /***************************************
  *        Mod Action                   *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.env.BROADCASTER_ID})
-                .then(handleSubSuccess)
-                .catch(handleSubFailure),200)
-
-
- tes.on('channel.chat.message_delete', messageDelete => {
+handleWithTes("channel.chat.message_delete", {...subCondition, user_id: process.env.BROADCASTER_ID}, messageDelete => {
    for (const websocket of websockets){
    if (websocket && websocket.readyState === WebSocket.OPEN) {
        websocket.send(JSON.stringify({ kiawaAction: "Message_Delete", messageDelete}));
@@ -543,10 +543,7 @@ setTimeout(() => tes.subscribe('channel.chat.message_delete', {...subCondition, 
  }
  });
 
- setTimeout(() => tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
-     .then(handleSubSuccess)
-      .catch(handleSubFailure),300);
-tes.on('channel.moderate', modAction => {
+handleWithTes("channel.moderate", {...subCondition, moderator_user_id: process.env.BROADCASTER_ID}, modAction => {
   for (const websocket of websockets){
       if (websocket && websocket.readyState === WebSocket.OPEN) {
           websocket.send(JSON.stringify({ kiawaAction: "Mod_Action", modAction}));
@@ -560,11 +557,7 @@ tes.on('channel.moderate', modAction => {
  *           Gift Sub(s)               *
  ***************************************/
 //Gift Sub
-setTimeout(() => tes.subscribe('channel.subscription.gift', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),400);
-
-tes.on('channel.subscription.gift', event => {
+handleWithTes("channel.subscription.gift", subCondition, event => {
     //Handle received gift sub events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -586,10 +579,7 @@ tes.on('channel.subscription.gift', event => {
  *            Resub Message            *
  ***************************************/
 //Resub
-setTimeout(() => tes.subscribe('channel.subscription.message', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),500);
-tes.on('channel.subscription.message', event => {
+handleWithTes("channel.subscription.message", subCondition, event => {
     //Handle received new sub in chat
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
