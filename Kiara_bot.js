@@ -494,6 +494,7 @@ class TesManager {
              */
             const onConnectionLost = subscriptionTypeAndConditionById => {
                 for (const {type, condition} of Object.values(subscriptionTypeAndConditionById)) {
+                    // Calling this.queueSubscription would be technically incorrect because 'callback' is a required parameter for the public surface.
                     this.#pendingSubscriptions.push({ type, condition });
                 }
             };
