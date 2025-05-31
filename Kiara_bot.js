@@ -20,7 +20,7 @@ const querystring = require('qs');
 const spawn = require('child_process').spawn;
 //Include line reading module
 const fs = require('fs');
-const { getFileCache } = require("./FileCacheService");
+//const { getFileCache } = require("./FileCacheService");
 const t1Value = 3.60;
 const t2Value = 6.00;
 const t3Value = 17.50;
@@ -425,7 +425,7 @@ const config = {
         accessToken: authData.read('twitch.access_token'),
         refreshToken: authData.read('twitch.refresh_token')
     },
-    listener: { type: "websocket" },
+    listener: { type: "websocket", port: "8082" },
 };
 //tes = new TES(config)
 let tes;
@@ -505,7 +505,7 @@ tes.on('channel.cheer', event => {
     incentiveAmount = incentiveData.read('incentive.amount');
     incentiveAmount = incentiveAmount + event.bits / 100
     if (event.bits === 999) {
-        setTimeout(() => { serverBoop(`22587336`, 1800, 'TNT') }, 5000);;
+        setTimeout(() => { serverBoop(`22587336`, 1800, 'TNT') }, 5000);
     }
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
@@ -515,9 +515,9 @@ tes.on('channel.cheer', event => {
 /***************************************
  *        New Subscriber               *
  ***************************************/
-tes.subscribe('channel.subscribe', subCondition)
+setTimeout(() => tes.subscribe('channel.subscribe', subCondition)
     .then(handleSubSuccess)
-    .catch(handleSubFailure);
+    .catch(handleSubFailure),100);
 
 tes.on('channel.subscribe', event => {
     //Handle received New Subscriber events
@@ -528,9 +528,10 @@ tes.on('channel.subscribe', event => {
 /***************************************
  *        Mod Action                   *
  ***************************************/
-tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.env.BROADCASTER_ID})
-    .then(handleSubSuccess)
-     .catch(handleSubFailure);
+setTimeout(() => tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.env.BROADCASTER_ID})
+                .then(handleSubSuccess)
+                .catch(handleSubFailure),200)
+
 
  tes.on('channel.chat.message_delete', messageDelete => {
    for (const websocket of websockets){
@@ -542,9 +543,9 @@ tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.
  }
  });
 
- tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
+ setTimeout(() => tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
      .then(handleSubSuccess)
-      .catch(handleSubFailure);
+      .catch(handleSubFailure),300);
 tes.on('channel.moderate', modAction => {
   for (const websocket of websockets){
       if (websocket && websocket.readyState === WebSocket.OPEN) {
@@ -559,9 +560,9 @@ tes.on('channel.moderate', modAction => {
  *           Gift Sub(s)               *
  ***************************************/
 //Gift Sub
-tes.subscribe('channel.subscription.gift', subCondition)
+setTimeout(() => tes.subscribe('channel.subscription.gift', subCondition)
     .then(handleSubSuccess)
-    .catch(handleSubFailure);
+    .catch(handleSubFailure),400);
 
 tes.on('channel.subscription.gift', event => {
     //Handle received gift sub events
@@ -585,9 +586,9 @@ tes.on('channel.subscription.gift', event => {
  *            Resub Message            *
  ***************************************/
 //Resub
-tes.subscribe('channel.subscription.message', subCondition)
+setTimeout(() => tes.subscribe('channel.subscription.message', subCondition)
     .then(handleSubSuccess)
-    .catch(handleSubFailure);
+    .catch(handleSubFailure),500);
 tes.on('channel.subscription.message', event => {
     //Handle received new sub in chat
     console.log(event);
@@ -819,7 +820,6 @@ client.on('message', async (channel, tags, message, self) => {
 
                 //this takes everything after the command identifier and recombines it to be the new command text
                 var command_Text = args.slice(2).join(' ');
-                console.log(command_Text)
             }
 
             //I don't know how errors work so this just stops it from clogging the window
@@ -904,7 +904,6 @@ client.on('message', async (channel, tags, message, self) => {
                 //Grab the category info code
                 const broadcast_info = await getChannelInfo(37055465);
                 //const broadcast_info= await axios.get('https://api.twitch.tv/helix/channels?broadcaster_id=37055465', axiosConfig);
-                console.log(broadcast_info[0].game_name)
                 const category = broadcast_info[0].game_name;
 
 
