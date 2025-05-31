@@ -2,10 +2,8 @@
 const tmi = require('tmi.js');
 const TES = require("tesjs");
 require('dotenv').config();
-const request = require('request');
 const axios = require('axios');
 const jsonfile = require('jsonfile');
-const number = require('number');
 const quote_Path = './data/quotes.json';
 const command_Path = './data/command_List.json';
 //This is the included AuthDataHelper.js file
