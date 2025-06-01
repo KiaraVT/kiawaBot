@@ -502,7 +502,10 @@ function sendToAllChatWidgets(data) {
     serialized = JSON.stringify(data);
   }
   catch (error) {
+    // If the data can't be serialized, it can't be sent to the websockets.
+    // But let's not explode; just log the issue and return.  Nothing's wrong with the WebSocket connection after all, only the input for this one call.
     console.error("Failed to serialize chat widget data!", error);
+    return;
   }
   for (const connection of websockets) {
     try {
