@@ -453,6 +453,37 @@ tes.on("connection_lost", (subscriptions) => {
             .catch(handleSubFailure);
     });
 });
+
+/** @type {{[messageId: string]: NodeJS.Timeout}} */
+const recentlySeenMessageIds = {};
+/**
+ * @see https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events
+ * 
+ * @param {(event: Event, subscription: any) => void} callback
+ * @returns {(event: Event, subscription: any) => void}
+ */
+function preventDuplicateEvents(callback) {
+    return (event, subscription) => {
+        const messageId = event.message_id;
+        const timeout = recentlySeenMessageIds[messageId];
+        if (!timeout) {
+            // The timeout does not exist.  This is the first time we've seen this message recently.
+            // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
+    
+            // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
+            // This message receipt will self destruct in 5 seconds.
+            recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
+    
+            callback(event, subscription);
+        }
+        else {
+            // The timeout already exists.  The message is a duplicate.
+            // Don't handle this message, but restart the timeout.
+            timeout.refresh();
+        }
+    };
+}
+
 let websockets=[];
 // setup websocket server for chat widget
 const socket = new WebSocket.Server({ port: 8080 });
@@ -464,6 +495,26 @@ socket.on('connection', ws => {
     });
 });
 console.log('WebSocket server started on port 8080');
+
+function sendToAllChatWidgets(data) {
+  let serialized = data;
+  try {
+    serialized = JSON.stringify(data);
+  }
+  catch (error) {
+    console.error("Failed to serialize chat widget data!", error);
+  }
+  for (const connection of websockets) {
+    try {
+      if (connection?.readyState === WebSocket.OPEN) {
+        connection.send(serialized);
+      }
+    }
+    catch (error) {
+      console.error("Sending to chat widget failed!", serialized, error);
+    }
+  }
+}
 
 /***************************************
  *          Channel Updates             *
@@ -499,7 +550,7 @@ tes.subscribe('channel.cheer', subCondition)
     .then(handleSubSuccess)
     .catch(handleSubFailure);
 
-tes.on('channel.cheer', event => {
+tes.on('channel.cheer', preventDuplicateEvents(event => {
     //Handle received Cheer events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -510,7 +561,7 @@ tes.on('channel.cheer', event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-});
+}));
 
 /***************************************
  *        New Subscriber               *
@@ -519,11 +570,11 @@ setTimeout(() => tes.subscribe('channel.subscribe', subCondition)
     .then(handleSubSuccess)
     .catch(handleSubFailure),100);
 
-tes.on('channel.subscribe', event => {
+tes.on('channel.subscribe', preventDuplicateEvents(event => {
     //Handle received New Subscriber events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
-});
+}));
 
 /***************************************
  *        Mod Action                   *
@@ -533,28 +584,16 @@ setTimeout(() => tes.subscribe('channel.chat.message_delete', {...subCondition, 
                 .catch(handleSubFailure),200)
 
 
- tes.on('channel.chat.message_delete', messageDelete => {
-   for (const websocket of websockets){
-   if (websocket && websocket.readyState === WebSocket.OPEN) {
-       websocket.send(JSON.stringify({ kiawaAction: "Message_Delete", messageDelete}));
-   }
-   else {
-   }
- }
- });
+ tes.on('channel.chat.message_delete', preventDuplicateEvents(messageDelete => {
+   sendToAllChatWidgets({ kiawaAction: "Message_Delete", messageDelete});
+ }));
 
  setTimeout(() => tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
      .then(handleSubSuccess)
       .catch(handleSubFailure),300);
-tes.on('channel.moderate', modAction => {
-  for (const websocket of websockets){
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-          websocket.send(JSON.stringify({ kiawaAction: "Mod_Action", modAction}));
-      }
-      else {
-      }
-    }
-});
+tes.on('channel.moderate', preventDuplicateEvents(modAction => {
+  sendToAllChatWidgets({ kiawaAction: "Mod_Action", modAction});
+}));
 
 /***************************************
  *           Gift Sub(s)               *
@@ -564,7 +603,7 @@ setTimeout(() => tes.subscribe('channel.subscription.gift', subCondition)
     .then(handleSubSuccess)
     .catch(handleSubFailure),400);
 
-tes.on('channel.subscription.gift', event => {
+tes.on('channel.subscription.gift', preventDuplicateEvents(event => {
     //Handle received gift sub events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -580,7 +619,7 @@ tes.on('channel.subscription.gift', event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-});
+}));
 
 /***************************************
  *            Resub Message            *
@@ -589,7 +628,7 @@ tes.on('channel.subscription.gift', event => {
 setTimeout(() => tes.subscribe('channel.subscription.message', subCondition)
     .then(handleSubSuccess)
     .catch(handleSubFailure),500);
-tes.on('channel.subscription.message', event => {
+tes.on('channel.subscription.message', preventDuplicateEvents(event => {
     //Handle received new sub in chat
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -608,7 +647,7 @@ tes.on('channel.subscription.message', event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-});
+}));
 
 
 
@@ -645,32 +684,17 @@ client.connect();
 //message handler
 client.on('message', async (channel, tags, message, self) => {
     //send to websocket
-    for (const websocket of websockets){
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
-            const messageBadges = [];
-            if (tags.badges){
-            for (const [setId, versionId] of Object.entries(tags.badges)) {
-                //parse out the badges that are part of this message
-                const version = await getBadgeVersion(setId, versionId);
-                if (version) {
-                    messageBadges.push(version);
-                }
+    const messageBadges = [];
+    if (tags.badges) {
+        for (const [setId, versionId] of Object.entries(tags.badges)) {
+            //parse out the badges that are part of this message
+            const version = await getBadgeVersion(setId, versionId);
+            if (version) {
+                messageBadges.push(version);
             }
-           }
-          websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
-          try {
-            const lastChatTimestamps = getFileCache("lastChatTimestamps.json");
-            const displayName = tags["display-name"];
-            lastChatTimestamps[displayName] = new Date();
-          }
-          catch (e) {
-            // oops, don't worry about it for this example
-            // console.log("something went wrong saving last timestamp?", e);
-          }
-        } else {
-            //console.log('WebSocket is not connected. Message not sent.');
         }
     }
+    sendToAllChatWidgets({ kiawaAction: "Message", channel, tags, message, messageBadges });
 
     ///////////////////////////////////
     //                               //
