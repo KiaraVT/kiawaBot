@@ -26,12 +26,14 @@ const t2Value = 6.00;
 const t3Value = 17.50;
 const primeValue = 2.50;
 const broadcasterID=37055465;
+const channelName='#kiara_tv';
 //details for Twitch OAuth
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 const botID = process.env.BOT_ID;
 var incentiveAmount;
 var incentiveGoal;
+const timedCommands=['discord', 'kofi','socials2', 'socials1', 'links','patreon','youtube','archives'];
 const scopes = [
     'bits:read',
     'channel:read:subscriptions',
@@ -55,7 +57,7 @@ const scopes = [
     'moderator:read:chat_messages',
     'moderator:read:moderators',
     'moderator:read:vips'
-]
+];
 //Variables for the !server command
 var servers = ["the Hyrule", "the BOP", "the Eorzean", "the Aether",
     "Your Mom's ", "the Zebes", "the Adamantoise", "the Atlantis",
@@ -639,12 +641,57 @@ function updateIncentiveFile() {
     });
 }
 
+//this function will search the command list file and if it finds a command, will send the response to chat
+function postCommand(command){
+        jsonfile.readFile(command_Path, async function(err, command_List) {
+            if (err) {
+                console.error(err);
+            }
+
+            //Search the existing command file and see if the command exists
+            var command_Info = command_List.find(
+                (search) => {
+                    return search.Tag === command;
+                }        
+            );
+            //format all the bullshit and spit it out in the chat
+            try {
+                var command_Output = command_Info.Response
+                client.say(channelName, command_Output);
+            }
+            catch (error) {
+                console.error(err);
+            }
+        });
+}
+//these two variables track activity and which timed command we are currently at.
+let activityDetection=false
+let commandIndex=0
+
+//interval for timed chat commands that run automagically if chat activity has been recorded since last run
+setInterval(()=>{
+if (activityDetection===true){    
+        //send the current command in the rotation to get posted
+        postCommand(timedCommands[commandIndex]);
+        //increment the array index, reset to 0 if past max
+        commandIndex=(commandIndex+1) % timedCommands.length;
+        //resert activity detection so that timed messages do not get spammed without chat activity
+        activityDetection=false;
+    }
+},1200000)
+// post first entry in array to postCommand
+//increment to next array index, if at max loop back to start
+
 //connect to chat
 client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
     //send to websocket
+    //determine if chat activity in last 10 minutes
+    if (tags.username != "kiawa_bot"){
+        activityDetection=true;
+    }
     for (const websocket of websockets){
         if (websocket && websocket.readyState === WebSocket.OPEN) {
             const messageBadges = [];
@@ -757,7 +804,7 @@ client.on('message', async (channel, tags, message, self) => {
     if (command === '!addcommand') {
 
         //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        if (allow_List.includes(tags.username) || tags.mod===true) {
 
 
             //Grab the Current Command total
@@ -812,7 +859,7 @@ client.on('message', async (channel, tags, message, self) => {
     if (command === '!editcommand') {
 
         //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        if (allow_List.includes(tags.username) || tags.mod===true) {
 
             //check and make sure a command field was added
             try {
@@ -874,9 +921,8 @@ client.on('message', async (channel, tags, message, self) => {
 
     //check if it is an add quote command
     if (command === '!addquote') {
-
-        //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        //check if user is a mod or VIP allow_List.includes(tags.username) || 
+        if (allow_List.includes(tags.username) || tags.mod===true || tags.vip===true) {
 
 
             //the remainder of the text is separated from the command, this is the quote text
@@ -993,6 +1039,7 @@ client.on('message', async (channel, tags, message, self) => {
                 //format all the bullshit and spit it out in the chat
                 var quote_Output = "Quote #" + quote_ID + ": " + quote_Info.Quote_Text + " [" + quote_Info.Category + "] " + "[" + quote_Info.Date + "]"
                 client.say(channel, quote_Output);
+                console.log(channel);
             }
             else {
                 client.say(channel, `Number Provided out of range! The highest number is ${quote_Count}`);
@@ -1003,7 +1050,7 @@ client.on('message', async (channel, tags, message, self) => {
     //update incentive goal and bot command id
     if (command === '!updateincentive') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        if (allow_List.includes(tags.username) || tags.mod===true) {
             //Grab the Current incentive goal
             incentiveGoal = incentiveData.read('incentive.goal');
             incentiveGoal = incentiveData.read('incentive.goal');
@@ -1032,7 +1079,7 @@ client.on('message', async (channel, tags, message, self) => {
 
     if (command === '!addincentive') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        if (allow_List.includes(tags.username) || tags.mod===true) {
             //Grab the Current incentive goal
             incentiveAmount = incentiveData.read('incentive.amount');
             incentiveGoal = incentiveData.read('incentive.goal');
@@ -1059,7 +1106,7 @@ client.on('message', async (channel, tags, message, self) => {
     //Code to handle editing of existing quotes
     if (command === '!editquote') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
-        if (allow_List.includes(tags.username)) {
+        if (allow_List.includes(tags.username) || tags.mod===true || tags.vip===true) {
             //Grab the Current Quote total
             jsonfile.readFile(quote_Path, function(err, quote_List) {
                 if (err) console.error(err)
@@ -1124,25 +1171,6 @@ client.on('message', async (channel, tags, message, self) => {
     if (command.charAt(0) === '!') {
         //remove "!" from the search text
         command = command.slice(1);
-        jsonfile.readFile(command_Path, async function(err, command_List) {
-            if (err) {
-                //console.error(err)
-            }
-
-            //Search the existing command file and see if the command exists
-            var command_Info = command_List.find(
-                (search) => {
-                    return search.Tag === command;
-                }
-            );
-            //format all the bullshit and spit it out in the chat
-            try {
-                var command_Output = command_Info.Response
-                client.say(channel, command_Output);
-            }
-            catch (error) {
-
-            }
-        });
+        postCommand(command);
     }
 }); //on message top level bracket
