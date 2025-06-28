@@ -448,7 +448,8 @@ class TesManager {
                 // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
                 // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
                 if (typeof callback === "function") {
-                    this.#tes.on(type, callback);
+                    const wrappedCallback = preventDuplicateEvents(callback);
+                    this.#tes.on(type, wrappedCallback);
                 }
                 
                 try {
@@ -523,6 +524,36 @@ class TesManager {
 const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: process.env.BROADCASTER_ID };
 
+/** @type {{[messageId: string]: NodeJS.Timeout}} */
+const recentlySeenMessageIds = {};
+/**
+ * @see https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events
+ * 
+ * @param {(event: Event, subscription: any) => void} callback
+ * @returns {(event: Event, subscription: any) => void}
+ */
+function preventDuplicateEvents(callback) {
+    return (event, subscription) => {
+        const messageId = event.message_id;
+        const timeout = recentlySeenMessageIds[messageId];
+        if (!timeout) {
+            // The timeout does not exist.  This is the first time we've seen this message recently.
+            // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
+    
+            // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
+            // This message receipt will self destruct in 5 seconds.
+            recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
+    
+            callback(event, subscription);
+        }
+        else {
+            // The timeout already exists.  The message is a duplicate.
+            // Don't handle this message, but restart the timeout.
+            timeout.refresh();
+        }
+    };
+}
+
 let websockets=[];
 // setup websocket server for chat widget
 const socket = new WebSocket.Server({ port: 8080 });
@@ -534,6 +565,29 @@ socket.on('connection', ws => {
     });
 });
 console.log('WebSocket server started on port 8080');
+
+function sendToAllChatWidgets(data) {
+  let serialized = data;
+  try {
+    serialized = JSON.stringify(data);
+  }
+  catch (error) {
+    // If the data can't be serialized, it can't be sent to the websockets.
+    // But let's not explode; just log the issue and return.  Nothing's wrong with the WebSocket connection after all, only the input for this one call.
+    console.error("Failed to serialize chat widget data!", error);
+    return;
+  }
+  for (const connection of websockets) {
+    try {
+      if (connection?.readyState === WebSocket.OPEN) {
+        connection.send(serialized);
+      }
+    }
+    catch (error) {
+      console.error("Sending to chat widget failed!", serialized, error);
+    }
+  }
+}
 
 /***************************************
  *          Channel Updates             *
@@ -581,24 +635,12 @@ tesManager.queueSubscription("channel.subscribe", subCondition, event => {
 /***************************************
  *        Mod Action                   *
  ***************************************/
-tesManager.queueSubscription("channel.chat.message_delete", {...subCondition, user_id: process.env.BROADCASTER_ID}, messageDelete => {
-   for (const websocket of websockets){
-   if (websocket && websocket.readyState === WebSocket.OPEN) {
-       websocket.send(JSON.stringify({ kiawaAction: "Message_Delete", messageDelete}));
-   }
-   else {
-   }
- }
- });
+tesManager.queueSubscription("channel.chat.message_delete", { ...subCondition, user_id: process.env.BROADCASTER_ID }, messageDelete => {
+    sendToAllChatWidgets({ kiawaAction: "Message_Delete", messageDelete });
+});
 
-tesManager.queueSubscription("channel.moderate", {...subCondition, moderator_user_id: process.env.BROADCASTER_ID}, modAction => {
-  for (const websocket of websockets){
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-          websocket.send(JSON.stringify({ kiawaAction: "Mod_Action", modAction}));
-      }
-      else {
-      }
-    }
+tesManager.queueSubscription("channel.moderate", { ...subCondition, moderator_user_id: process.env.BROADCASTER_ID }, modAction => {
+    sendToAllChatWidgets({ kiawaAction: "Mod_Action", modAction });
 });
 
 /***************************************
@@ -723,37 +765,25 @@ client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
-    //send to websocket
     //determine if chat activity in last 10 minutes
     if (tags.username != "kiawa_bot"){
         activityDetection=true;
     }
-    for (const websocket of websockets){
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
-            const messageBadges = [];
-            if (tags.badges){
-            for (const [setId, versionId] of Object.entries(tags.badges)) {
-                //parse out the badges that are part of this message
-                const version = await getBadgeVersion(setId, versionId);
-                if (version) {
-                    messageBadges.push(version);
-                }
+    
+    // resolve badges for this message
+    const messageBadges = [];
+    if (tags.badges) {
+        for (const [setId, versionId] of Object.entries(tags.badges)) {
+            //parse out the badges that are part of this message
+            const version = await getBadgeVersion(setId, versionId);
+            if (version) {
+                messageBadges.push(version);
             }
-           }
-          websocket.send(JSON.stringify({ kiawaAction: "Message", channel, tags, message, messageBadges }));
-          try {
-            const lastChatTimestamps = getFileCache("lastChatTimestamps.json");
-            const displayName = tags["display-name"];
-            lastChatTimestamps[displayName] = new Date();
-          }
-          catch (e) {
-            // oops, don't worry about it for this example
-            // console.log("something went wrong saving last timestamp?", e);
-          }
-        } else {
-            //console.log('WebSocket is not connected. Message not sent.');
         }
     }
+    
+    //send to websocket
+    sendToAllChatWidgets({ kiawaAction: "Message", channel, tags, message, messageBadges });
 
     ///////////////////////////////////
     //                               //
