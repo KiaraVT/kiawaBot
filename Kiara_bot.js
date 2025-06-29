@@ -704,22 +704,41 @@ setTimeout(() => tes.subscribe('stream.online', subCondition)
         else {
             console.log("Updating Current Stream Date");   
             let currentStart=event.started_at;
-            console.log(currentStart)
+            console.log(currentStart);
+            console.log(event.started_at);
             let lastStart=new Date(streak_List.Last_Stream.Start);
             lastStart=Date.parse(lastStart);
             let lastEnd=new Date(streak_List.Last_Stream.End);
             lastEnd=Date.parse(lastEnd);
             //update stream times
             if(!lastEnd){
+                console.log('End time was null');
+                console.log(lastStart);
+                console.log(lastEnd);
+                console.log(currentStart);
                 streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
                 streak_List.Current_Stream.Start=currentStart;
                 jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
             }
             //the end of stream was not detected last time, reset the end to a blank value
-            else if (lastEnd<lastStart){
+
+            else if(lastEnd<lastStart){
+                console.log('stream end detection did not work last stream');
                 streak_List.Last_Stream.End=""
+                streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start=currentStart;
                 jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
             }
+            //all is good, do standard procedure
+            else{
+                console.log('all is good on stream online check')
+                streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start=currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+                console.log(lastStart);
+                console.log(lastEnd);
+                console.log(currentStart);
             }
         }));
 
