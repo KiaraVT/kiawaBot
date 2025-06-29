@@ -607,7 +607,7 @@ function updateStreaks(userID, userName){
 
         //did not find user, add them to the database
         if(!userInfo){
-            streak_List.Users[userID]={User_Name: `${userName}`, Streak: 1, Last_Updated: `${now}`};
+            streak_List.Users[userID]={User_Name: `${userName}`, Streak: 1, Best_Streak: 1, Last_Updated: `${now}`};
             client.say(channelName, `@${userName} has just started their watch streak!! this is just the beginning!!`);
         }
         //found user, update streak info
