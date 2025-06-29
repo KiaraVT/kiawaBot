@@ -535,21 +535,27 @@ const recentlySeenMessageIds = {};
 function preventDuplicateEvents(callback) {
     return (event, subscription) => {
         const messageId = event.message_id;
-        const timeout = recentlySeenMessageIds[messageId];
-        if (!timeout) {
-            // The timeout does not exist.  This is the first time we've seen this message recently.
-            // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
-    
-            // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
-            // This message receipt will self destruct in 5 seconds.
-            recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
-    
-            callback(event, subscription);
+        if (messageId) {
+            const timeout = recentlySeenMessageIds[messageId];
+            if (!timeout) {
+                // The timeout does not exist.  This is the first time we've seen this message recently.
+                // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
+        
+                // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
+                // This message receipt will self destruct in 5 seconds.
+                recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
+        
+                callback(event, subscription);
+            }
+            else {
+                // The timeout already exists.  The message is a duplicate.
+                // Don't handle this message, but restart the timeout.
+                timeout.refresh();
+            }
         }
         else {
-            // The timeout already exists.  The message is a duplicate.
-            // Don't handle this message, but restart the timeout.
-            timeout.refresh();
+            // https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events says all messages contain a message_id to allow deduplication.
+            // They are liars.  Many events do not contain a message_id.
         }
     };
 }
