@@ -419,41 +419,111 @@ if (this.statusCallback) this.statusCallback("loaded");
 
 //LISTENING SECTION
 
-const config = {
-    identity: {
-        id: process.env.CLIENT_ID,
-        secret: process.env.CLIENT_SECRET,
-        accessToken: authData.read('twitch.access_token'),
-        refreshToken: authData.read('twitch.refresh_token')
-    },
-    listener: { type: "websocket", port: "8082" },
-};
-//tes = new TES(config)
-let tes;
-try {
-    tes = new TES(config);
-} catch (e) {
-    //let's assume any error here is due to a bad access token and re-auth
-    startAuth()
-}
+class TesManager {
+    // TES doesn't provide strong typing, so some of these could be more detailed if we wanted to put in the effort.
+    /** @typedef {(event: Event) => any} TesEventHandler */
+    /** @typedef {{type: string, condition: object, callback?: TesEventHandler}} TesSubscriptionParams */
+    
+    /** @type {TES} */
+    #tes;
 
+    /** @type {TesSubscriptionParams[]} */
+    #pendingSubscriptions = [];
+
+    /** @type {NodeJS.Timeout} */
+    #intervalId;
+
+    constructor() {
+        this.#tes = this.#buildTesInstance();
+
+        // Kiara had success with doing these faster, but Twitch docs say the limit is 20 subscriptions per 10 seconds.
+        // May need to increase this delay if the number of subscriptions goes up.
+        const subscriptionDelayMillis = 100;
+
+        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
+        this.#intervalId = setInterval(async () => {
+            const input = this.#pendingSubscriptions.shift();
+            if (input) {
+                const { type, condition, callback } = input;
+                
+                // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
+                // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
+                if (typeof callback === "function") {
+                    const wrappedCallback = preventDuplicateEvents(callback);
+                    this.#tes.on(type, wrappedCallback);
+                }
+                
+                try {
+                    const subscription = await this.#tes.subscribe(type, condition);
+                    console.log("Subscription to event channel successful", subscription);
+                }
+                catch (error) {
+                    console.log("Error subscribing to event channel.  Will try again shortly.", error);
+                    this.#pendingSubscriptions.push(input);
+                }
+            }
+        }, subscriptionDelayMillis);
+    }
+
+    /** @returns {TES} */
+    #buildTesInstance() {
+        try {
+            const tes = new TES({
+                identity: {
+                    id: process.env.CLIENT_ID,
+                    secret: process.env.CLIENT_SECRET,
+                    accessToken: authData.read('twitch.access_token'),
+                    refreshToken: authData.read('twitch.refresh_token')
+                },
+                listener: { type: "websocket", port: 8082 },
+            });
+            
+            /**
+             * Twitch revoked an EventSub subscription.  Maybe something related to the user revoking auth for the bot in general?
+             * Nothing to be done here - resubscribing won't work on the fly, and your access token may even be entirely revoked.
+             * 
+             * @param {{id: string | number, type: string, condition: object}} subscription
+             */
+            const onRevocation = subscription => {
+                console.error(`Subscription ${subscription.id} ${subscription.type} has been revoked.`);
+            };
+            tes.on("revocation", onRevocation);
+
+            /**
+             * TES and Twitch got disconnected - TES will handle reconnecting itself but not inherently resubscribing.
+             * 
+             * @param {{[subscriptionId: string]: {type: string, condition: object}}} subscriptionTypeAndConditionById
+             */
+            const onConnectionLost = subscriptionTypeAndConditionById => {
+                for (const {type, condition} of Object.values(subscriptionTypeAndConditionById)) {
+                    // Calling this.queueSubscription would be technically incorrect because 'callback' is a required parameter for the public surface.
+                    this.#pendingSubscriptions.push({ type, condition });
+                }
+            };
+            tes.on("connection_lost", onConnectionLost);
+
+            return tes;
+        } catch (error) {
+            //let's assume any error here is due to a bad access token and re-auth
+            const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
+            warning();
+            startAuth();
+            return {queueSubscription: warning}; // calls to queueSubscription won't crash the bot entirely
+        }
+    }
+
+    /**
+     * @param {string} type
+     * @param {object} condition
+     * @param {TesEventHandler} callback
+     * @returns void
+     */
+    queueSubscription(type, condition, callback) {
+        this.#pendingSubscriptions.push({ type, condition, callback });
+    }
+}
+const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: process.env.BROADCASTER_ID };
-const handleSubSuccess = async function(subscription) {
-    //const token = await tes.getAccessToken();
-    console.log(`Subscription to event channel successful`, subscription);
-}
-const handleSubFailure = function(err) {
-    console.log(`error subscribing to event channel`, err);
-}
-
-tes.on("connection_lost", (subscriptions) => {
-    //resubscribe to all event subscriptions
-    Object.values(subscriptions).forEach((subscription) => {
-        tes.subscribe(subscription.type, subscription.condition)
-            .then(handleSubSuccess)
-            .catch(handleSubFailure);
-    });
-});
 
 /** @type {{[messageId: string]: NodeJS.Timeout}} */
 const recentlySeenMessageIds = {};
@@ -465,23 +535,30 @@ const recentlySeenMessageIds = {};
  */
 function preventDuplicateEvents(callback) {
     return (event, subscription) => {
-        // const messageId= event.message_id;
-        // const timeout = recentlySeenMessageIds[messageId];
-        // if (!timeout) {
-        //     // The timeout does not exist.  This is the first time we've seen this message recently.
-        //     // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
-    
-        //     // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
-        //     // This message receipt will self destruct in 5 seconds.
-        //     recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
-    
-             callback(event, subscription);
-        // }
-        // else {
-        //     // The timeout already exists.  The message is a duplicate.
-        //     // Don't handle this message, but restart the timeout.
-        //     timeout.refresh();
-        // }
+        const messageId = event.message_id;
+        if (messageId) {
+            const timeout = recentlySeenMessageIds[messageId];
+            if (!timeout) {
+                // The timeout does not exist.  This is the first time we've seen this message recently.
+                // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
+        
+                // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
+                // This message receipt will self destruct in 5 seconds.
+                recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
+        
+                callback(event, subscription);
+            }
+            else {
+                // The timeout already exists.  The message is a duplicate.
+                // Don't handle this message, but restart the timeout.
+                timeout.refresh();
+            }
+        }
+        else {
+            // https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events says all messages contain a message_id to allow deduplication.
+            // They are liars.  Many events do not contain a message_id.  Just pass through to the provided callback.
+            callback(event, subscription);
+        }
     };
 }
 
@@ -523,12 +600,7 @@ function sendToAllChatWidgets(data) {
 /***************************************
  *          Channel Updates             *
  ***************************************/
-// tes.subscribe('channel.update', subCondition)
-//     .then(handleSubSuccess)
-//     .catch(handleSubFailure);
-//
-//
-// tes.on('channel.update', event => {
+// tesManager.queueSubscription("channel.update", subCondition, event => {
 //     //Handle received Channel Update events
 //     console.log(`${event.broadcaster_user_name}'s new title is ${event.title}`);
 //     console.log(event);
@@ -538,11 +610,7 @@ function sendToAllChatWidgets(data) {
 /***************************************
  *          New Follower               *
  ***************************************/
-// tes.subscribe('channel.follow', subCondition)
-//     .then(handleSubSuccess)
-//     .catch(handleSubFailure);
-//
-// tes.on('channel.follow', event => {
+// tesManager.queueSubscription("channel.follow", subCondition, event => {
 //     //Handle received New Follower events
 //     console.log(event);
 // });
@@ -550,11 +618,7 @@ function sendToAllChatWidgets(data) {
 /***************************************
  *          Cheer (Bits)               *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.cheer', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),600);
-
-tes.on('channel.cheer', preventDuplicateEvents(event => {
+tesManager.queueSubscription("channel.cheer", subCondition, event => {
     //Handle received Cheer events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -565,7 +629,7 @@ tes.on('channel.cheer', preventDuplicateEvents(event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-}));
+});
 
 /***************************************
  *          Channel Points             *
@@ -798,44 +862,28 @@ function getStreamInfo(broadcaster_id, type, first) {
 /***************************************
  *        New Subscriber               *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.subscribe', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),100);
-
-tes.on('channel.subscribe', preventDuplicateEvents(event => {
+tesManager.queueSubscription("channel.subscribe", subCondition, event => {
     //Handle received New Subscriber events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
-}));
+});
 
 /***************************************
  *        Mod Action                   *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.chat.message_delete', {...subCondition, user_id: process.env.BROADCASTER_ID})
-                .then(handleSubSuccess)
-                .catch(handleSubFailure),200)
+tesManager.queueSubscription("channel.chat.message_delete", { ...subCondition, user_id: process.env.BROADCASTER_ID }, messageDelete => {
+    sendToAllChatWidgets({ kiawaAction: "Message_Delete", messageDelete });
+});
 
-
- tes.on('channel.chat.message_delete', preventDuplicateEvents(messageDelete => {
-   sendToAllChatWidgets({ kiawaAction: "Message_Delete", messageDelete});
- }));
-
- setTimeout(() => tes.subscribe('channel.moderate', {...subCondition, moderator_user_id: process.env.BROADCASTER_ID})
-     .then(handleSubSuccess)
-      .catch(handleSubFailure),300);
-tes.on('channel.moderate', preventDuplicateEvents(modAction => {
-  sendToAllChatWidgets({ kiawaAction: "Mod_Action", modAction});
-}));
+tesManager.queueSubscription("channel.moderate", { ...subCondition, moderator_user_id: process.env.BROADCASTER_ID }, modAction => {
+    sendToAllChatWidgets({ kiawaAction: "Mod_Action", modAction });
+});
 
 /***************************************
  *           Gift Sub(s)               *
  ***************************************/
 //Gift Sub
-setTimeout(() => tes.subscribe('channel.subscription.gift', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),400);
-
-tes.on('channel.subscription.gift', preventDuplicateEvents(event => {
+tesManager.queueSubscription("channel.subscription.gift", subCondition, event => {
     //Handle received gift sub events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -851,16 +899,13 @@ tes.on('channel.subscription.gift', preventDuplicateEvents(event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-}));
+});
 
 /***************************************
  *            Resub Message            *
  ***************************************/
 //Resub
-setTimeout(() => tes.subscribe('channel.subscription.message', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),500);
-tes.on('channel.subscription.message', preventDuplicateEvents(event => {
+tesManager.queueSubscription("channel.subscription.message", subCondition, event => {
     //Handle received new sub in chat
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
@@ -879,7 +924,7 @@ tes.on('channel.subscription.message', preventDuplicateEvents(event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
-}));
+});
 
 
 
