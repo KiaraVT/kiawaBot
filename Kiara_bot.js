@@ -556,7 +556,8 @@ function preventDuplicateEvents(callback) {
         }
         else {
             // https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events says all messages contain a message_id to allow deduplication.
-            // They are liars.  Many events do not contain a message_id.
+            // They are liars.  Many events do not contain a message_id.  Just pass through to the provided callback.
+            callback(event, subscription);
         }
     };
 }
