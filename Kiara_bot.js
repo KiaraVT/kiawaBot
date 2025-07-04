@@ -5,6 +5,7 @@ require('dotenv').config();
 const axios = require('axios');
 const jsonfile = require('jsonfile');
 const quote_Path = './data/quotes.json';
+const streak_Path='./data/streaks.json';
 const command_Path = './data/command_List.json';
 //This is the included AuthDataHelper.js file
 const AuthDataHelper = require('./AuthDataHelper');
@@ -630,6 +631,234 @@ tesManager.queueSubscription("channel.cheer", subCondition, event => {
 });
 
 /***************************************
+ *          Channel Points             *
+ ***************************************/
+setTimeout(() => tes.subscribe('channel.channel_points_custom_reward_redemption.add', subCondition)
+    .then(handleSubSuccess)
+    .catch(handleSubFailure),700);
+
+tes.on('channel.channel_points_custom_reward_redemption.add', preventDuplicateEvents(event => {
+    console.log(event)
+    //Check for which redemption it was and do things based off of the redemption
+
+
+    if (event.reward.title==='Stream Streak') {
+        updateStreaks(event.user_id,event.user_name)
+    }
+}));
+    //check the current stream start time
+    //compare against previous value of current stream time
+    //if the same, do nothing (bot was restarted or something)
+    //if 5 hours has passed since end of last stream (try first)
+    //if the same 24 hour period (set to 6 AM PDT converted to GMT so whatever the hell that is)/ , do not change the existing start time
+    //save to json
+function updateStreaks(userID, userName){
+    //read the json file
+    let streak_List
+    try {streak_List=jsonfile.readFileSync(streak_Path)}
+    catch (e) {}
+
+    if(!streak_List){
+        console.log('something got messed up in streaks')
+    }
+    else{
+        let lastStart= Date.parse(streak_List.Last_Stream.Start);
+        let lastEnd= Date.parse(streak_List.Last_Stream.End);
+        let currentStart= Date.parse(streak_List.Current_Stream.Start)
+        let now=new Date();
+        let userInfo =streak_List.Users[userID];
+
+        //did not find user, add them to the database
+        if(!userInfo){
+            streak_List.Users[userID]={User_Name: `${userName}`, Streak: 1, Best_Streak: 1, Last_Updated: ""};
+             streak_List.Users[userID].Last_Updated=now; 
+            client.say(channelName, `@${userName} has just started their watch streak!! this is just the beginning!!`);
+        }
+        //found user, update streak info
+        else{
+        
+            //is there an End time specified form last stream? if not, use the backup calculation basedo n reset time
+            if(!lastEnd){
+                //get the last reset point
+                let lastReset=new Date();
+                lastReset=Date.parse(lastReset);
+                lastReset=lastReset-(24*60*60*1000);
+                lastReset=new Date(lastReset);
+                lastReset.setHours(13,0,0);
+                lastReset=Date.parse(lastReset);
+
+                //check if we are passed the last reset
+                if(((lastStart<lastReset) && (currentStart>=lastReset))){
+                    const lastUpdated=Date.parse(userInfo.Last_Updated);
+
+                     //streak is still alive!
+                    if ((lastUpdated>lastStart && lastUpdated<currentStart)){
+                        userInfo.Streak=userInfo.Streak+1;
+                        userInfo.Last_Updated=now;
+                        client.say(channelName, `@${userName} has watched ${userInfo.Streak} streams in a row!!`);
+                    }
+                    //streak is deadge :(
+                    else if (lastUpdated<lastStart){
+                        userInfo.Last_Updated=now;
+                        userInfo.Streak=1
+                        client.say(channelName, `@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
+                    }
+                    else{
+                        client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                    }
+                }
+                client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+            }
+            //check if 5 hours since last stream or for the reset time
+            else{
+                console.log('end')
+                if ((currentStart-lastEnd)>5*60*60*1000){
+                    const lastUpdated= Date.parse(userInfo.Last_Updated);
+                    //streak is still alive!
+                    if ((lastUpdated>lastStart && lastUpdated<currentStart)){
+                        userInfo.Streak=userInfo.Streak+1;
+                        userInfo.Last_Updated=now;
+                        client.say(channelName, `@${userName} has watched ${userInfo.Streak} streams in a row!!`);
+                    }
+                    //streak is deadge :(
+                    else if (lastUpdated<lastStart){
+                        userInfo.Last_Updated=now;
+                        userInfo.Streak=1
+                        client.say(channelName, `@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
+                    }
+                    else{
+                        client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                    }
+                }
+                else{
+                    client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                }
+            }
+        }
+
+            //write the file
+            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+        }
+    }
+    //get last stream time
+    //check if user exists in database
+    //do stuff
+
+setTimeout(() => tes.subscribe('stream.online', subCondition)
+    .then(handleSubSuccess)
+    .catch(handleSubFailure),800);
+
+    tes.on('stream.online', preventDuplicateEvents(event => {
+        console.log("stream online detected");
+        let streak_List
+        try {streak_List=jsonfile.readFileSync(streak_Path)}
+        catch (e) {}
+        //if file is empty then initialize it
+        if (!streak_List){   
+            console.log("No File, Creating New File");               
+            let lastStart=event.started_at;
+            console.log(lastStart)
+            let currentStart=event.started_at;
+            const initializeStreaks={Last_Stream: {Start:`${lastStart}`, End: ''}, Current_Stream: {Start:`${lastStart}`}, Users: {}}
+            jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
+        }
+
+        //if file is not empty, update stream info
+        else {
+            console.log("Updating Current Stream Date");   
+            let currentStart=event.started_at;
+            console.log(currentStart);
+            console.log(event.started_at);
+            let lastStart=new Date(streak_List.Last_Stream.Start);
+            lastStart=Date.parse(lastStart);
+            let lastEnd=new Date(streak_List.Last_Stream.End);
+            lastEnd=Date.parse(lastEnd);
+            //update stream times
+            if(!lastEnd){
+                console.log('End time was null');
+                console.log(lastStart);
+                console.log(lastEnd);
+                console.log(currentStart);
+                streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start=currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+            //the end of stream was not detected last time, reset the end to a blank value
+
+            else if(lastEnd<lastStart){
+                console.log('stream end detection did not work last stream');
+                streak_List.Last_Stream.End=""
+                streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start=currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+            //all is good, do standard procedure
+            else{
+                console.log('all is good on stream online check')
+                streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start=currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+                console.log(lastStart);
+                console.log(lastEnd);
+                console.log(currentStart);
+            }
+        }));
+
+setTimeout(() => tes.subscribe('stream.offline', subCondition)
+    .then(handleSubSuccess)
+    .catch(handleSubFailure),900);
+
+    tes.on('stream.offline', preventDuplicateEvents(event => {
+        let streak_List
+        try {streak_List=jsonfile.readFileSync(streak_Path)}
+        catch (e) {}
+            //update stream times
+            const now= new Date();
+            streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+            streak_List.Last_Stream.End=now;
+            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            console.log('Stream Ended, logged to streaks')
+}));
+
+let streamInfo=setTimeout(() => getStreamInfo(broadcasterID, 'all', '1'),5000);
+
+function getStreamInfo(broadcaster_id, type, first) {
+    return new Promise((resolve, reject) => {
+        apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first})
+            .then(data => {
+                resolve(data.data);
+                let streak_List
+                try {streak_List=jsonfile.readFileSync(streak_Path)}
+                catch (e) {}
+                //if file is empty then initialize it
+                if (!streak_List){
+                   
+                    let lastStart=data.data[0].started_at;
+                    let currentStart=data.data[0].started_at;
+                    const initializeStreaks={Last_Stream: {Start:`${lastStart}`, End: ''}, Current_Stream: {Start:`${lastStart}`}, Users: {}};
+                    jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" });
+                }
+
+                //if file is not empty, update stream info
+                else {
+                    let currentStart=data.data[0].started_at;
+                    //update stream times
+                    streak_List.Last_Stream.Start=streak_List.Current_Stream.Start;
+                    streak_List.Current_Stream.Start=currentStart;
+                    jsonfile.writeFileSync(streak_Path,streak_List, { spaces: 2, EOL: "\n" });
+                }
+            })
+
+            .catch(error => reject(error))
+    });
+}
+
+
+
+//
+
+/***************************************
  *        New Subscriber               *
  ***************************************/
 tesManager.queueSubscription("channel.subscribe", subCondition, event => {
@@ -771,6 +1000,7 @@ client.connect();
 
 //message handler
 client.on('message', async (channel, tags, message, self) => {
+    console.log(channel)
     //determine if chat activity in last 10 minutes
     if (tags.username != "kiawa_bot"){
         activityDetection=true;
