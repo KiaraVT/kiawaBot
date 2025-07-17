@@ -634,11 +634,7 @@ tesManager.queueSubscription("channel.cheer", subCondition, event => {
 /***************************************
  *          Channel Points             *
  ***************************************/
-setTimeout(() => tes.subscribe('channel.channel_points_custom_reward_redemption.add', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),700);
-
-tes.on('channel.channel_points_custom_reward_redemption.add', preventDuplicateEvents(event => {
+tesManager.queueSubscription('channel.channel_points_custom_reward_redemption.add', subCondition, event => {
     console.log(event)
     //Check for which redemption it was and do things based off of the redemption
 
@@ -646,7 +642,7 @@ tes.on('channel.channel_points_custom_reward_redemption.add', preventDuplicateEv
     if (event.reward.title==='Stream Streak') {
         updateStreaks(event.user_id,event.user_name)
     }
-}));
+});
     //check the current stream start time
     //compare against previous value of current stream time
     //if the same, do nothing (bot was restarted or something)
@@ -745,11 +741,7 @@ function updateStreaks(userID, userName){
     //check if user exists in database
     //do stuff
 
-setTimeout(() => tes.subscribe('stream.online', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),800);
-
-    tes.on('stream.online', preventDuplicateEvents(event => {
+tesManager.queueSubscription('stream.online', subCondition, event =>{
         console.log("stream online detected");
         let streak_List
         try {streak_List=jsonfile.readFileSync(streak_Path)}
@@ -804,13 +796,9 @@ setTimeout(() => tes.subscribe('stream.online', subCondition)
                 console.log(lastEnd);
                 console.log(currentStart);
             }
-        }));
+        });
 
-setTimeout(() => tes.subscribe('stream.offline', subCondition)
-    .then(handleSubSuccess)
-    .catch(handleSubFailure),900);
-
-    tes.on('stream.offline', preventDuplicateEvents(event => {
+tesManager.queueSubscription('stream.offline', subCondition, event =>{
         let streak_List
         try {streak_List=jsonfile.readFileSync(streak_Path)}
         catch (e) {}
@@ -820,7 +808,7 @@ setTimeout(() => tes.subscribe('stream.offline', subCondition)
             streak_List.Last_Stream.End=now;
             jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
             console.log('Stream Ended, logged to streaks')
-}));
+});
 
 let streamInfo=setTimeout(() => getStreamInfo(broadcasterID, 'all', '1'),5000);
 
