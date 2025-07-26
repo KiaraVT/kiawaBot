@@ -112,10 +112,10 @@
           /** @type {({kiawaAction: string, [key: string]: any})} */
           const data = JSON.parse(event.data) ; // Parse the JSON string
           if (data.kiawaAction ==="Message_Delete"){
-            deleteMessage(data.messageDelete)
+            handleMessageDelete(data.messageDelete)
           }
           else if (data.kiawaAction==="Mod_Action"){
-              userBanned(data.modAction)
+            handleModAction(data.modAction)
           }
           else if(data.kiawaAction==="Message"){
           addMessage(data.tags, data.tags["display-name"],data.message, data.messageBadges)
@@ -132,29 +132,33 @@
 
         //this function is used to sort an array high to low
         function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
-        function userBanned(data){
-          const clone=[...document.getElementById('chat-messages').children];
-          for (const messageElement of clone){
 
-              if (messageElement.getAttribute('userID')===data.timeout.user_id){
+        function removeChatMessagesByUserId(userID) {
+          document.querySelectorAll(`.chat-message[userID=${userID}]`).forEach(element => element.remove());
+        }
 
-              //deleteshit
-              messageElement.remove();
-              }
+        function removeChatMessagesByMessageId(messageID) {
+          document.querySelectorAll(`.chat-message[messageID=${messageID}]`).forEach(element => element.remove());
+        }
 
+        // https://dev.twitch.tv/docs/eventsub/eventsub-reference/#channel-moderate-event-v2
+        function handleModAction(event) {
+          const action = event.action;
+          if (["ban", "timeout", "warn"].includes(action)) {
+            const userId = event[action].user_id;
+            removeAllUserMessagesByUserId(userId);
+          }
+          if (["delete"].includes(action)) {
+            const messageId = event[action].message_id;
+            removeMessagesByMessageId(messageId);
           }
         }
-        function deleteMessage(data) {
-            for (const messageElement of document.getElementById('chat-messages').children){
 
-                if (messageElement.getAttribute('messageID')===data.message_id){
-
-                //deleteshit
-                messageElement.remove();
-                }
-
-            }
+        // https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/#channelchatmessage_delete
+        function handleMessageDelete(event) {
+          removeMessagesByMessageId(event.message_id);
         }
+        
         // Function to add a new message to the chat window
         function addMessage(tags, username, message, messageBadges) {
           const chatMessages = document.getElementById('chat-messages');
