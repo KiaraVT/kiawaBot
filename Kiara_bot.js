@@ -433,36 +433,11 @@ class TesManager {
 
     constructor() {
         this.#tes = this.#buildTesInstance();
-
-        // Kiara had success with doing these faster, but Twitch docs say the limit is 20 subscriptions per 10 seconds.
-        // May need to increase this delay if the number of subscriptions goes up.
-        const subscriptionDelayMillis = 100;
-
-        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
-        this.#intervalId = setInterval(async () => {
-            const input = this.#pendingSubscriptions.shift();
-            if (input) {
-                const { type, condition, callback } = input;
-                
-                // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
-                // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
-                if (typeof callback === "function") {
-                    const wrappedCallback = preventDuplicateEvents(callback);
-                    this.#tes.on(type, wrappedCallback);
-                }
-                
-                try {
-                    const subscription = await this.#tes.subscribe(type, condition);
-                    console.log("Subscription to event channel successful", subscription);
-                }
-                catch (error) {
-                    console.log("Error subscribing to event channel.  Will try again shortly.", error);
-                    this.#pendingSubscriptions.push(input);
-                }
-            }
-        }, subscriptionDelayMillis);
+        this.#deleteAllExistingSubscriptions().then(() => {
+            this.#initializeSubscriptionQueue();
+        })
     }
-
+    
     /** @returns {TES} */
     #buildTesInstance() {
         try {
@@ -508,6 +483,70 @@ class TesManager {
             startAuth();
             return {queueSubscription: warning}; // calls to queueSubscription won't crash the bot entirely
         }
+    }
+    
+    // Bot just started?  Let's unsubscribe from everything Twitch thinks still exists.
+    // I can't imagine how this would help since we're using WebSockets, but it shouldn't hurt either.
+    async #deleteAllExistingSubscriptions() {
+        try {
+            // https://github.com/mitchwadair/tesjs/blob/main/doc/tesjs.md#TES+getSubscriptions
+            // Get all the EventSub, uh, subs, that Twitch still knows about.  Ideally it's an empty list, but...
+            const subscriptionsResponse = await this.#tes.getSubscriptions();
+            
+            // https://dev.twitch.tv/docs/api/reference/#get-eventsub-subscriptions
+            // Extract the array of subs from the response.  Use an empty array if for some reason the request had issues.
+            const subs = subscriptionsResponse?.data ?? [];
+            
+            if (subs.length == 0) {
+                console.log("Good news everybody! There were no prior EventSub subscriptions to clean up.")
+                return Promise.resolve();
+            }
+            
+            // https://github.com/mitchwadair/tesjs/blob/main/doc/tesjs.md#TES+unsubscribe
+            // Try unsubscribing from each of them.  Don't stress if it fails (for now, anyway).
+            const unsubPromises = subs.map(sub => this.#tes.unsubscribe(sub.id)
+                .then(() => console.log(`Cleaned up prior ${sub.type} subscription with status ${sub.status} which was created on ${sub.created_at}`))
+                .catch(() => console.log(`Failed to clean up prior ${sub.type} subscription with status ${sub.status} which was created on ${sub.created_at}.  We'll get 'em next time...`))
+            );
+            
+            // wait for all the unsubscribes to finish (successfully or not) before returning
+            return Promise.allSettled(unsubPromises);
+        }
+        catch (e) {
+            // Don't prevent the bot from starting up, no matter what might go wrong in here.
+            console.error("Error while cleaning up old EventSub subscriptions.", e);
+            return Promise.resolve();
+        }
+    }
+    
+    #initializeSubscriptionQueue() {
+        // Kiara had success with doing these faster, but Twitch docs say the limit is 20 subscriptions per 10 seconds.
+        // May need to increase this delay if the number of subscriptions goes up.
+        const subscriptionDelayMillis = 100;
+
+        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
+        this.#intervalId = setInterval(async () => {
+            const input = this.#pendingSubscriptions.shift();
+            if (input) {
+                const { type, condition, callback } = input;
+                
+                // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
+                // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
+                if (typeof callback === "function") {
+                    const wrappedCallback = preventDuplicateEvents(callback);
+                    this.#tes.on(type, wrappedCallback);
+                }
+                
+                try {
+                    const subscription = await this.#tes.subscribe(type, condition);
+                    console.log("Subscription to event channel successful", subscription);
+                }
+                catch (error) {
+                    console.log("Error subscribing to event channel.  Will try again shortly.", error);
+                    this.#pendingSubscriptions.push(input);
+                }
+            }
+        }, subscriptionDelayMillis);
     }
 
     /**
