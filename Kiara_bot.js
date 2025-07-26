@@ -180,11 +180,15 @@ function validateAccessToken() {
             }
         })
         .catch(error => {
-            if (error.response.status === 401) {
-                console.log('Unable to validate Access Token, requesting a refreshed token');
-                twitchAuthReady = false;
-                refreshAccessToken();
+            if (error?.response?.status === 401) {
+                console.log('Unable to validate Access Token, requesting a fully refreshed token');
             }
+            else {
+                console.log('Unable to validate Access Token for an unexpected reason; requesting a fully refreshed token', error);
+            }
+            // no matter what went wrong when validating, let's just refresh the token entirely to try and recover?
+            twitchAuthReady = false;
+            refreshAccessToken();
         })
 }
 
