@@ -666,8 +666,8 @@ class TesManager {
                     if (existingSub) {
                         try {
                             console.log(`Repairing EventSub subscriptions: removing stale, ${type} ${existingSub.status} ${existingSub.created_at} ${existingSub.id}`);
-                            await this.#tes.unsubscribe(existingSub.id);
                             delete this.#subscriptionByType[type];
+                            await this.#tes.unsubscribe(existingSub.id);
                         }
                         catch (e) {
                             console.log(`Repairing EventSub subscriptions: failed to remove stale, ${type} ${existingSub.status} ${existingSub.created_at} ${existingSub.id}`, e);
