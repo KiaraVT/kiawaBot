@@ -425,6 +425,7 @@ class TesManager {
     // TES doesn't provide strong typing, so some of these could be more detailed if we wanted to put in the effort.
     /** @typedef {(event: Event) => any} TesEventHandler */
     /** @typedef {{type: string, condition: object, callback?: TesEventHandler}} TesSubscriptionParams */
+    /** @typedef {{type: string, id: string, condition: object, created_at: string}} Subscription */
     
     /** @type {TES} */
     #tes;
@@ -434,6 +435,9 @@ class TesManager {
 
     /** @type {{[messageId: string]: NodeJS.Timeout}} */
     #recentlySeenEventIdentifiers = {};
+    
+    /** @type {{[subscriptionType: string]: Subscription}} */
+    #subscriptionByType = {};
 
     constructor() {
         this.#tes = this.#buildTesInstance();
@@ -462,7 +466,7 @@ class TesManager {
              * Twitch revoked an EventSub subscription.  Maybe something related to the user revoking auth for the bot in general?
              * Nothing to be done here - resubscribing won't work on the fly, and your access token may even be entirely revoked.
              * 
-             * @param {{id: string | number, type: string, condition: object}} subscription
+             * @param {Subscription} subscription
              */
             const onRevocation = subscription => {
                 console.error(`Subscription ${subscription.id} ${subscription.type} has been revoked.`);
@@ -475,10 +479,9 @@ class TesManager {
              * @param {{[subscriptionId: string]: {type: string, condition: object}}} subscriptionTypeAndConditionById
              */
             const onConnectionLost = subscriptionTypeAndConditionById => {
-                for (const {type, condition} of Object.values(subscriptionTypeAndConditionById)) {
-                    // Calling this.queueSubscription would be technically incorrect because 'callback' is a required parameter for the public surface.
-                    this.#pendingSubscriptions.push({ type, condition });
-                }
+                const types = Object.values(subscriptionTypeAndConditionById).map(({type}) => type).sort().join(", ");
+                console.log(`Connection lost for subscription types ${types}; let's repair them.`)
+                this.#repairSubscriptions();
             };
             tes.on("connection_lost", onConnectionLost);
 
@@ -511,8 +514,16 @@ class TesManager {
                 }
                 
                 try {
-                    const subscription = await this.#tes.subscribe(type, condition);
-                    console.log(`Subscription to event type ${type} successful`, subscription);
+                    const existingSubscription = this.#subscriptionByType[type];
+                    if (existingSubscription) {
+                        console.log(`Oh no! We already have a subscription for ${type}.  Heck whatever this is.  Repairing subscriptions just in case...`);
+                        this.#repairSubscriptions();
+                    }
+                    else {
+                        const subscription = await this.#tes.subscribe(type, condition);
+                        console.log(`Subscription to event type ${type} successful`, subscription);
+                        this.#subscriptionByType[subscription.type] = subscription;
+                    }
                 }
                 catch (error) {
                     console.log(`Error subscribing to event type ${type}.  Will try again shortly.`, error);
@@ -536,8 +547,8 @@ class TesManager {
     /**
      * @see https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events
      * 
-     * @param {(event: Event, subscription: any) => void} callback
-     * @returns {(event: Event, subscription: any) => void}
+     * @param {(event: Event, subscription: Subscription) => void} callback
+     * @returns {(event: Event, subscription: Subscription) => void}
      */
     #preventDuplicateEvents(callback) {
         return (event, subscription) => {
@@ -559,6 +570,10 @@ class TesManager {
                     // Don't handle this message, but restart the timeout.
                     console.log(`Deduping event ${subscription.type}`, uniqueEventIdentifier);
                     timeout.refresh();
+                    
+                    // While we're at it, let's repair the subscriptions in case this is evidence of a duplicate subscription and not just a resent message
+                    console.log(`Duplicate message detected; let's repair the subscriptions.`)
+                    this.#repairSubscriptions();
                 }
             }
             else {
@@ -570,7 +585,7 @@ class TesManager {
     }
 
     /**
-     * @param {(event: Event, subscription: any) => void} callback
+     * @param {(event: Event, subscription: Subscription) => void} callback
      * @returns {string | number | null}
      */
     #getUniqueEventIdentifier(event, subscription) {
@@ -600,6 +615,91 @@ class TesManager {
         
         // No idea how this event can be deduplicated.  Let's serialize the whole thing as JSON and hope Twitch is sending identical payloads.
         return JSON.stringify(event);
+    }
+    
+    // https://dev.twitch.tv/docs/eventsub/manage-subscriptions/#getting-the-list-of-events-you-subscribe-to
+    // Lot of assumptions around wanting at most one handler per type, and disregarding condition.  That's fine for Kiara today.
+    // This method might also benefit from synchronization and/or a short debounce.
+    async #repairSubscriptions() {
+        try {
+            console.log(`Repairing EventSub subscriptions...`);
+            const cachedSubs = Object.values(this.#subscriptionByType);
+            const twitchSubs = (await this.#tes.getSubscriptions())?.data ?? [];
+            // console.log(typeof twitchSubs, twitchSubs, JSON.stringify(twitchSubs));
+            const subTypes = new Set([...cachedSubs, ...twitchSubs].map(sub => sub.type));
+            console.log(`Repairing EventSub subscriptions with types ${[...subTypes].join(", ")}`);
+            for (const type of subTypes) {
+                try {
+                    const allSubs = twitchSubs.filter(sub => sub.type == type);
+                    const existingSub = allSubs.find(sub => sub.id === this.#subscriptionByType[type]?.id);
+                    const potentialReplacementSub = allSubs.find(sub => sub.status == "enabled" && sub.id != existingSub?.id);
+                    const fallbackCondition = existingSub?.condition ?? potentialReplacementSub?.condition;
+
+                    // Any subs that aren't existingSub or potentialReplacementSub can't possibly be useful. Unsubscribe them all first.
+                    for (const otherSub of allSubs) {
+                        try {
+                            if (otherSub !== existingSub && otherSub !== potentialReplacementSub) {
+                                console.log(`Repairing EventSub subscriptions: removing duplicate, ${type} ${otherSub.status} ${otherSub.created_at} ${otherSub.id}`);
+                                await this.#tes.unsubscribe(otherSub.id);
+                            }
+                        }
+                        catch (e) {
+                            console.log(`Repairing EventSub subscriptions: failed to remove duplicate, ${type} ${otherSub.status} ${otherSub.created_at} ${otherSub.id}`, e);
+                        }
+                    }
+
+                    // if existingSub thinks it's good, get rid of potentialReplacementSub also, and move on to the next type
+                    if (existingSub?.status == "enabled") {
+                        if (potentialReplacementSub) {
+                            try {
+                                console.log(`Repairing EventSub subscriptions: removing duplicate, ${type} ${potentialReplacementSub.status} ${potentialReplacementSub.created_at} ${potentialReplacementSub.id}`);
+                                await this.#tes.unsubscribe(potentialReplacementSub.id);
+                            }
+                            catch (e) {
+                                console.log(`Repairing EventSub subscriptions: failed to remove duplicate, ${type} ${potentialReplacementSub.status} ${potentialReplacementSub.created_at} ${potentialReplacementSub.id}`, e);
+                            }
+                        }
+                        continue; // next type
+                    }
+
+                    // if existingSub exists in a bad state, unsubscribe it and remove from cache
+                    if (existingSub) {
+                        try {
+                            console.log(`Repairing EventSub subscriptions: removing stale, ${type} ${existingSub.status} ${existingSub.created_at} ${existingSub.id}`);
+                            await this.#tes.unsubscribe(existingSub.id);
+                            delete this.#subscriptionByType[type];
+                        }
+                        catch (e) {
+                            console.log(`Repairing EventSub subscriptions: failed to remove stale, ${type} ${existingSub.status} ${existingSub.created_at} ${existingSub.id}`, e);
+                        }
+                    }
+
+                    // if replacementSub exists (by definition in a good "enabled" state), put it in the cache
+                    if (replacementSub) {
+                        console.log(`Repairing EventSub subscriptions: replacing, ${type} ${otherSub.status} ${existingSub.created_at} ${existingSub.id}`);
+                        this.#subscriptionByType[type] = replacementSub;
+                    }
+
+                    // last thing - if we didn't wind up with a subscription in the cache of this type, try and make an entirely new one.
+                    if (!this.#subscriptionByType[type]) {
+                        try {
+                            console.log(`Repairing EventSub subscriptions: recreating ${type} with ${JSON.stringify(fallbackCondition)}`);
+                            const hailMary = await this.#tes.subscribe(type, fallbackCondition);
+                            this.#subscriptionByType[type] = hailMary;
+                        }
+                        catch (e) {
+                            console.log(`Repairing EventSub subscriptions: failed to recreate ${type} with ${JSON.stringify(fallbackCondition)}`);
+                        }
+                    }
+                }
+                catch (e) {
+                    console.log(`Repairing EventSub subscriptions: completely failed to repair ${type}`, e);
+                }
+            }
+        }
+        catch (e) {
+            console.log(`Repairing EventSub subscriptions: completely failed`, e);
+        }
     }
 
     /**
