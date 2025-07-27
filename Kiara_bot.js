@@ -458,6 +458,7 @@ class TesManager {
                 try {
                     const subscription = await this.#tes.subscribe(type, condition);
                     console.log("Subscription to event channel successful", subscription);
+                    this.#deleteDuplicates.refresh() // This either starts the timer to clean subscriptions, or sets it back to 3000ms so it doesn't get triggered for every single subscription
                 }
                 catch (error) {
                     console.log("Error subscribing to event channel.  Will try again shortly.", error);
@@ -513,6 +514,29 @@ class TesManager {
             return {queueSubscription: warning}; // calls to queueSubscription won't crash the bot entirely
         }
     }
+
+    #deleteDuplicates = setTimeout(async () => {
+        console.info('Deleting duplicate EventSub subscriptions')
+        const subs = await this.#tes.getSubscriptionsByStatus("enabled");
+        const seen = new Map();
+        const duplicates = [];
+
+        for (const sub of subs.data) {
+            if (seen.has(sub.type)) { //If we have seen this type of subscription before, we add it to duplicates
+                duplicates.push(sub);
+            } else {
+                seen.set(sub.type, sub); // If we have not seen this type of subscription, we add it to 'seen'
+            };
+        };
+
+        for (const sub of duplicates) {
+            await this.#tes.unsubscribe(sub.id);
+            console.info(`Deleted sub: id: ${sub.id}, type: ${sub.type}`);
+        };
+        if (duplicates.length === 0) console.info('No duplicate subscriptions found');
+        else console.info('Deleted all duplicate EventSub subscriptions');
+    }, 3000);
+
 
     /**
      * @param {string} type
