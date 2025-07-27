@@ -432,39 +432,17 @@ class TesManager {
     /** @type {TesSubscriptionParams[]} */
     #pendingSubscriptions = [];
 
-    /** @type {NodeJS.Timeout} */
-    #intervalId;
+    /** @type {{[messageId: string]: NodeJS.Timeout}} */
+    #recentlySeenEventIdentifiers = {};
 
     constructor() {
         this.#tes = this.#buildTesInstance();
-
-        // Kiara had success with doing these faster, but Twitch docs say the limit is 20 subscriptions per 10 seconds.
-        // May need to increase this delay if the number of subscriptions goes up.
-        const subscriptionDelayMillis = 100;
-
-        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
-        this.#intervalId = setInterval(async () => {
-            const input = this.#pendingSubscriptions.shift();
-            if (input) {
-                const { type, condition, callback } = input;
-                
-                // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
-                // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
-                if (typeof callback === "function") {
-                    const wrappedCallback = preventDuplicateEvents(callback);
-                    this.#tes.on(type, wrappedCallback);
-                }
-                
-                try {
-                    const subscription = await this.#tes.subscribe(type, condition);
-                    console.log("Subscription to event channel successful", subscription);
-                }
-                catch (error) {
-                    console.log("Error subscribing to event channel.  Will try again shortly.", error);
-                    this.#pendingSubscriptions.push(input);
-                }
-            }
-        }, subscriptionDelayMillis);
+        if (this.#tes.on) { // if TES was able to auth properly
+            this.#initializeSubscriptionQueue();
+        }
+        else {
+            console.log("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.")
+        }
     }
 
     /** @returns {TES} */
@@ -514,6 +492,116 @@ class TesManager {
         }
     }
 
+    #initializeSubscriptionQueue() {
+        let queueHeat = 0;
+        
+        // Handle queued subscription requests one-by-one to respect Twitch rate limiting
+        const handleQueue = (async () => {
+            const input = this.#pendingSubscriptions.shift();
+            if (input) {
+                queueHeat = queueHeat + 1;
+                
+                const { type, condition, callback } = input;
+                
+                // If there was a connection_lost event, TesManager doesn't retain the callback from that subscription.  callback will be undefined.
+                // But the event listener (from TES#on) hasn't been unregistered, so we don't need to add a second listener.
+                if (typeof callback === "function") {
+                    const wrappedCallback = this.#preventDuplicateEvents(callback);
+                    this.#tes.on(type, wrappedCallback);
+                }
+                
+                try {
+                    const subscription = await this.#tes.subscribe(type, condition);
+                    console.log(`Subscription to event type ${type} successful`, subscription);
+                }
+                catch (error) {
+                    console.log(`Error subscribing to event type ${type}.  Will try again shortly.`, error);
+                    this.#pendingSubscriptions.push(input);
+                }
+            }
+            else {
+                // There was no pending subscription.  The delay can cool down a bit.
+                if (queueHeat > 0) {
+                    // console.log("Subscription queue cooling down...");
+                    queueHeat = queueHeat - 1;
+                }
+            }
+            // The math is arbitrary, but generally queueHeat should provide some sort of exponential backoff
+            setTimeout(handleQueue, 100 * Math.pow(1 + (queueHeat / 2), 2))
+        });
+        
+        handleQueue();
+    }
+    
+    /**
+     * @see https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events
+     * 
+     * @param {(event: Event, subscription: any) => void} callback
+     * @returns {(event: Event, subscription: any) => void}
+     */
+    #preventDuplicateEvents(callback) {
+        return (event, subscription) => {
+            const uniqueEventIdentifier = this.#getUniqueEventIdentifier(event, subscription);
+            if (uniqueEventIdentifier) {
+                const timeout = this.#recentlySeenEventIdentifiers[uniqueEventIdentifier];
+                if (!timeout) {
+                    // The timeout does not exist.  This is the first time we've seen this event recently.
+                    // Create a timeout for a few seconds to check for future duplicates, and then handle the event itself.
+            
+                    // We don't want to save every UEID we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
+                    // This message receipt will self destruct in 5 seconds.
+                    this.#recentlySeenEventIdentifiers[uniqueEventIdentifier] = setTimeout(() => delete this.#recentlySeenEventIdentifiers[uniqueEventIdentifier], 5000);
+            
+                    callback(event, subscription);
+                }
+                else {
+                    // The timeout already exists.  The message is a duplicate.
+                    // Don't handle this message, but restart the timeout.
+                    console.log(`Deduping event ${subscription.type}`, uniqueEventIdentifier);
+                    timeout.refresh();
+                }
+            }
+            else {
+                // https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events says all messages contain a message_id to allow deduplication.
+                // They are liars.  Many events do not contain a message_id.  Just pass through to the provided callback.
+                callback(event, subscription);
+            }
+        };
+    }
+
+    /**
+     * @param {(event: Event, subscription: any) => void} callback
+     * @returns {string | number | null}
+     */
+    #getUniqueEventIdentifier(event, subscription) {
+        const type = subscription.type;
+        
+        // If we need to NOT deduplicate an event for some reason, we can return early here.  Maybe based on subscription type?
+        const typesThatShouldNotBeDeduped = [
+            // "channel.chat.message_from_jonid"
+        ];
+        if (typesThatShouldNotBeDeduped.includes(type)) {
+            return null;
+        }
+        
+        // Chat message events typically have a message_id field.  If it exists, we should probably use it.
+        if (event.message_id) {
+            return event.message_id;
+        }
+        
+        // similar to message_id, many event types do have a single field we can use to deduplicate the occurrence.  See if that's a known case.
+        const simpleFieldLookupsByType = {
+            "channel.channel_points_custom_reward_redemption.add": "id",
+        };
+        const possiblyUniqueFieldName = simpleFieldLookupsByType[type];
+        if (possiblyUniqueFieldName) {
+            return event[possiblyUniqueFieldName];
+        }
+        
+        // No idea how this event can be deduplicated.  Let's serialize the whole thing as JSON and hope Twitch is sending identical payloads.
+        return JSON.stringify(event);
+    }
+
     /**
      * @param {string} type
      * @param {object} condition
@@ -526,43 +614,6 @@ class TesManager {
 }
 const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: process.env.BROADCASTER_ID };
-
-/** @type {{[messageId: string]: NodeJS.Timeout}} */
-const recentlySeenMessageIds = {};
-/**
- * @see https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events
- * 
- * @param {(event: Event, subscription: any) => void} callback
- * @returns {(event: Event, subscription: any) => void}
- */
-function preventDuplicateEvents(callback) {
-    return (event, subscription) => {
-        const messageId = event.message_id;
-        if (messageId) {
-            const timeout = recentlySeenMessageIds[messageId];
-            if (!timeout) {
-                // The timeout does not exist.  This is the first time we've seen this message recently.
-                // Create a timeout for a few seconds to check for future duplicates, and then handle the message itself.
-        
-                // We don't want to save every messageId we see for the entire lifetime of the bot (or beyond).  That's just leaking memory needlessly.
-                // This message receipt will self destruct in 5 seconds.
-                recentlySeenMessageIds[messageId] = setTimeout(() => delete recentlySeenMessageIds[messageId], 5000);
-        
-                callback(event, subscription);
-            }
-            else {
-                // The timeout already exists.  The message is a duplicate.
-                // Don't handle this message, but restart the timeout.
-                timeout.refresh();
-            }
-        }
-        else {
-            // https://dev.twitch.tv/docs/eventsub/#handling-duplicate-events says all messages contain a message_id to allow deduplication.
-            // They are liars.  Many events do not contain a message_id.  Just pass through to the provided callback.
-            callback(event, subscription);
-        }
-    };
-}
 
 let websockets=[];
 // setup websocket server for chat widget
