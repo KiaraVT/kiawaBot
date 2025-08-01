@@ -633,7 +633,7 @@ class TesManager {
                     const allSubs = twitchSubs.filter(sub => sub.type == type);
                     const existingSub = allSubs.find(sub => sub.id === this.#subscriptionByType[type]?.id);
                     const potentialReplacementSub = allSubs.find(sub => sub.status == "enabled" && sub.id != existingSub?.id);
-                    const fallbackCondition = existingSub?.condition ?? potentialReplacementSub?.condition;
+                    const fallbackCondition = existingSub?.condition ?? potentialReplacementSub?.condition ?? allSubs.find(s => s.condition)?.condition;
 
                     // Any subs that aren't existingSub or potentialReplacementSub can't possibly be useful. Unsubscribe them all first.
                     for (const otherSub of allSubs) {
