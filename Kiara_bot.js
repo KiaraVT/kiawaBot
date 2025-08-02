@@ -763,10 +763,11 @@ function sendToAllChatWidgets(data) {
 /***************************************
  *          New Follower               *
  ***************************************/
-// tesManager.queueSubscription("channel.follow", subCondition, event => {
-//     //Handle received New Follower events
-//     console.log(event);
-// });
+tesManager.queueSubscription("channel.follow", subCondition, event => {
+    // Handle received New Follower events
+    // console.log(event);
+    updateStreaksSafely(event?.user_id, event?.user_name);
+});
 
 /***************************************
  *          Cheer (Bits)               *
@@ -782,6 +783,9 @@ tesManager.queueSubscription("channel.cheer", subCondition, event => {
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
+    if (!event?.is_anonymous) { // anonymous cheers, well, don't come with user info
+        updateStreaksSafely(event?.user_id, event?.user_name);
+    }
 });
 
 /***************************************
@@ -792,17 +796,49 @@ tesManager.queueSubscription('channel.channel_points_custom_reward_redemption.ad
     //Check for which redemption it was and do things based off of the redemption
 
 
-    if (event.reward.title==='Stream Streak') {
-        updateStreaks(event.user_id,event.user_name)
+    if (event?.reward?.title === "Stream Streak") {
+        // if they redeemed the Streak reward, we DO want the bot to call it out in chat for them
+        updateStreaksSafely(event?.user_id, event?.user_name, true);
+    }
+    else {
+        // if they redeemed any other reward, we DO NOT want the bot to call it out in chat for them (but we want to update their streak regardless)
+        updateStreaksSafely(event?.user_id, event?.user_name, false);
     }
 });
+
+/** @type {{[userId: string]: boolean}} */
+const userIdsWhoAlreadyStreaked = {}
+
+// Under no circumstances should a streak failure of any kind crash the bot.
+function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
+    try {
+        if (userId && userName) {
+            updateStreaks(userId, userName, sayItOutLoud);
+        }
+        else {
+            // could have been something like an anonymous cheer
+            console.log("No user given when updating a streak?  That's probably okay once in a while.");
+        }
+        return true;
+    }
+    catch (e) {
+        console.log("updateStreaks failed!", e);
+        return false;
+    }
+}
+
     //check the current stream start time
     //compare against previous value of current stream time
     //if the same, do nothing (bot was restarted or something)
     //if 5 hours has passed since end of last stream (try first)
     //if the same 24 hour period (set to 6 AM PDT converted to GMT so whatever the hell that is)/ , do not change the existing start time
     //save to json
-function updateStreaks(userID, userName){
+function updateStreaks(userID, userName, sayItOutLoud = false){
+    // if the user didn't redeem a channel point reward for it, then there's no need to do all the file manipulation if we've already seen them streak.
+    if (!sayItOutLoud && userIdsWhoAlreadyStreaked[userID]) {
+        return;
+    }
+    
     //read the json file
     let streak_List
     try {streak_List=jsonfile.readFileSync(streak_Path)}
@@ -812,6 +848,12 @@ function updateStreaks(userID, userName){
         console.log('something got messed up in streaks')
     }
     else{
+        const say = msg => {
+            if (sayItOutLoud) {
+                client.say(channelName, msg);
+            }
+        }
+        
         let lastStart= Date.parse(streak_List.Last_Stream.Start);
         let lastEnd= Date.parse(streak_List.Last_Stream.End);
         let currentStart= Date.parse(streak_List.Current_Stream.Start)
@@ -822,7 +864,7 @@ function updateStreaks(userID, userName){
         if(!userInfo){
             streak_List.Users[userID]={User_Name: `${userName}`, Streak: 1, Best_Streak: 1, Last_Updated: ""};
              streak_List.Users[userID].Last_Updated=now; 
-            client.say(channelName, `@${userName} has just started their watch streak!! this is just the beginning!!`);
+            say(`@${userName} has just started their watch streak!! this is just the beginning!!`);
         }
         //found user, update streak info
         else{
@@ -848,22 +890,22 @@ function updateStreaks(userID, userName){
                             userInfo.Best_Streak=userInfo.Streak
                         }
                         userInfo.Last_Updated=now;
-                        client.say(channelName, `@${userName} has watched ${userInfo.Streak} streams in a row!!`);
+                        say(`@${userName} has watched ${userInfo.Streak} streams in a row!!`);
                     }
                     //streak is deadge :(
                     else if (lastUpdated<lastStart){
                         userInfo.Last_Updated=now;
                         userInfo.Streak=1
-                        client.say(channelName, `@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
+                        say(`@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
                     }
                     else{
-                        client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                        say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
                         if (userInfo.Best_Streak<userInfo.Streak){
                             userInfo.Best_Streak=userInfo.Streak
                         }
                     }
                 }
-                client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
                 if (userInfo.Best_Streak<userInfo.Streak){
                             userInfo.Best_Streak=userInfo.Streak
                 }
@@ -876,7 +918,7 @@ function updateStreaks(userID, userName){
                     if ((lastUpdated>lastStart && lastUpdated<currentStart)){
                         userInfo.Streak=userInfo.Streak+1;
                         userInfo.Last_Updated=now;
-                        client.say(channelName, `@${userName} has watched ${userInfo.Streak} streams in a row!!`);
+                        say(`@${userName} has watched ${userInfo.Streak} streams in a row!!`);
                         if (userInfo.Best_Streak<userInfo.Streak){
                             userInfo.Best_Streak=userInfo.Streak
                         }
@@ -885,17 +927,17 @@ function updateStreaks(userID, userName){
                     else if (lastUpdated<lastStart){
                         userInfo.Last_Updated=now;
                         userInfo.Streak=1
-                        client.say(channelName, `@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
+                        say(`@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
                     }
                     else{
-                        client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                        say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
                         if (userInfo.Best_Streak<userInfo.Streak){
                             userInfo.Best_Streak=userInfo.Streak
                         }
                     }
                 }
                 else{
-                    client.say(channelName, `@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                    say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
                     if (userInfo.Best_Streak<userInfo.Streak){
                             userInfo.Best_Streak=userInfo.Streak
                     }
@@ -903,10 +945,11 @@ function updateStreaks(userID, userName){
             }
         }
 
-            //write the file
-            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-        }
+        //write the file
+        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
+        userIdsWhoAlreadyStreaked[userID] = true;
     }
+}
 
 tesManager.queueSubscription('stream.online', subCondition, event =>{
         console.log("stream online detected");
@@ -1030,6 +1073,7 @@ tesManager.queueSubscription("channel.subscribe", subCondition, event => {
     //Handle received New Subscriber events
     console.log(event);
     incentiveAmount = incentiveData.read('incentive.amount');
+    updateStreaksSafely(event?.user_id, event?.user_name);
 });
 
 /***************************************
@@ -1063,6 +1107,9 @@ tesManager.queueSubscription("channel.subscription.gift", subCondition, event =>
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
+    if (!event?.is_anonymous) { // anonymous gift subs, well, don't come with user info
+        updateStreaksSafely(event?.user_id, event?.user_name);
+    }
 });
 
 /***************************************
@@ -1088,6 +1135,7 @@ tesManager.queueSubscription("channel.subscription.message", subCondition, event
     console.log(incentiveAmount);
     incentiveData.update('incentive.amount', incentiveAmount);
     updateIncentiveFile();
+    updateStreaksSafely(event?.user_id, event?.user_name);
 });
 
 
@@ -1168,6 +1216,7 @@ client.on('message', async (channel, tags, message, self) => {
     //determine if chat activity in last 10 minutes
     if (tags.username != "kiawa_bot"){
         activityDetection=true;
+        updateStreaksSafely(tags["user-id"], tags.username);
     }
     
     // resolve badges for this message
