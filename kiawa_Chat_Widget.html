@@ -146,17 +146,17 @@
           const action = event.action;
           if (["ban", "timeout", "warn"].includes(action)) {
             const userId = event[action].user_id;
-            removeAllUserMessagesByUserId(userId);
+            removeChatMessagesByUserId(userId);
           }
           if (["delete"].includes(action)) {
             const messageId = event[action].message_id;
-            removeMessagesByMessageId(messageId);
+            removeChatMessagesByMessageId(messageId);
           }
         }
 
         // https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/#channelchatmessage_delete
         function handleMessageDelete(event) {
-          removeMessagesByMessageId(event.message_id);
+          removeChatMessagesByMessageId(event.message_id);
         }
         
         // Function to add a new message to the chat window
