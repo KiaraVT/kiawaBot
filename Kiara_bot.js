@@ -157,7 +157,7 @@ function refreshAccessToken() {
                 authData.update('twitch.refresh_token', '');
                 twitchAuthReady = false;
                 clearInterval(validationTicker)
-                clearInterval(accessRefresh)
+               // clearInterval(accessRefresh)
                 startAuth();
             } else {
                 console.log(error);
@@ -714,7 +714,7 @@ class TesManager {
 }
 const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: process.env.BROADCASTER_ID };
-
+const subConditionMod = { broadcaster_user_id: process.env.BROADCASTER_ID, moderator_user_id: process.env.BROADCASTER_ID };
 let websockets=[];
 // setup websocket server for chat widget
 const socket = new WebSocket.Server({ port: 8080 });
@@ -763,11 +763,11 @@ function sendToAllChatWidgets(data) {
 /***************************************
  *          New Follower               *
  ***************************************/
-tesManager.queueSubscription("channel.follow", subCondition, event => {
+/* tesManager.queueSubscription("channel.follow", subConditionMod, event => {
     // Handle received New Follower events
     // console.log(event);
     updateStreaksSafely(event?.user_id, event?.user_name);
-});
+}); */
 
 /***************************************
  *          Cheer (Bits)               *
