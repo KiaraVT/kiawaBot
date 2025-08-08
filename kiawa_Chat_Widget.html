@@ -134,11 +134,13 @@
         function compareStartIndex(a,b) {return b.startIndex - a.startIndex};
 
         function removeChatMessagesByUserId(userID) {
-          document.querySelectorAll(`.chat-message[userID=${userID}]`).forEach(element => element.remove());
+          console.log(userID);
+          document.querySelectorAll(`.chat-message[userID="${userID}"]`).forEach(element => element.remove());
         }
 
         function removeChatMessagesByMessageId(messageID) {
-          document.querySelectorAll(`.chat-message[messageID=${messageID}]`).forEach(element => element.remove());
+          console.log(`.chat-message[messageID=${messageID}]`)
+          document.querySelectorAll(`.chat-message[messageID="${messageID}"]`).forEach(element => element.remove());
         }
 
         // https://dev.twitch.tv/docs/eventsub/eventsub-reference/#channel-moderate-event-v2
