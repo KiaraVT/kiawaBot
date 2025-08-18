@@ -20,6 +20,9 @@ const spawn = require('child_process').spawn;
 //Include line reading module
 const fs = require('fs');
 //const { getFileCache } = require("./FileCacheService");
+
+const DuelManager = require("DuelManager");
+
 const t1Value = 3.60;
 const t2Value = 6.00;
 const t3Value = 17.50;
@@ -1138,42 +1141,6 @@ tesManager.queueSubscription("channel.subscription.message", subCondition, event
     updateStreaksSafely(event?.user_id, event?.user_name);
 });
 
-/***************************************
- *         D D D D DUEL!!!!!!          *
- ***************************************/
-let Duelers=[];
-setInterval(()=>{
-    if(Duelers.length>1){
-        let dueler1=Duelers[0];
-        let dueler2=Duelers[1];
-        client.say(channelName, `Attention Chat! @${dueler1.dueler} is about to duel @${dueler2.dueler}!!`);
-        setTimeout(() => { client.say(channelName, `will ${dueler2.dueler}'s ${dueler2.weapon} be enough to defeat ${dueler1.dueler}'s ${dueler1.weapon}? Duelists take your places!`) }, 1000);
-        setTimeout(() => { client.say(channelName, `Fire in 3!`) }, 3000);
-        setTimeout(() => { client.say(channelName, `2!`) }, 4000);
-        setTimeout(() => { client.say(channelName, `1!`) }, 5000);
-        //blow up somebody
-        setTimeout(() => { 
-            //coin flip for the winnter
-            const coinFlip=Math.random();
-            //player 1 wins
-                if (coinFlip>=0.5){
-                    client.say(channelName, `@${dueler1.dueler} obliterated @${dueler2.dueler} with amazing use of their ${dueler1.weapon}`);
-                    serverBoop(`${dueler2.duelerID}`, 60*5, `Killed by ${dueler1.dueler}'s ${dueler1.weapon}`)
-                }
-                
-            //player 2 wins
-                else{
-                    client.say(channelName, `@${dueler2.dueler} obliterated @${dueler1.dueler} with amazing use of their ${dueler2.weapon}`);
-                    serverBoop(`${dueler1.duelerID}`, 60*5, `Killed by ${dueler2.dueler}'s ${dueler2.weapon}`)
-                };
-        //cleanup and remove contestants from array
-        Duelers=Duelers.slice(2);
-        }
-        , 6000);
-    }
-},15*1000)
-
-
 //connect to twitch chat
 const client = new tmi.Client({
     options: { debug: true },
@@ -1242,6 +1209,11 @@ if (activityDetection===true){
 
 //connect to chat
 client.connect();
+
+// Workaround for not having modular code.  Best if DuelManager could import these dependencies, instead of faux-exporting it from here.
+DuelManager.setTmiClient(client); // needed to send chat messages
+DuelManager.setChannel(channelName); // needed to send chat messages
+DuelManager.setApiPostRequest(apiPostRequest); // needed to boop folks
 
 //message handler
 
@@ -1630,30 +1602,9 @@ client.on('message', async (channel, tags, message, self) => {
     //bot easks each of them to select a weapon (it can be anything that they type)
     //determine a winner via coinflip, loser gets blasted for x amount of time
     //score added for number of duels won
-  if (command === '!duel') {
-    let dueler=`${tags.username}`;
-    let duelerID=`${tags["user-id"]}`;
-    let weapon= (args.slice(1).join(' ')??"").trim();
-    console.log(weapon)
-    if (!weapon){
-        weapon='fists';
+    if (command === `!duel`) {
+        DuelManager.registerDuelistFromTmiMessage(channel, tags, message, self);
     }
-
-    if (Duelers.length>0 && Duelers[Duelers.length-1].dueler===dueler){
-            client.say(channel, `@${tags.username} is trying to duel themself and that's kind of sad...`)
-    }
-    else{
-        Duelers.push({dueler,weapon,duelerID})
-    
-        if (Duelers.length % 2 == 0){
-
-            client.say(channel, `@${tags.username} has accepted ${Duelers[Duelers.length-2].dueler}'s duel and will be fighting with their ${weapon}` )
-        }
-        else{ 
-            client.say(channel, `@${tags.username} wants to duel with their ${weapon}!! Type '!duel' to fight them!` ); 
-        }
-    }
-  }
     if (command === '!addincentive') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(tags.username) || tags.mod===true) {

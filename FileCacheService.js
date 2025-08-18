@@ -1,5 +1,12 @@
-import { default as fs } from "fs";
-import { default as path } from "path";
+import fs from "fs";
+import path from "path";
+import util from "util";
+
+const LOGGER = console.Console({
+	stdout: process.stdout,
+	stderr: process.stderr,
+});
+LOGGER.debug = () => { }; // disable debug logs
 
 const caches = new Map();
 
@@ -12,23 +19,23 @@ function readFileJson(absolutePath) {
 			content = fs.readFileSync(absolutePath, "utf-8");
 		} catch (e) {
 			// Reading failed, but the file DID exist.  Maybe file permission issues?  Can't continue in this case without clobbering the file.
-			console.log(`File ${absolutePath} exists but could not be read.`, e);
+			LOGGER.error(`File ${absolutePath} exists but could not be read.`, e);
 			throw e;
 		}
-		
+
 		let data;
 		try {
 			data = JSON.parse(content);
 		} catch (e) {
 			// File does not contain valid JSON.
-			console.log(`File ${absolutePath} is not valid JSON.`, e);
+			LOGGER.error(`File ${absolutePath} is not valid JSON.`, e);
 			throw e;
 		}
 
 		return data;
 	} else {
 		// File doesn't exist.  Initialize it to make sure file permissions will work later.
-		console.log(`File ${absolutePath} not found; initializing file with empty object.`);
+		LOGGER.debug(`File ${absolutePath} not found; initializing file with empty object.`);
 		const data = {};
 		writeFileJson(absolutePath, data);
 		return data;
@@ -45,35 +52,54 @@ function writeFileJson(absolutePath, data) {
 function buildFileProxy(absolutePath) {
 	// read the data that's already in the file, to start with
 	const initialData = readFileJson(absolutePath);
+	let cache;
 
-	// make a method wrapper that also writes any data changes to the filesystem
-	function buildFileCachingHook(method) {
-		return function fileCachingHook() {
+	function buildProxiedValue(value) {
+		// todo nested stuff is really tricky and there are definitely ways to evade the proxying.  Also, not sure how to validate that a proxy is OUR proxy.
+		if (["object", "array"].includes(typeof value) && !util.types.isProxy(value)) {
+			for (const key in value) {
+				value[key] = buildProxiedValue(value[key]);
+			}
+			return new Proxy(value, handler);
+		}
+		else {
+			return value;
+		}
+	}
+
+	const handler = {
+		// when setting a property directly on the Proxy, write it to disk
+		set(target, property, value) {
+			// eagerly update the internal cache to recursively use proxies
+			const proxiedValue = buildProxiedValue(value);
 			// do the original method call
-			const result = Reflect[method].apply(cache, arguments);
+			const result = Reflect.set(target, property, proxiedValue);
 			// write the updated cache object out to disk
 			writeFileJson(absolutePath, cache);
 			// return whatever the original method would have returned
 			return result;
-		};
-	}
+		},
+		// when deleting a property directly from the Proxy, write it to disk
+		deleteProperty(obj, prop) {
+			// do the original method call
+			const result = Reflect.deleteProperty(obj, prop);
+			// write the updated cache object out to disk
+			writeFileJson(absolutePath, cache);
+			// return whatever the original method would have returned
+			return result;
+		},
+	};
 
 	// create a Proxy starting from the original file data
-	const cache = new Proxy(initialData, {
-		// when setting a property directly on the Proxy, write it to disk
-		set: buildFileCachingHook("set"),
-		// when deleting a property directly from the Proxy, write it to disk
-		deleteProperty: buildFileCachingHook("deleteProperty"),
-	});
-	
+	cache = buildProxiedValue(initialData);
+
 	return cache;
 }
 
 export function getFileCache(filePath) {
 	// turn any relative path like "something.json" into "C:\Users\anyia\path\to\kiawaBot\something.json"
-	const absolutePath = path.resolve(path.dirname("."), filePath);
-	
-	
+	const absolutePath = path.resolve(import.meta.dirname, filePath);
+
 	if (!caches.has(absolutePath)) {
 		// if we don't already have a file cache created for this path, make one
 		const cache = buildFileProxy(absolutePath);
