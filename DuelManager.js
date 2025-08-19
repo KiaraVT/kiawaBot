@@ -58,6 +58,7 @@ function sample(array) {
 }
 
 let duelists = [];
+let lastRegistrationOrDuel = new Date();
 
 // Return true if this duelist is already in the queue, so we can avoid someone stacking up duels or dueling themselves.
 // Do any response actions such as speaking or timeouts inside this function.
@@ -136,6 +137,7 @@ export default new class DuelManager {
     }
     
     duelists.push(duelist);
+    lastRegistrationOrDuel = new Date();
     if (duelists.length % 2 == 0) {
       const opponent = duelists[duelists.length - 2];
       afterSecondsDoSay(0, `@${duelist.display_name} has accepted @${opponent.display_name}'s duel and will be fighting with their ${duelist.weapon}`)
@@ -156,6 +158,8 @@ function afterSecondsDoSay(seconds, message) {
 
 let interval = setInterval(() => {
   if (duelists.length > 1) {
+    lastRegistrationOrDuel = new Date();
+    
     // Pick our fighters
     const competitor = duelists[0];
     const opponent = duelists[1];
@@ -189,6 +193,11 @@ let interval = setInterval(() => {
       quietBoop(loser.user_id, boopSeconds, `Defeated by @${winner.display_name}'s ${winner.weapon}`);
       
     }, waitToAnnounceForSeconds * 1000);
+  }
+  else if (duelists.length == 1 && millisSinceDate(lastRegistrationOrDuel) >= 60 * 1000) {
+    const duelist = duelists[0];
+    duelists = duelists.slice(1);
+    afterSecondsDoSay(0, `Nobody dared to challenge @${duelist.display_name} and their mighty ${duelist.weapon}. They leave the arena in disappointment... for now.`)
   }
 }, durationBetweenMatches);
 
@@ -236,4 +245,14 @@ function getOrdinalFor(i) {
   const lastDigit = i % 10;
   const suffixes = [undefined, "st", "nd", "rd"];
   return `${i}${suffixes[lastDigit] ?? "th"}`;
+}
+
+function millisSinceDate(date) {
+  return millisBetweenDates(new Date(), date);
+}
+
+function millisBetweenDates(date1, date2) {
+  const time1 = date1?.getTime?.() ?? 0;
+  const time2 = date2?.getTime?.() ?? 0;
+  return Math.abs(time1 - time2);
 }
