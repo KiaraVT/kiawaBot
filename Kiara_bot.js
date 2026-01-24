@@ -1086,7 +1086,7 @@ function getStreamInfo(broadcaster_id, type, first) {
                         streak_List.Current_Stream.Start = currentStart;
                         jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
                     }
-                    else if ((Date.parse(currentStart) - Date.parse(streak_List.Last_Stream.End)) < (5 * 60 * 60 * 1000)) {
+                    else if ((Date.parse(currentStart) - Date.parse(streak_List.Last_Stream.End)) > (5 * 60 * 60 * 1000)) {
                         console.log('stream time Updated to' + currentStart)
                         streak_List.Current_Stream.Start = currentStart;
                         jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
