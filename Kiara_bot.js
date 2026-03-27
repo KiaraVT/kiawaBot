@@ -658,6 +658,7 @@ class TesManager {
     // Lot of assumptions around wanting at most one handler per type, and disregarding condition.  That's fine for Kiara today.
     // This method might also benefit from synchronization and/or a short debounce.
     async #repairSubscriptions() {
+        console.log(`made it to before the repairSubscriptions try statement`);
         try {
             console.log(`Repairing EventSub subscriptions...`);
             const cachedSubs = Object.values(this.#subscriptionByType);
@@ -666,14 +667,22 @@ class TesManager {
             const subTypes = new Set([...cachedSubs, ...twitchSubs].map(sub => sub.type));
             console.log(`Repairing EventSub subscriptions with types ${[...subTypes].join(", ")}`);
             for (const type of subTypes) {
+                console.log(`We are inside the 1st for statement`);
+                console.log(type);
                 try {
+                    console.log(`We are inside the 2nd try statement`);
                     const allSubs = twitchSubs.filter(sub => sub.type == type);
+                    console.log(allSubs);
                     const existingSub = allSubs.find(sub => sub.id === this.#subscriptionByType[type]?.id);
+                    console.log(existingSub);
                     const potentialReplacementSub = allSubs.find(sub => sub.status == "enabled" && sub.id != existingSub?.id);
+                    console.log(potentialReplacementSub);
                     const fallbackCondition = existingSub?.condition ?? potentialReplacementSub?.condition ?? allSubs.find(s => s.condition)?.condition;
+                    console.log(fallbackCondition);
 
                     // Any subs that aren't existingSub or potentialReplacementSub can't possibly be useful. Unsubscribe them all first.
                     for (const otherSub of allSubs) {
+                        console.log('We are inside the 2nd for statement');
                         try {
                             if (otherSub !== existingSub && otherSub !== potentialReplacementSub) {
                                 console.log(`Repairing EventSub subscriptions: removing duplicate, ${type} ${otherSub.status} ${otherSub.created_at} ${otherSub.id}`);
@@ -687,6 +696,7 @@ class TesManager {
 
                     // if existingSub thinks it's good, get rid of potentialReplacementSub also, and move on to the next type
                     if (existingSub?.status == "enabled") {
+                        console.log('We are inside the 1st if statement');
                         if (potentialReplacementSub) {
                             try {
                                 console.log(`Repairing EventSub subscriptions: removing duplicate, ${type} ${potentialReplacementSub.status} ${potentialReplacementSub.created_at} ${potentialReplacementSub.id}`);
@@ -701,6 +711,7 @@ class TesManager {
 
                     // if existingSub exists in a bad state, unsubscribe it and remove from cache
                     if (existingSub) {
+                        console.log('We are inside the 2nd if statement');
                         try {
                             console.log(`Repairing EventSub subscriptions: removing stale, ${type} ${existingSub.status} ${existingSub.created_at} ${existingSub.id}`);
                             delete this.#subscriptionByType[type];
@@ -719,6 +730,7 @@ class TesManager {
 
                     // last thing - if we didn't wind up with a subscription in the cache of this type, try and make an entirely new one.
                     if (!this.#subscriptionByType[type]) {
+                        console.log('We are inside the last if statement');
                         try {
                             console.log(`Repairing EventSub subscriptions: recreating ${type} with ${JSON.stringify(fallbackCondition)}`);
                             const hailMary = await this.#tes.subscribe(type, fallbackCondition);
@@ -1030,9 +1042,16 @@ tesManager.queueSubscription('stream.online', subCondition, event => {
             jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
         }
         //all is good, do standard procedure
-        else if ((currentStart - lastEnd) < 7200) {
+
+        //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
+        else if (streak_List.Current_Stream.Start > lastEnd) {
             console.log('Stream Started shortly after last stream, do not update times')
         }
+        //stream offline was dertected, but new stream is within 5 hours of old stream, don't update anything
+        else if ((currentStart - lastEnd) < 5*60*60*1000) {
+            console.log('Stream Started shortly after last stream, do not update times')
+        }
+
         else {
             console.log('all is good on stream online check')
             streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
@@ -1051,7 +1070,8 @@ tesManager.queueSubscription('stream.offline', subCondition, event => {
     catch (e) { }
     //update stream times
     const now = new Date();
-    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+    let currentStart = streak_List.Current_Stream.Start;
+    let lastEnd = streak_List.Last_Stream.End;
     streak_List.Last_Stream.End = now;
     jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
     console.log('Stream Ended, logged to streaks')
@@ -1086,7 +1106,16 @@ function getStreamInfo(broadcaster_id, type, first) {
                         streak_List.Current_Stream.Start = currentStart;
                         jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
                     }
-                    else if ((Date.parse(currentStart) - Date.parse(streak_List.Last_Stream.End)) > (5 * 60 * 60 * 1000)) {
+
+                    //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
+                    else if (Date.parse(streak_List.Current_Stream.Start) > Date.parse(streak_List.Last_Stream.End)) {
+                        console.log('Stream Started shortly after last stream, do not update times')
+                    }
+                    //stream offline was dertected, but new stream is within 5 hours of old stream, don't update anything
+                    else if ((ate.parse(streak_List.Current_Stream.Start) - Date.parse(streak_List.Last_Stream.End)) < 5*60*60*1000) {
+                        console.log('Stream Started shortly after last stream, do not update times')
+                    }
+                    else {
                         console.log('stream time Updated to' + currentStart)
                         streak_List.Current_Stream.Start = currentStart;
                         jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
