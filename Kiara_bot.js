@@ -141,11 +141,14 @@ async function startAuth() {
     });
     const authUrl = new URL("https://id.twitch.tv/oauth2/authorize?" + authQueryString)
     switch (process.platform) {
-        case 'windows':
+        case 'win32':
             await spawn('cmd', ["/c", "start", authUrl]);
             break;
         case 'linux':
             await spawn('xdg-open', [authUrl])
+            break;
+        case 'darwin':
+            await spawn('open', [authUrl])
             break;
         case _:
             console.error(`${process.platform} isn't supported for authentication`)
