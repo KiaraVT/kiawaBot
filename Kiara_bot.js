@@ -293,6 +293,14 @@ function getChannelInfo(broadcaster_id) {
     });
 }
 
+function getUserInfo(user_Name) {
+    return new Promise((resolve, reject) => {
+        apiGetRequest('users', { login: user_Name })
+            .then(data => resolve(data.data))
+            .catch(error => reject(error))
+    });
+}
+
 // #region ==================== BADGES =====================
 
 /**
@@ -1021,22 +1029,27 @@ tesManager.queueSubscription('stream.online', subCondition, event => {
         let lastStart = new Date(streak_List.Last_Stream.Start);
         lastStart = Date.parse(lastStart);
         let lastEnd = new Date(streak_List.Last_Stream.End);
+        let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
         lastEnd = Date.parse(lastEnd);
+        backupEnd=Date.parse(backupEnd);
+        console.log(currentStart - backupEnd)
         //update stream times
+        //the end of stream was not detected last time, reset the end to a blank value
         if (!lastEnd) {
             console.log('End time was null');
-            console.log(lastStart);
-            console.log(lastEnd);
-            console.log(currentStart);
-            streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-            streak_List.Current_Stream.Start = currentStart;
-            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-        }
-        //the end of stream was not detected last time, reset the end to a blank value
+                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start = currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
 
-        else if (lastEnd < lastStart) {
+        }
+        
+        else if ((currentStart - backupEnd) < 5*60*60*1000) {
+                //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
+                console.log('Stream Started shortly after last stream, do not update times')
+        }
+        else if (backupEnd < lastStart) {
             console.log('stream end detection did not work last stream');
-            streak_List.Last_Stream.End = ""
+            streak_List.Last_Stream.End = "";
             streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
             streak_List.Current_Stream.Start = currentStart;
             jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
@@ -1047,15 +1060,13 @@ tesManager.queueSubscription('stream.online', subCondition, event => {
         else if (streak_List.Current_Stream.Start > lastEnd) {
             console.log('Stream Started shortly after last stream, do not update times')
         }
-        //stream offline was dertected, but new stream is within 5 hours of old stream, don't update anything
-        else if ((currentStart - lastEnd) < 5*60*60*1000) {
-            console.log('Stream Started shortly after last stream, do not update times')
-        }
+
 
         else {
             console.log('all is good on stream online check')
             streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
             streak_List.Current_Stream.Start = currentStart;
+            streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
             jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
         }
         console.log(lastStart);
@@ -1070,9 +1081,7 @@ tesManager.queueSubscription('stream.offline', subCondition, event => {
     catch (e) { }
     //update stream times
     const now = new Date();
-    let currentStart = streak_List.Current_Stream.Start;
-    let lastEnd = streak_List.Last_Stream.End;
-    streak_List.Last_Stream.End = now;
+    streak_List.Last_Stream.Backup_End = now;
     jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
     console.log('Stream Ended, logged to streaks')
 });
@@ -1085,43 +1094,72 @@ function getStreamInfo(broadcaster_id, type, first) {
         apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first })
             .then(data => {
                 resolve(data.data);
-                let streak_List
-                try { streak_List = jsonfile.readFileSync(streak_Path) }
-                catch (e) { }
-                //if file is empty then initialize it
-                if (!streak_List) {
-                    console.log('Streak File Not Detected, writing new file')
-                    let lastStart = data.data[0].started_at;
-                    let currentStart = data.data[0].started_at;
-                    const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} };
-                    jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" });
-                }
+                 let streak_List
+        try { streak_List = jsonfile.readFileSync(streak_Path) }
+        catch (e) { }
+        //if file is empty then initialize it
+        if (!streak_List) {
+            console.log("No File, Creating New File");
+            let lastStart = data.data[0].started_at;
+            console.log(lastStart)
+            let currentStart = data.data[0].started_at;
+            const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
+            jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
+        }
 
-                //if file is not empty, update stream info
-                else {
-                    let currentStart = data.data[0].started_at;
-                    if (streak_List.Last_Stream.End === "") {
-                        //update stream times
-                        streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                        streak_List.Current_Stream.Start = currentStart;
-                        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-                    }
+        //if file is not empty, update stream info
+        else {
+            console.log("Updating Current Stream Date");
+            let currentStart = data.data[0].started_at;
+            console.log(currentStart);
+            console.log(data.data[0].started_at);
+            let lastStart = new Date(streak_List.Last_Stream.Start);
+            lastStart = Date.parse(lastStart);
+            let lastEnd = new Date(streak_List.Last_Stream.End);
+            let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
+            lastEnd = Date.parse(lastEnd);
+            backupEnd=Date.parse(backupEnd);
+            console.log(currentStart - backupEnd)
+            //update stream times
+            //the end of stream was not detected last time, reset the end to a blank value
+            if (!lastEnd) {
+                console.log('End time was null');
+                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                    streak_List.Current_Stream.Start = currentStart;
+                    jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
 
-                    //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
-                    else if (Date.parse(streak_List.Current_Stream.Start) > Date.parse(streak_List.Last_Stream.End)) {
-                        console.log('Stream Started shortly after last stream, do not update times')
-                    }
-                    //stream offline was dertected, but new stream is within 5 hours of old stream, don't update anything
-                    else if ((ate.parse(streak_List.Current_Stream.Start) - Date.parse(streak_List.Last_Stream.End)) < 5*60*60*1000) {
-                        console.log('Stream Started shortly after last stream, do not update times')
-                    }
-                    else {
-                        console.log('stream time Updated to' + currentStart)
-                        streak_List.Current_Stream.Start = currentStart;
-                        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-                    }
+            }
+            
+            else if ((currentStart - backupEnd) < 5*60*60*1000) {
+                    //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
+                    console.log('Stream Started shortly after last stream, do not update times')
+            }
+            else if (backupEnd < lastStart) {
+                console.log('stream end detection did not work last stream');
+                streak_List.Last_Stream.End = "";
+                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start = currentStart;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+            //all is good, do standard procedure
 
-                }
+            //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
+            else if (streak_List.Current_Stream.Start > lastEnd) {
+                console.log('Stream Started shortly after last stream, do not update times')
+            }
+
+
+            else {
+                console.log('all is good on stream online check')
+                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                streak_List.Current_Stream.Start = currentStart;
+                streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
+                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+            }
+            console.log(lastStart);
+            console.log(lastEnd);
+            console.log(currentStart);
+        }
             })
 
             .catch(error => reject(error))
@@ -1296,13 +1334,13 @@ let commandIndex = 0
 setInterval(() => {
     if (activityDetection === true) {
         //send the current command in the rotation to get posted
-        (timedCommands[commandIndex]);
+        postCommand(timedCommands[commandIndex]);
         //increment the array index, reset to 0 if past max
         commandIndex = (commandIndex + 1) % timedCommands.length;
-        //resert activity detection so that timed messages do not get spammed without chat activity
+        //reset activity detection so that timed messages do not get spammed without chat activity
         activityDetection = false;
     }
-}, 1200000)
+}, 1000*60*20)
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
 
@@ -1532,7 +1570,39 @@ client.on('message', async (channel, tags, message, self) => {
 
 
 
+    if (command === '!so')
 
+        //check if user is allowed to use the command (VIP/mods/allow list only)
+        if (allow_List.includes(tags.username) || tags.mod === true || tags.vip === true) {
+ 
+            //get user id
+            try {
+                const user_Name = args.slice(1).join(' ');
+                if (!user_Name){
+                    client.say(channel, `You need to give me someone to shoutout silly!`);
+                }
+                else{
+                    const user_Info = await getUserInfo(user_Name);
+                    console.log(user_Info)
+                    if (!user_Info[0]){
+                        client.say(channel, `Sorry, no idea who that is kiawaDed`);
+                    }
+                    else{
+                        const userID=user_Info[0].id;
+                        //use the user id to get the game name if their last streamed game
+                        const broadcast_info = await getChannelInfo(userID);
+                        //const broadcast_info= await axios.get('https://api.twitch.tv/helix/channels?broadcaster_id=37055465', axiosConfig);
+                        const category = broadcast_info[0].game_name;
+                        client.say(channel, `join us in following @${user_Name}! they were recently streaming ${category}, over at twitch.tv/${user_Name} that's neat! kiawaCheer`);
+                    }
+                }
+            }
+            catch (err) {
+                console.log(err)
+            }
+
+            //I don't know how errors work so this just stops it from clogging the window
+        }
     //check if it is an add quote command
     if (command === '!addquote') {
         //check if user is a mod or VIP allow_List.includes(tags.username) || 
