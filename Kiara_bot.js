@@ -1577,7 +1577,7 @@ client.on('message', async (channel, tags, message, self) => {
  
             //get user id
             try {
-                const user_Name = args.slice(1).join(' ');
+                const user_Name = args.slice(1).join(' ').replaceAll('@', '');
                 if (!user_Name){
                     client.say(channel, `You need to give me someone to shoutout silly!`);
                 }
