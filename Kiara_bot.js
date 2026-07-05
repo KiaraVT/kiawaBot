@@ -141,14 +141,14 @@ async function startAuth() {
     });
     const authUrl = new URL("https://id.twitch.tv/oauth2/authorize?" + authQueryString)
     switch (process.platform) {
-        case 'windows':
-            await spawn('cmd', ["/c", "start", authUrl]);
+        case 'win32':
+            await spawn('cmd', ["/c", "start", authUrl.toString()]);
             break;
         case 'linux':
-            await spawn('xdg-open', [authUrl])
+            await spawn('xdg-open', [authUrl.toString()]);
             break;
-        case _:
-            console.error(`${process.platform} isn't supported for authentication`)
+        default:
+            console.error(`${process.platform} isn't supported for authentication`);
             process.exit(1);
     }
     console.log('made it to end of startauth')
@@ -1333,10 +1333,15 @@ let commandIndex = 0
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
 setInterval(() => {
     if (activityDetection === true) {
-        //send the current command in the rotation to get posted
-        postCommand(timedCommands[commandIndex]);
-        //increment the array index, reset to 0 if past max
-        commandIndex = (commandIndex + 1) % timedCommands.length;
+        if (timedCommands && timedCommands.length > 0) {
+            //send the current command in the rotation to get posted
+            postCommand(timedCommands[commandIndex]);
+            //increment the array index, reset to 0 if past max
+            commandIndex = (commandIndex + 1) % timedCommands.length;
+        } else {
+            console.error("[Bot Error] Prevented division by zero: timedCommands array is empty or undefined.");
+        }
+        
         //reset activity detection so that timed messages do not get spammed without chat activity
         activityDetection = false;
     }
