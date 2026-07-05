@@ -7,28 +7,20 @@ RUN apk add --no-cache curl
 # Set working directory
 WORKDIR /app
 
-# Create data directory with proper permissions
-RUN mkdir -p /app/data && chmod 755 /app/data
+# Create data directory with proper permissions and assign to the built-in node user
+RUN mkdir -p /app/data && chown -R node:node /app && chmod 755 /app/data
+
+# Switch to non-root user
+USER node
 
 # Copy package files
-COPY package.json ./
-COPY package-lock.json ./
+COPY --chown=node:node package.json package-lock.json ./
 
 # Install dependencies
 RUN npm install --omit=dev && npm cache clean --force
 
 # Copy application files (including webserver directory)
-COPY . .
-
-# Create a non-root user
-# RUN addgroup -g 1001 -S nodejs && \
-#   adduser -S botuser -u 1001 -G nodejs
-
-# Set ownership of the app directory
-# RUN chown -R botuser:nodejs /app
-
-# Switch to non-root user
-# USER botuser
+COPY --chown=node:node . .
 
 # Expose both the OAuth port and web server port
 EXPOSE 3000 8081
