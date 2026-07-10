@@ -52,12 +52,12 @@ export default class IncentiveHelper {
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 
-        pathArr.forEach((pathItem) => {
-            if (!focusObject.hasOwnProperty(pathItem)) return false;
+        for (const pathItem of pathArr) {
+            if (focusObject == null || !focusObject.hasOwnProperty(pathItem)) return false;
             focusObject = focusObject[pathItem];
-        });
+        }
 
-        if (!focusObject.hasOwnProperty(targetItem)) return false;
+        if (focusObject == null || !focusObject.hasOwnProperty(targetItem)) return false;
         return true;
     }
 
@@ -67,12 +67,12 @@ export default class IncentiveHelper {
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 
-        pathArr.forEach((pathItem) => {
-            if (!focusObject.hasOwnProperty(pathItem)) return undefined;
+        for (const pathItem of pathArr) {
+            if (focusObject == null || !focusObject.hasOwnProperty(pathItem)) return undefined;
             focusObject = focusObject[pathItem];
-        });
+        }
 
-        if (!focusObject.hasOwnProperty(targetItem)) return undefined;
+        if (focusObject == null || !focusObject.hasOwnProperty(targetItem)) return undefined;
         return focusObject[targetItem];
     }
 
@@ -82,18 +82,17 @@ export default class IncentiveHelper {
         let targetField = pathArr.pop();
         let focusObject = this.data;
 
-        pathArr.forEach((pathItem) => {
+        for (const pathItem of pathArr) {
+            if (focusObject == null || typeof focusObject !== "object") return false;
             if (!focusObject.hasOwnProperty(pathItem)) {
                 if (!create) return false;
                 focusObject[pathItem] = {};
             }
             focusObject = focusObject[pathItem];
-        });
-
-        if (!focusObject.hasOwnProperty(targetField)) {
-            if (!create) return false;
-            focusObject[targetField] = {};
         }
+
+        if (focusObject == null || typeof focusObject !== "object") return false;
+        if (!focusObject.hasOwnProperty(targetField) && !create) return false;
 
         focusObject[targetField] = value;
         this.touchAutosave();
@@ -106,12 +105,12 @@ export default class IncentiveHelper {
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 
-        pathArr.forEach((pathItem) => {
-            if (!focusObject.hasOwnProperty(pathItem)) return false;
+        for (const pathItem of pathArr) {
+            if (focusObject == null || !focusObject.hasOwnProperty(pathItem)) return false;
             focusObject = focusObject[pathItem];
-        });
+        }
 
-        if (!focusObject.hasOwnProperty(targetItem)) return false;
+        if (focusObject == null || !focusObject.hasOwnProperty(targetItem)) return false;
         delete focusObject[targetItem];
         this.touchAutosave();
         return true;

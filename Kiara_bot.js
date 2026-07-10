@@ -24,11 +24,13 @@ if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }
 
-// Initialize data files if they don't exist
+// Initialize data files if they don't exist.
+// The quote and command lists keep their running count in a record at index 0,
+// so a usable file must start with that record present.
 const defaultFiles = [
-    { path: quote_Path, content: [] },
+    { path: quote_Path, content: [{ Quote_Count: "0" }] },
     { path: streak_Path, content: {} },
-    { path: command_Path, content: [] }
+    { path: command_Path, content: [{ Command_Count: "0" }] }
 ];
 
 defaultFiles.forEach(({ path, content }) => {
@@ -110,6 +112,12 @@ const redirectUri = 'http://localhost:' + oAuthPort
 let validationTicker = null;
 let twitchAuthReady = false;
 
+//only one validation ticker should ever be running; clear any existing one before starting
+function startValidationTicker() {
+    clearInterval(validationTicker);
+    validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
+}
+
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
 authListener.listen(oAuthPort);
@@ -121,7 +129,7 @@ authListener.get("/", (req, res) => {
             authData.update('twitch.access_token', tokenData.access_token);
             authData.update('twitch.refresh_token', tokenData.refresh_token);
             validateAccessToken();
-            validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
+            startValidationTicker();
         })
         .catch(error => {
             //res.send("Error during authorization");
@@ -140,12 +148,14 @@ async function startAuth() {
         scope: scopes.join(' ')
     });
     const authUrl = new URL("https://id.twitch.tv/oauth2/authorize?" + authQueryString)
+    //if the browser can't be opened (e.g. headless machine), don't crash - print the URL so it can be opened manually
+    const browserFailed = err => console.error(`Couldn't open a browser for Twitch auth (${err.message}); please open this URL yourself:\n${authUrl.toString()}`);
     switch (process.platform) {
         case 'win32':
-            await spawn('cmd', ["/c", "start", authUrl.toString()]);
+            spawn('cmd', ["/c", "start", authUrl.toString()]).on('error', browserFailed);
             break;
         case 'linux':
-            await spawn('xdg-open', [authUrl.toString()]);
+            spawn('xdg-open', [authUrl.toString()]).on('error', browserFailed);
             break;
         default:
             console.error(`${process.platform} isn't supported for authentication`);
@@ -189,7 +199,7 @@ function refreshAccessToken() {
             validateAccessToken();
         })
         .catch(error => {
-            if (error.response.status === 401 || error.response.status === 400) {
+            if (error?.response?.status === 401 || error?.response?.status === 400) {
                 console.log('Unable to refresh Access Token, requesting new auth consent from user');
                 authData.update('twitch.access_token', '');
                 authData.update('twitch.refresh_token', '');
@@ -233,7 +243,7 @@ function validateAccessToken() {
 //send a GET request to the Twitch API
 function apiGetRequest(method, parameters) {
     return new Promise((resolve, reject) => {
-        if (!twitchAuthReady) reject(new Error("twitch not yet authorized, wait a bit and try again"));
+        if (!twitchAuthReady) return reject(new Error("twitch not yet authorized, wait a bit and try again"));
 
         const requestQueryString = querystring.stringify(parameters);
         const axiosConfig = {
@@ -245,7 +255,7 @@ function apiGetRequest(method, parameters) {
         axios.get("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, axiosConfig)
             .then(response => resolve(response.data))
             .catch(error => {
-                if (error.response.status === 401) {
+                if (error?.response?.status === 401) {
                     console.log('Unable to validate Access Token, requesting a refreshed token');
                     refreshAccessToken();
                 }
@@ -257,7 +267,7 @@ function apiGetRequest(method, parameters) {
 //send a POST request to the Twitch API
 function apiPostRequest(method, parameters, data) {
     return new Promise((resolve, reject) => {
-        if (!twitchAuthReady) reject(new Error("twitch not yet authorized, wait a bit and try again"));
+        if (!twitchAuthReady) return reject(new Error("twitch not yet authorized, wait a bit and try again"));
         const requestQueryString = querystring.stringify(parameters);
         const axiosConfig = {
 
@@ -271,11 +281,11 @@ function apiPostRequest(method, parameters, data) {
         axios.post("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, data, axiosConfig)
             .then(response => resolve(response.data))
             .catch(error => {
-                if (error.response.status === 401) {
+                if (error?.response?.status === 401) {
                     console.log('Unable to validate Access Token, requesting a refreshed token');
                     refreshAccessToken();
                 }
-                if (error.response.status === 400) {
+                if (error?.response?.status === 400) {
                     console.log(error.response.data.message);
                 }
                 reject(error);
@@ -410,7 +420,7 @@ function handleAuthFileStatusChange(status) {
     if (status === 'loaded') {
         //data has been loaded at app start.  Proceed with the rest of the bot stuff
         validateAccessToken();
-
+        startValidationTicker();
     }
 
 }
@@ -448,8 +458,6 @@ const authData = new AuthDataHelper();
 const incentiveData = new IncentiveHelper();
 authData.statusCallback = handleAuthFileStatusChange;
 authData.loadData();
-validateAccessToken();
-validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
 incentiveData.statusCallback = handleIncentiveFileStatusChange;
 incentiveData.loadData();
 // if (!fs.existsSync(INCENTIVEPATH)) {
@@ -730,10 +738,10 @@ class TesManager {
                         }
                     }
 
-                    // if replacementSub exists (by definition in a good "enabled" state), put it in the cache
-                    if (replacementSub) {
-                        console.log(`Repairing EventSub subscriptions: replacing, ${type} ${otherSub.status} ${existingSub.created_at} ${existingSub.id}`);
-                        this.#subscriptionByType[type] = replacementSub;
+                    // if potentialReplacementSub exists (by definition in a good "enabled" state), put it in the cache
+                    if (potentialReplacementSub) {
+                        console.log(`Repairing EventSub subscriptions: replacing, ${type} ${potentialReplacementSub.status} ${potentialReplacementSub.created_at} ${potentialReplacementSub.id}`);
+                        this.#subscriptionByType[type] = potentialReplacementSub;
                     }
 
                     // last thing - if we didn't wind up with a subscription in the cache of this type, try and make an entirely new one.
@@ -779,6 +787,7 @@ socket.on('connection', ws => {
     websockets.push(ws);
     console.log('Client connected');
     ws.on('close', () => {
+        websockets = websockets.filter(connection => connection !== ws);
         console.log('Client disconnected');
     });
 });
@@ -898,8 +907,9 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
     try { streak_List = jsonfile.readFileSync(streak_Path) }
     catch (e) { }
 
-    if (!streak_List) {
-        console.log('something got messed up in streaks')
+    //the streak logic needs the stream-time structure, which only exists once a stream.online event has been seen
+    if (!streak_List || !streak_List.Last_Stream || !streak_List.Current_Stream) {
+        console.log('something got messed up in streaks (no stream times recorded yet)')
     }
     else {
         const say = msg => {
@@ -908,6 +918,7 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
             }
         }
 
+        streak_List.Users ??= {};
         let lastStart = Date.parse(streak_List.Last_Stream.Start);
         let lastEnd = Date.parse(streak_List.Last_Stream.End);
         let currentStart = Date.parse(streak_List.Current_Stream.Start)
@@ -959,9 +970,12 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
                         }
                     }
                 }
-                say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                if (userInfo.Best_Streak < userInfo.Streak) {
-                    userInfo.Best_Streak = userInfo.Streak
+                //same stream period, streak already counted
+                else {
+                    say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                    if (userInfo.Best_Streak < userInfo.Streak) {
+                        userInfo.Best_Streak = userInfo.Streak
+                    }
                 }
             }
             //check if 5 hours since last stream or for the reset time
@@ -1005,80 +1019,75 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
     }
 }
 
-tesManager.queueSubscription('stream.online', subCondition, event => {
-    console.log("stream online detected");
+//shared between the stream.online event and the startup stream-info check.
+//startedAtIso is Twitch's RFC3339 started_at string; all comparisons are done
+//on parsed timestamps (numbers) while the file keeps the original ISO strings.
+function updateStreamTimes(startedAtIso) {
     let streak_List
     try { streak_List = jsonfile.readFileSync(streak_Path) }
     catch (e) { }
-    //if file is empty then initialize it
-    if (!streak_List) {
-        console.log("No File, Creating New File");
-        let lastStart = event.started_at;
-        console.log(lastStart)
-        let currentStart = event.started_at;
-        const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
+
+    //if file is empty or missing its structure then initialize it
+    if (!streak_List || !streak_List.Last_Stream || !streak_List.Current_Stream) {
+        console.log("No usable streaks file, creating a new one");
+        const initializeStreaks = { Last_Stream: { Start: `${startedAtIso}`, End: '' }, Current_Stream: { Start: `${startedAtIso}` }, Users: {} }
         jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
+        return;
     }
 
-    //if file is not empty, update stream info
+    console.log("Updating Current Stream Date");
+    const currentStart = Date.parse(startedAtIso);
+    const lastStart = Date.parse(streak_List.Last_Stream.Start);
+    const lastEnd = Date.parse(streak_List.Last_Stream.End);
+    const backupEnd = Date.parse(streak_List.Last_Stream.Backup_End);
+    const previousStart = Date.parse(streak_List.Current_Stream.Start);
+
+    //the end of stream was not detected last time, just rotate the start times
+    if (!lastEnd) {
+        console.log('End time was null');
+        streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+        streak_List.Current_Stream.Start = startedAtIso;
+        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
+    }
+    else if ((currentStart - backupEnd) < 5 * 60 * 60 * 1000) {
+        //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
+        console.log('Stream Started shortly after last stream, do not update times')
+    }
+    else if (backupEnd < lastStart) {
+        console.log('stream end detection did not work last stream');
+        streak_List.Last_Stream.End = "";
+        streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+        streak_List.Current_Stream.Start = startedAtIso;
+        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+    }
+    //recorded end time overlaps past the stream that started after it, so everything is messed up
+    //(stream offline likely not detected, e.g. internet problem) - don't update any times.
+    else if (lastEnd > previousStart) {
+        console.log('Recorded stream times are inconsistent, do not update times')
+    }
+    //all is good, do standard procedure
     else {
-        console.log("Updating Current Stream Date");
-        let currentStart = event.started_at;
-        console.log(currentStart);
-        console.log(event.started_at);
-        let lastStart = new Date(streak_List.Last_Stream.Start);
-        lastStart = Date.parse(lastStart);
-        let lastEnd = new Date(streak_List.Last_Stream.End);
-        let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
-        lastEnd = Date.parse(lastEnd);
-        backupEnd=Date.parse(backupEnd);
-        console.log(currentStart - backupEnd)
-        //update stream times
-        //the end of stream was not detected last time, reset the end to a blank value
-        if (!lastEnd) {
-            console.log('End time was null');
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStart;
-                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-
-        }
-        
-        else if ((currentStart - backupEnd) < 5*60*60*1000) {
-                //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
-                console.log('Stream Started shortly after last stream, do not update times')
-        }
-        else if (backupEnd < lastStart) {
-            console.log('stream end detection did not work last stream');
-            streak_List.Last_Stream.End = "";
-            streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-            streak_List.Current_Stream.Start = currentStart;
-            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-        }
-        //all is good, do standard procedure
-
-        //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
-        else if (streak_List.Current_Stream.Start > lastEnd) {
-            console.log('Stream Started shortly after last stream, do not update times')
-        }
-
-
-        else {
-            console.log('all is good on stream online check')
-            streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-            streak_List.Current_Stream.Start = currentStart;
-            streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
-            jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-        }
-        console.log(lastStart);
-        console.log(lastEnd);
-        console.log(currentStart);
+        console.log('all is good on stream online check')
+        streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+        streak_List.Current_Stream.Start = startedAtIso;
+        streak_List.Last_Stream.End = streak_List.Last_Stream.Backup_End ?? '';
+        jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
     }
+}
+
+tesManager.queueSubscription('stream.online', subCondition, event => {
+    console.log("stream online detected");
+    updateStreamTimes(event.started_at);
 });
 
 tesManager.queueSubscription('stream.offline', subCondition, event => {
     let streak_List
     try { streak_List = jsonfile.readFileSync(streak_Path) }
     catch (e) { }
+    if (!streak_List?.Last_Stream) {
+        console.log('Stream Ended, but the streaks file is missing or has no stream data; nothing to log');
+        return;
+    }
     //update stream times
     const now = new Date();
     streak_List.Last_Stream.Backup_End = now;
@@ -1086,7 +1095,10 @@ tesManager.queueSubscription('stream.offline', subCondition, event => {
     console.log('Stream Ended, logged to streaks')
 });
 
-let streamInfo = setTimeout(() => getStreamInfo(broadcasterID, 'all', '1'), 2000);
+setTimeout(() => {
+    getStreamInfo(broadcasterID, 'all', '1')
+        .catch(error => console.log('Could not update stream start time at startup (probably not authorized yet):', error.message ?? error));
+}, 2000);
 
 function getStreamInfo(broadcaster_id, type, first) {
     return new Promise((resolve, reject) => {
@@ -1094,74 +1106,12 @@ function getStreamInfo(broadcaster_id, type, first) {
         apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first })
             .then(data => {
                 resolve(data.data);
-                 let streak_List
-        try { streak_List = jsonfile.readFileSync(streak_Path) }
-        catch (e) { }
-        //if file is empty then initialize it
-        if (!streak_List) {
-            console.log("No File, Creating New File");
-            let lastStart = data.data[0].started_at;
-            console.log(lastStart)
-            let currentStart = data.data[0].started_at;
-            const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
-            jsonfile.writeFileSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
-        }
-
-        //if file is not empty, update stream info
-        else {
-            console.log("Updating Current Stream Date");
-            let currentStart = data.data[0].started_at;
-            console.log(currentStart);
-            console.log(data.data[0].started_at);
-            let lastStart = new Date(streak_List.Last_Stream.Start);
-            lastStart = Date.parse(lastStart);
-            let lastEnd = new Date(streak_List.Last_Stream.End);
-            let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
-            lastEnd = Date.parse(lastEnd);
-            backupEnd=Date.parse(backupEnd);
-            console.log(currentStart - backupEnd)
-            //update stream times
-            //the end of stream was not detected last time, reset the end to a blank value
-            if (!lastEnd) {
-                console.log('End time was null');
-                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                    streak_List.Current_Stream.Start = currentStart;
-                    jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-
-            }
-            
-            else if ((currentStart - backupEnd) < 5*60*60*1000) {
-                    //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
-                    console.log('Stream Started shortly after last stream, do not update times')
-            }
-            else if (backupEnd < lastStart) {
-                console.log('stream end detection did not work last stream');
-                streak_List.Last_Stream.End = "";
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStart;
-                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-            }
-            //all is good, do standard procedure
-
-            //stream offline not detected so everything is messed up, likely due to internet problem, don't update any times.
-            else if (streak_List.Current_Stream.Start > lastEnd) {
-                console.log('Stream Started shortly after last stream, do not update times')
-            }
-
-
-            else {
-                console.log('all is good on stream online check')
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStart;
-                streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
-                jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-            }
-            console.log(lastStart);
-            console.log(lastEnd);
-            console.log(currentStart);
-        }
+                if (!data.data || data.data.length === 0) {
+                    console.log('No live stream found, leaving stream times alone');
+                    return;
+                }
+                updateStreamTimes(data.data[0].started_at);
             })
-
             .catch(error => reject(error))
     });
 }
@@ -1308,6 +1258,7 @@ function postCommand(command) {
     jsonfile.readFile(command_Path, async function(err, command_List) {
         if (err) {
             console.error(err);
+            return;
         }
 
         //Search the existing command file and see if the command exists
@@ -1316,13 +1267,9 @@ function postCommand(command) {
                 return search.Tag === command;
             }
         );
-        //format all the bullshit and spit it out in the chat
-        try {
-            var command_Output = command_Info.Response
-            client.say(channelName, command_Output);
-        }
-        catch (error) {
-            console.error(err);
+        //format all the bullshit and spit it out in the chat, but only if the command actually exists
+        if (command_Info) {
+            client.say(channelName, command_Info.Response);
         }
     });
 }
@@ -1349,8 +1296,8 @@ setInterval(() => {
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
 
-//connect to chat
-client.connect();
+//connect to chat - tmi.js retries on its own, so a failed first attempt just gets logged
+client.connect().catch(error => console.error('Could not connect to Twitch chat (tmi.js will keep retrying):', error));
 
 //message handler
 
@@ -1468,6 +1415,7 @@ client.on('message', async (channel, tags, message, self) => {
             jsonfile.readFile(command_Path, async function(err, command_List) {
                 if (err) {
                     console.error(err)
+                    return;
                 }
 
                 //search the relevant field in the json
@@ -1476,6 +1424,12 @@ client.on('message', async (channel, tags, message, self) => {
                         return search.Command_Count;
                     }
                 );
+
+                //no counter record means the file is unusable; bail out instead of corrupting it
+                if (!command_Count) {
+                    console.error('Command file is missing its Command_Count record; cannot add a command');
+                    return;
+                }
 
                 //the comparison needs a number and not a string, convert it here
                 command_Count = Number(command_Count.Command_Count);
@@ -1535,6 +1489,7 @@ client.on('message', async (channel, tags, message, self) => {
             jsonfile.readFile(command_Path, async function(err, command_List) {
                 if (err) {
                     console.error(err)
+                    return;
                 }
                 //search for the command tag and get all the info
                 var command_Info = command_List.find(
@@ -1543,13 +1498,14 @@ client.on('message', async (channel, tags, message, self) => {
                     }
                 );
 
-                console.log(command_List.find(
-                    (search) => {
-                        return search.Tag === command_Tag;
-                    }))
-                //update the command text
-                console.log(command_List)
-                command_List[Number(command_Info.Index)].Response = command_Text
+                //can't edit a command that doesn't exist
+                if (!command_Info) {
+                    client.say(channel, `Command "!${command_Tag}" doesn't exist!`);
+                    return;
+                }
+
+                //update the command text on the record we found
+                command_Info.Response = command_Text
 
                 //dump out a new file
                 jsonfile.writeFile(command_Path, command_List, { spaces: 2 }, function(err) {
@@ -1621,6 +1577,7 @@ client.on('message', async (channel, tags, message, self) => {
             jsonfile.readFile(quote_Path, async function(err, quote_List) {
                 if (err) {
                     console.error(err)
+                    return;
                 }
 
                 //search the relevant field in the json
@@ -1629,6 +1586,12 @@ client.on('message', async (channel, tags, message, self) => {
                         return search.Quote_Count;
                     }
                 );
+
+                //no counter record means the file is unusable; bail out instead of corrupting it
+                if (!quote_Count) {
+                    console.error('Quote file is missing its Quote_Count record; cannot add a quote');
+                    return;
+                }
 
                 //increase the quote count by 1
                 quote_Count = Number(quote_Count.Quote_Count) + 1;
@@ -1685,8 +1648,10 @@ client.on('message', async (channel, tags, message, self) => {
 
         //Grab the Current Quote total
         jsonfile.readFile(quote_Path, function(err, quote_List) {
-            if (err) console.error(err)
-            //console.log(quote_List)
+            if (err) {
+                console.error(err)
+                return;
+            }
 
             //search the relevant field in the json
             var quote_Count = quote_List.find(
@@ -1694,6 +1659,12 @@ client.on('message', async (channel, tags, message, self) => {
                     return search.Quote_Count;
                 }
             );
+
+            //no counter record means the file is unusable
+            if (!quote_Count) {
+                console.error('Quote file is missing its Quote_Count record; cannot look up quotes');
+                return;
+            }
 
             //the comparison needs a number and not a string, convert it here
             quote_Count = Number(quote_Count.Quote_Count);
@@ -1715,9 +1686,9 @@ client.on('message', async (channel, tags, message, self) => {
                 var quote_ID = Math.floor(Math.random() * quote_Count + 1);
             }
 
-
-            //check if the provided number is within the range
-            if (quote_ID <= quote_Count) {
+            //the requested number needs to be a whole number from 1 up to the quote count
+            quote_ID = Number(quote_ID);
+            if (Number.isInteger(quote_ID) && quote_ID >= 1 && quote_ID <= quote_Count) {
 
                 //the find function needs a string and not a number, convert it here
                 quote_ID = String(quote_ID)
@@ -1728,6 +1699,12 @@ client.on('message', async (channel, tags, message, self) => {
                         return search.Index === quote_ID;
                     }
                 );
+
+                //the quote number is within range but the record could still be missing
+                if (!quote_Info) {
+                    client.say(channel, `Couldn't find quote #${quote_ID}, sorry!`);
+                    return;
+                }
 
                 //format all the bullshit and spit it out in the chat
                 var quote_Output = "Quote #" + quote_ID + ": " + quote_Info.Quote_Text + " [" + quote_Info.Category + "] " + "[" + quote_Info.Date + "]"
@@ -1815,11 +1792,13 @@ client.on('message', async (channel, tags, message, self) => {
             }
 
             new_Amount = Number(new_Amount) + Number(incentiveAmount);
-            console.log(new_Goal)
-            if (typeof new_Amount === 'number') {
+            if (Number.isFinite(new_Amount)) {
                 incentiveData.update('incentive.amount', new_Amount);
-                console.log('Incentive Amount Updated from $' + incentiveData.read('incentive.amount').toFixed(2) + ' to $' + new_Amount.toFixed(2))
-                client.say(channel, 'Incentive Amount Updated from $' + incentiveAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
+                console.log('Incentive Amount Updated from $' + Number(incentiveAmount).toFixed(2) + ' to $' + new_Amount.toFixed(2))
+                client.say(channel, 'Incentive Amount Updated from $' + Number(incentiveAmount).toFixed(2) + ' to $' + new_Amount.toFixed(2));
+            }
+            else {
+                client.say(channel, 'That amount needs to be a number!');
             }
             //updateIncentiveFile();
         }
@@ -1830,7 +1809,10 @@ client.on('message', async (channel, tags, message, self) => {
         if (allow_List.includes(tags.username) || tags.mod === true || tags.vip === true) {
             //Grab the Current Quote total
             jsonfile.readFile(quote_Path, function(err, quote_List) {
-                if (err) console.error(err)
+                if (err) {
+                    console.error(err)
+                    return;
+                }
 
                 //search the relevant field in the json
                 var quote_Count = quote_List.find(
@@ -1838,6 +1820,12 @@ client.on('message', async (channel, tags, message, self) => {
                         return search.Quote_Count;
                     }
                 );
+
+                //no counter record means the file is unusable
+                if (!quote_Count) {
+                    console.error('Quote file is missing its Quote_Count record; cannot edit quotes');
+                    return;
+                }
 
                 //the comparison needs a number and not a string, convert it here
                 quote_Count = Number(quote_Count.Quote_Count);
@@ -1854,11 +1842,24 @@ client.on('message', async (channel, tags, message, self) => {
                 catch (err) {
                 }
 
-                //check if the provided number is within the range and then write to the file
-                if (Number(quote_Request) <= quote_Count) {
+                //the requested number needs to be a whole number from 1 up to the quote count
+                const quote_RequestNumber = Number(quote_Request);
+                if (Number.isInteger(quote_RequestNumber) && quote_RequestNumber >= 1 && quote_RequestNumber <= quote_Count) {
+
+                    //look the quote up by its Index field so the counter record at position 0 can never be touched
+                    var quote_Info = quote_List.find(
+                        (search) => {
+                            return search.Index === String(quote_RequestNumber);
+                        }
+                    );
+
+                    if (!quote_Info) {
+                        client.say(channel, `Couldn't find quote #${quote_RequestNumber}, sorry!`);
+                        return;
+                    }
 
                     //update the quote_Text
-                    quote_List[quote_Request].Quote_Text = quote_Edited
+                    quote_Info.Quote_Text = quote_Edited
 
                     //dump out a new file
                     jsonfile.writeFile(quote_Path, quote_List, { spaces: 2 }, function(err) {
