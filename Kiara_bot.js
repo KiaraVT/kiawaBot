@@ -10,6 +10,7 @@ import AuthDataHelper from "./AuthDataHelper.js";
 import IncentiveHelper from "./IncentiveHelper.js";
 import { WebSocketServer } from "ws";
 import express from "express"
+import { DateTime } from "luxon"
 
 import querystring from "qs"
 import { spawn } from "child_process"
@@ -52,6 +53,11 @@ const primeValue = 2.50;
 //const t2Value = 2;
 //const t3Value = 6;
 //const primeValue = 1;
+//streak resets happen at a fixed wall-clock time in the streamer's timezone (DST-aware),
+//no matter what timezone the machine running the bot is in
+const STREAK_RESET_ZONE = 'America/Los_Angeles';
+const STREAK_RESET_HOUR = 6;
+
 const broadcasterID = process.env.BROADCASTER_ID;
 const channelName = process.env.BROADCASTER_NAME;
 //details for Twitch OAuth
@@ -872,6 +878,21 @@ tesManager.queueSubscription('channel.channel_points_custom_reward_redemption.ad
 /** @type {{[userId: string]: boolean}} */
 const userIdsWhoAlreadyStreaked = {}
 
+//parse a timestamp stored in streaks.json (Twitch started_at strings or our own ISO writes).
+//returns epoch millis, or NaN when the value is missing/blank/not a real timestamp.
+function parseStoredTime(value) {
+    const dt = DateTime.fromISO(value ?? '');
+    return dt.isValid ? dt.toMillis() : NaN;
+}
+
+//the most recent daily reset point (STREAK_RESET_HOUR in STREAK_RESET_ZONE, DST-aware) at or before now
+function mostRecentStreakReset() {
+    const nowZoned = DateTime.now().setZone(STREAK_RESET_ZONE);
+    let reset = nowZoned.set({ hour: STREAK_RESET_HOUR, minute: 0, second: 0, millisecond: 0 });
+    if (reset > nowZoned) reset = reset.minus({ days: 1 });
+    return reset.toMillis();
+}
+
 // Under no circumstances should a streak failure of any kind crash the bot.
 function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
     try {
@@ -919,10 +940,10 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
         }
 
         streak_List.Users ??= {};
-        let lastStart = Date.parse(streak_List.Last_Stream.Start);
-        let lastEnd = Date.parse(streak_List.Last_Stream.End);
-        let currentStart = Date.parse(streak_List.Current_Stream.Start)
-        let now = new Date();
+        let lastStart = parseStoredTime(streak_List.Last_Stream.Start);
+        let lastEnd = parseStoredTime(streak_List.Last_Stream.End);
+        let currentStart = parseStoredTime(streak_List.Current_Stream.Start)
+        let now = new Date().toISOString();
         let userInfo = streak_List.Users[userID];
 
         //did not find user, add them to the database
@@ -936,17 +957,12 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
 
             //is there an End time specified form last stream? if not, use the backup calculation based on reset time
             if (!lastEnd) {
-                //get the last reset point
-                let lastReset = new Date();
-                lastReset = Date.parse(lastReset);
-                lastReset = lastReset - (24 * 60 * 60 * 1000);
-                lastReset = new Date(lastReset);
-                lastReset.setHours(13, 0, 0);
-                lastReset = Date.parse(lastReset);
+                //get the last reset point (DST-aware wall-clock time in the streamer's zone)
+                const lastReset = mostRecentStreakReset();
 
                 //check if we are passed the last reset
                 if (((lastStart < lastReset) && (currentStart >= lastReset))) {
-                    const lastUpdated = Date.parse(userInfo.Last_Updated);
+                    const lastUpdated = parseStoredTime(userInfo.Last_Updated);
 
                     //streak is still alive!
                     if ((lastUpdated > lastStart && lastUpdated < currentStart)) {
@@ -981,7 +997,7 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
             //check if 5 hours since last stream or for the reset time
             else {
                 if ((currentStart - lastEnd) > 5 * 60 * 60 * 1000) {
-                    const lastUpdated = Date.parse(userInfo.Last_Updated);
+                    const lastUpdated = parseStoredTime(userInfo.Last_Updated);
                     //streak is still alive!
                     if ((lastUpdated > lastStart && lastUpdated < currentStart)) {
                         userInfo.Streak = userInfo.Streak + 1;
@@ -1036,11 +1052,11 @@ function updateStreamTimes(startedAtIso) {
     }
 
     console.log("Updating Current Stream Date");
-    const currentStart = Date.parse(startedAtIso);
-    const lastStart = Date.parse(streak_List.Last_Stream.Start);
-    const lastEnd = Date.parse(streak_List.Last_Stream.End);
-    const backupEnd = Date.parse(streak_List.Last_Stream.Backup_End);
-    const previousStart = Date.parse(streak_List.Current_Stream.Start);
+    const currentStart = parseStoredTime(startedAtIso);
+    const lastStart = parseStoredTime(streak_List.Last_Stream.Start);
+    const lastEnd = parseStoredTime(streak_List.Last_Stream.End);
+    const backupEnd = parseStoredTime(streak_List.Last_Stream.Backup_End);
+    const previousStart = parseStoredTime(streak_List.Current_Stream.Start);
 
     //the end of stream was not detected last time, just rotate the start times
     if (!lastEnd) {
@@ -1089,8 +1105,7 @@ tesManager.queueSubscription('stream.offline', subCondition, event => {
         return;
     }
     //update stream times
-    const now = new Date();
-    streak_List.Last_Stream.Backup_End = now;
+    streak_List.Last_Stream.Backup_End = new Date().toISOString();
     jsonfile.writeFileSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
     console.log('Stream Ended, logged to streaks')
 });
@@ -1606,25 +1621,8 @@ client.on('message', async (channel, tags, message, self) => {
                 const category = broadcast_info[0].game_name;
 
 
-                //get current date and time
-                const TOD = new Date()
-                let minutes = TOD.getMinutes();
-
-                //make sure there are always two digits for the minutes
-                let formatted_Minutes = minutes.toString().padStart(2, "0")
-                if (TOD.getHours() >= 12) {
-                    var hour_Minutes = TOD.getHours() - 12 + ":" + formatted_Minutes + " PM"
-                }
-
-                else {
-                    var hour_Minutes = TOD.getHours() + ":" + formatted_Minutes + " AM"
-                }
-
-                //Heck 0 indexed months
-                const month = TOD.getMonth() + 1;
-
-                //put all the crap together
-                const day_Formatted = (TOD.getFullYear()) + "/" + month + "/" + (TOD.getDate()) + " " + hour_Minutes
+                //get current date and time in the streamer's timezone
+                const day_Formatted = DateTime.now().setZone(STREAK_RESET_ZONE).toFormat('yyyy/M/d h:mm a');
 
                 //Generate json format data object to add to the file
                 const quote_Formatted = { Index: `${quote_Count}`, Quote_Text: `${quote_Text}`, Submitter: `${quote_Requestor}`, Category: `${category}`, Date: `${day_Formatted}` }
