@@ -41,6 +41,11 @@ function safeReadJSON(filePath, defaultValue = {}) {
     }
 }
 
+// Default file shapes - must match the bot's defaultFiles initialization in Kiara_bot.js,
+// since whichever process starts first creates these files for both.
+const defaultQuotesData = [{ Quote_Count: "0" }];
+const defaultCommandsData = [{ Command_Count: "0" }];
+
 // Add CORS middleware for web endpoints
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -63,7 +68,7 @@ app.get("/api/streaks", (req, res) => {
 // Web endpoint to serve quotes data
 app.get("/api/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(quote_Path, defaultQuotesData);
         res.setHeader('Content-Type', 'application/json');
         res.json(quotesData);
     } catch (error) {
@@ -75,12 +80,28 @@ app.get("/api/quotes", (req, res) => {
 // Web endpoint to serve commands data
 app.get("/api/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(command_Path, defaultCommandsData);
         res.setHeader('Content-Type', 'application/json');
         res.json(commandsData);
     } catch (error) {
         console.error('Error reading commands file:', error);
         res.status(500).json({ error: 'Failed to read commands data' });
+    }
+});
+
+// Default shape for the incentive file - must match IncentiveHelper's defaultData in the bot,
+// since both processes read and write the same file.
+const defaultIncentiveData = { incentive: { command: '!update', amount: 0, goal: 700 } };
+
+// Web endpoint to serve incentives data
+app.get("/api/incentives", (req, res) => {
+    try {
+        const incentiveData = safeReadJSON(incentive_Path, defaultIncentiveData);
+        res.setHeader('Content-Type', 'application/json');
+        res.json(incentiveData);
+    } catch (error) {
+        console.error('Error reading incentives file:', error);
+        res.status(500).json({ error: 'Failed to read incentives data' });
     }
 });
 
@@ -128,7 +149,7 @@ app.get("/streaks", (req, res) => {
 // Simple HTML page to display quotes
 app.get("/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(quote_Path, defaultQuotesData);
         const html = `
         <!DOCTYPE html>
         <html>
@@ -169,7 +190,7 @@ app.get("/quotes", (req, res) => {
 // Simple HTML page to display commands
 app.get("/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(command_Path, defaultCommandsData);
         const html = `
         <!DOCTYPE html>
         <html>
@@ -209,7 +230,11 @@ app.get("/commands", (req, res) => {
 // Simple HTML page to display incentive
 app.get("/incentives", (req, res) => {
     try {
-        const incentiveData = safeReadJSON(incentive_Path, []);
+        const incentiveData = safeReadJSON(incentive_Path, defaultIncentiveData);
+        if (!incentiveData?.incentive) {
+            res.status(500).send('<h1>Error</h1><p>Incentive data is missing or malformed</p>');
+            return;
+        }
         const html = `
         <!DOCTYPE html>
         <html>

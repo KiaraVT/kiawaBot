@@ -20,11 +20,14 @@ webServer.on('close', (code) => {
     console.log(`[WebServer] Process exited with code ${code}`);
 });
 
+// Track the bot process at module scope so the shutdown handlers can reach it
+let bot = null;
+
 // Give web server a moment to start, then start the bot
 setTimeout(() => {
     console.log('Starting Kiara Bot...');
 
-    const bot = spawn('node', ['Kiara_bot.js'], {
+    bot = spawn('node', ['Kiara_bot.js'], {
         stdio: ['pipe', 'pipe', 'pipe']
     });
 
@@ -45,15 +48,13 @@ setTimeout(() => {
 
 }, 2000);
 
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('Received SIGTERM, shutting down gracefully...');
+// Handle graceful shutdown - both children need to be stopped, not just the web server
+function shutdown(signal) {
+    console.log(`Received ${signal}, shutting down gracefully...`);
+    if (bot) bot.kill();
     webServer.kill();
     process.exit(0);
-});
+}
 
-process.on('SIGINT', () => {
-    console.log('Received SIGINT, shutting down gracefully...');
-    webServer.kill();
-    process.exit(0);
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
