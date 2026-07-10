@@ -11,6 +11,11 @@
   "devDependencies": {
     "nodemon": "^3.1.9"
   },
+  "overrides": {
+    "tesjs": {
+      "ws": "^8.21.0"
+    }
+  },
   "scripts": {
     "start": "node --env-file-if-exists .env start.js",
     "start:docker": "node start.js",

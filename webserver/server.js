@@ -13,7 +13,7 @@ const command_Path = path.join(import.meta.dirname, '..', 'data', 'command_List.
 const incentive_Path = path.join(import.meta.dirname, '..', 'data', 'incentives.json');
 
 // Ensure data directory exists
-const dataDir = path.join('..', 'data');
+const dataDir = path.join(import.meta.dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) {
     console.log('Web Server: Creating data directory...');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -22,7 +22,7 @@ if (!fs.existsSync(dataDir)) {
 // Helper function to safely read JSON files
 function safeReadJSON(filePath, defaultValue = {}) {
     try {
-        const base = path.resolve(__dirname);
+        const base = path.resolve(import.meta.dirname, '..');
         const target = path.resolve(base, filePath);
         const relative = path.relative(base, target);
         if (relative.startsWith('..') || path.isAbsolute(relative)) {
