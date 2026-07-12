@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: convention-sync-check
+        name: Convention Sync Check
+        entry: python scripts/sync.py --check
+        language: python
+        files: ^(AGENTS\.md|CLAUDE\.md|GEMINI\.md|CONVENTIONS\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md|\.copilot-instructions|scripts/sync\.py)$
+        pass_filenames: false
