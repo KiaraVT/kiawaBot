@@ -177,22 +177,6 @@ export default class QuoteHelper {
             const quoteIndex = this.quotes.findIndex(quote => quote.Index === index);
             if (quoteIndex !== -1) {
                 const removedQuote = this.quotes.splice(quoteIndex, 1)[0];
-                
-                // Atomically re-index all quotes to perfectly sequential numbering
-                let newId = 1;
-                for (let i = 0; i < this.quotes.length; i++) {
-                    if (this.quotes[i].Index !== undefined) { // Skip metadata element
-                        this.quotes[i].Index = String(newId);
-                        newId++;
-                    }
-                }
-                
-                // Update the Quote_Count metadata element
-                const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
-                if (metadataElement) {
-                    metadataElement.Quote_Count = String(newId - 1);
-                }
-
                 this.save();
                 return removedQuote;
             }
