@@ -23,7 +23,8 @@
     "compose:up": "docker-compose up -d",
     "compose:down": "docker-compose down",
     "compose:logs": "docker-compose logs -f",
-    "compose:restart": "docker-compose restart"
+    "compose:restart": "docker-compose restart",
+    "test:syntax": "node --check *.js && node --check webserver/*.js"
   },
   "type": "module",
   "name": "kiara_bot",
