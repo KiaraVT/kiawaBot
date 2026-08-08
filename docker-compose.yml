@@ -3,9 +3,7 @@ services:
     build: .
     container_name: kiara-bot
     restart: unless-stopped
-    ports:
-      - "8081:8081"  # Web server port
-      - "8080:8080"  # Web socket port
+    network_mode: "host"
     environment:
       - NODE_ENV=production
       - WEB_PORT=8081
@@ -14,10 +12,8 @@ services:
     volumes:
       - ./data:/app/data
       - bot_logs:/app/logs
-    networks:
-      - bot-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -34,7 +30,3 @@ services:
 volumes:
   bot_logs:
     driver: local
-
-networks:
-  bot-network:
-    driver: bridge

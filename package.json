@@ -23,7 +23,7 @@
     "webserver": "node webserver/server.js",
     "webserver:dev": "nodemon webserver/server.js",
     "docker:build": "docker build -t kiara-bot .",
-    "docker:run": "docker run -d --name kiara-bot -p 3000:3000 -p 8081:8081 --env-file .env -v ./data:/app/data kiara-bot",
+    "docker:run": "docker run -d --name kiara-bot --network host --env-file .env -v ./data:/app/data kiara-bot",
     "docker:stop": "docker stop kiara-bot && docker rm kiara-bot",
     "docker:logs": "docker logs -f kiara-bot",
     "compose:up": "docker-compose up -d",

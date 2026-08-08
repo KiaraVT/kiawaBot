@@ -328,10 +328,10 @@ app.get("/chatwidget", (_req, res) => {
     res.sendFile(path.join(import.meta.dirname, "www/chatwidget.html"))
 })
 
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, '127.0.0.1', () => {
     console.log(`Kiara Bot Web Server running on port ${port}`);
-    console.log(`Dashboard available at: http://localhost:${port}`);
-    console.log(`Server listening on 0.0.0.0:${port} (accessible from outside container)`);
+    console.log(`Dashboard available at: http://127.0.0.1:${port}`);
+    console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
 export { app }

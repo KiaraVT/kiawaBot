@@ -12,16 +12,16 @@ A standalone web server component for accessing Kiara Bot data through a web das
 ## Endpoints
 
 ### Web Dashboard
-- `http://localhost:8081/` - Main dashboard with navigation
-- `http://localhost:8081/streaks` - Streaks data page
-- `http://localhost:8081/quotes` - Quotes data page  
-- `http://localhost:8081/commands` - Commands data page
+- `http://127.0.0.1:8081/` - Main dashboard with navigation
+- `http://127.0.0.1:8081/streaks` - Streaks data page
+- `http://127.0.0.1:8081/quotes` - Quotes data page  
+- `http://127.0.0.1:8081/commands` - Commands data page
 
 ### REST API
-- `http://localhost:8081/api/streaks` - Get streaks data as JSON
-- `http://localhost:8081/api/quotes` - Get quotes data as JSON
-- `http://localhost:8081/api/commands` - Get commands data as JSON
-- `http://localhost:8081/health` - Health check endpoint
+- `http://127.0.0.1:8081/api/streaks` - Get streaks data as JSON
+- `http://127.0.0.1:8081/api/quotes` - Get quotes data as JSON
+- `http://127.0.0.1:8081/api/commands` - Get commands data as JSON
+- `http://127.0.0.1:8081/health` - Health check endpoint
 
 ## Running
 

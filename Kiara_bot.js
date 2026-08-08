@@ -113,7 +113,7 @@ var allow_List = ["baeginning", "caeshura", "chocolatedave", "clockworkophelia",
     "foung_shui", "eddie", "v0oid", "J_o_n_i_d_T_h_e_1_s_t_", "froggythighs", "lenaflieder", "zoiteki", "shoujo", "justanyia", "shinobufujiko", "minikitty", "pofflecakey", "bobbeigh", "dangers"]
 
 const oAuthPort = 3000;
-const redirectUri = 'http://localhost:' + oAuthPort
+const redirectUri = 'http://127.0.0.1:' + oAuthPort
 //variables to store auth-related data
 let validationTicker = null;
 let twitchAuthReady = false;
