@@ -9,37 +9,48 @@ class TestCheckNpmAudit(unittest.TestCase):
     def test_audit_dependencies_clean(self) -> None:
         payload = {
             "vulnerabilities": {},
-            "metadata": {"vulnerabilities": {"total": 0}},
         }
         self.assertEqual(audit_dependencies(payload), 0)
 
     def test_audit_dependencies_grandfathered(self) -> None:
         payload = {
             "vulnerabilities": {
-                "axios": {"severity": "high"},
-                "express": {"severity": "moderate"},
+                "axios": {
+                    "via": [
+                        {
+                            "url": "https://github.com/advisories/GHSA-xx6v-rp6x-q39c",
+                            "title": "Prototype pollution",
+                        }
+                    ]
+                },
             },
-            "metadata": {"vulnerabilities": {"total": 2}},
         }
         self.assertEqual(audit_dependencies(payload), 0)
 
-    def test_audit_dependencies_new_vulnerable_package(self) -> None:
+    def test_audit_dependencies_new_unapproved_advisory(self) -> None:
         payload = {
             "vulnerabilities": {
-                "untrusted-new-pkg": {"severity": "critical"},
+                "untrusted-pkg": {
+                    "via": [
+                        {
+                            "url": "https://github.com/advisories/GHSA-9999-9999-9999",
+                            "title": "Remote code execution",
+                        }
+                    ]
+                },
             },
-            "metadata": {"vulnerabilities": {"total": 1}},
         }
         self.assertEqual(audit_dependencies(payload), 1)
 
-    def test_audit_dependencies_exceeds_threshold(self) -> None:
+    def test_audit_dependencies_string_via_skipped(self) -> None:
         payload = {
             "vulnerabilities": {
-                "axios": {"severity": "high"},
+                "express": {
+                    "via": ["body-parser"],
+                },
             },
-            "metadata": {"vulnerabilities": {"total": 99}},
         }
-        self.assertEqual(audit_dependencies(payload), 1)
+        self.assertEqual(audit_dependencies(payload), 0)
 
 
 if __name__ == "__main__":

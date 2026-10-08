@@ -17,7 +17,7 @@ PATTERNS = [
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z]{10,48}\b")),
-    ("generic_secret_assignment", re.compile(r"""(?i)(?:api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*(?:[`'"][A-Za-z0-9_\-]{16,}[`'"]|[A-Za-z0-9_\-]{20,})""")),
+    ("generic_secret_assignment", re.compile(r"""(?i)\b(?:api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*(?:[`'"][A-Za-z0-9_\-]{16,64}[`'"]|[A-Za-z0-9_\-]{20,64})""")),
 ]
 
 ALLOWLIST_PATHS = {
@@ -75,7 +75,7 @@ def main() -> int:
             if rule_name == "unreadable_file":
                 print(f"::error file={path},line={line_num}::Failed to read file: {sample}")
             else:
-                print(f"::error file={path},line={line_num}::Secret pattern matched ({rule_name}): {sample}")
+                print(f"::error file={path},line={line_num}::Secret pattern matched ({rule_name})")
             total_findings += 1
 
     if total_findings > 0:

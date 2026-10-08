@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,13 +18,25 @@ FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_P
 SEPARATOR = "\n---\n\n"
 
 
-def fetch_text(url: str) -> str:
+def fetch_text(url: str, retries: int = 3, backoff_seconds: float = 1.0) -> str:
+    """Fetch text from a URL with retry attempts and exponential backoff."""
     request = urllib.request.Request(url, headers={"User-Agent": "kiawaBot-CI"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8")
+    last_error: Exception | None = None
+    delay = backoff_seconds
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+            if attempt < retries:
+                time.sleep(delay)
+                delay *= 2.0
+    raise urllib.error.URLError(f"Failed after {retries} attempts: {last_error}")
 
 
 def extract_embedded_policy(doc_path: Path) -> str:
+    """Extract policy section following the separator delimiter."""
     content = doc_path.read_text(encoding="utf-8")
     if SEPARATOR not in content:
         raise ValueError(f"Missing delimiter in {doc_path}")
@@ -32,6 +45,7 @@ def extract_embedded_policy(doc_path: Path) -> str:
 
 
 def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
+    """Verify that local embedded policy matches upstream content."""
     print(f"Checking {name} policy against upstream...")
     try:
         upstream_text = fetch_text(upstream_url).rstrip() + "\n"
@@ -39,7 +53,12 @@ def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
         print(f"::error::Failed to fetch upstream {name} from {upstream_url}: {error}")
         return False
 
-    embedded_text = extract_embedded_policy(doc_path)
+    try:
+        embedded_text = extract_embedded_policy(doc_path)
+    except (OSError, ValueError) as error:
+        print(f"::error file={doc_path}::Failed to extract embedded {name} policy: {error}")
+        return False
+
     if embedded_text != upstream_text:
         print(f"::error file={doc_path}::Embedded {name} policy does not match upstream at pinned commit")
         return False
