@@ -32,25 +32,18 @@ def validate_policy_url(url: str, name: str) -> str:
         raise ValueError(f"Invalid scheme for {name} URL: {url} (must use https)")
     if parsed.netloc != "raw.githubusercontent.com":
         raise ValueError(f"Invalid host for {name} URL: {url} (must be raw.githubusercontent.com)")
+    if ".." in parsed.path:
+        raise ValueError(f"Path traversal ('..') detected in {name} URL: {url}")
     if not re.fullmatch(r"/abuzucom/(euler|foucault)/[0-9a-zA-Z._\-/]+/(QUALITY|AUDIT)\.md", parsed.path):
         raise ValueError(f"Invalid path for {name} URL: {url} (must target approved abuzucom policy document)")
     return url
 
 
-EULER_REF = validate_policy_ref(
-    os.getenv("EULER_POLICY_REF", os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_REF)),
-    "Euler",
-)
-FOUCAULT_REF = validate_policy_ref(
-    os.getenv("FOUCAULT_POLICY_REF", os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_REF)),
-    "Foucault",
-)
+DEFAULT_RETRIES = 3
+DEFAULT_BACKOFF_SECONDS = 1.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
+SEPARATOR = "\n---\n\n"
 
-DEFAULT_EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_REF}/QUALITY.md"
-DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_REF}/AUDIT.md"
-
-EULER_URL = validate_policy_url(os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL), "Euler")
-FOUCAULT_URL = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL), "Foucault")
 
 def parse_int_env(name: str, default: int, min_val: int, max_val: int) -> int:
     raw = os.getenv(name)
@@ -78,11 +71,28 @@ def parse_float_env(name: str, default: float, min_val: float, max_val: float) -
         raise ValueError(f"Invalid {name}: {e}") from e
 
 
-DEFAULT_RETRIES = parse_int_env("POLICY_DRIFT_RETRIES", 3, 1, 10)
-DEFAULT_BACKOFF_SECONDS = parse_float_env("POLICY_DRIFT_BACKOFF_SECONDS", 1.0, 0.0, 60.0)
-DEFAULT_TIMEOUT_SECONDS = parse_float_env("POLICY_DRIFT_TIMEOUT_SECONDS", 30.0, 1.0, 300.0)
+def get_policy_config() -> tuple[str, str, int, float, float]:
+    """Retrieve and validate policy URLs and parameters from the environment."""
+    euler_ref = validate_policy_ref(
+        os.getenv("EULER_POLICY_REF", os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_REF)),
+        "Euler",
+    )
+    foucault_ref = validate_policy_ref(
+        os.getenv("FOUCAULT_POLICY_REF", os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_REF)),
+        "Foucault",
+    )
 
-SEPARATOR = "\n---\n\n"
+    default_euler_url = f"https://raw.githubusercontent.com/abuzucom/euler/{euler_ref}/QUALITY.md"
+    default_foucault_url = f"https://raw.githubusercontent.com/abuzucom/foucault/{foucault_ref}/AUDIT.md"
+
+    euler_url = validate_policy_url(os.getenv("EULER_POLICY_URL", default_euler_url), "Euler")
+    foucault_url = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", default_foucault_url), "Foucault")
+
+    retries = parse_int_env("POLICY_DRIFT_RETRIES", DEFAULT_RETRIES, 1, 10)
+    backoff = parse_float_env("POLICY_DRIFT_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS, 0.0, 60.0)
+    timeout = parse_float_env("POLICY_DRIFT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS, 1.0, 300.0)
+
+    return euler_url, foucault_url, retries, backoff, timeout
 
 
 def fetch_text(
@@ -120,11 +130,23 @@ def extract_embedded_policy(doc_path: Path) -> str:
     return policy.rstrip() + "\n"
 
 
-def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
+def verify_policy(
+    doc_path: Path,
+    upstream_url: str,
+    name: str,
+    retries: int = DEFAULT_RETRIES,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> bool:
     """Verify that local embedded policy matches upstream content."""
     print(f"Checking {name} policy against upstream...")
     try:
-        upstream_text = fetch_text(upstream_url).rstrip() + "\n"
+        upstream_text = fetch_text(
+            upstream_url,
+            retries=retries,
+            backoff_seconds=backoff_seconds,
+            timeout=timeout,
+        ).rstrip() + "\n"
     except (urllib.error.URLError, UnicodeDecodeError, TimeoutError) as error:
         print(f"::error::Failed to fetch upstream {name} from {upstream_url}: {error}")
         return False
@@ -148,12 +170,32 @@ def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
 
 
 def main() -> int:
+    try:
+        euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
+    except ValueError as error:
+        print(f"::error::Policy configuration error: {error}", file=sys.stderr)
+        return 1
+
     repo_root = Path(__file__).resolve().parent.parent
     quality_doc = repo_root / "docs" / "pr-quality-review.md"
     security_doc = repo_root / "docs" / "pr-security-review.md"
 
-    ok_quality = verify_policy(quality_doc, EULER_URL, "Euler QUALITY.md")
-    ok_security = verify_policy(security_doc, FOUCAULT_URL, "Foucault AUDIT.md")
+    ok_quality = verify_policy(
+        quality_doc,
+        euler_url,
+        "Euler QUALITY.md",
+        retries=retries,
+        backoff_seconds=backoff,
+        timeout=timeout,
+    )
+    ok_security = verify_policy(
+        security_doc,
+        foucault_url,
+        "Foucault AUDIT.md",
+        retries=retries,
+        backoff_seconds=backoff,
+        timeout=timeout,
+    )
 
     if not (ok_quality and ok_security):
         return 1

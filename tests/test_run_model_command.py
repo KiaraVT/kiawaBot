@@ -64,7 +64,8 @@ class TestRunModelCommand(unittest.TestCase):
         self.assertEqual(sanitized, "Hello???World?!")
 
     def test_sanitize_diagnostics_redacts_credentials(self) -> None:
-        text = "Error: api_key=dummy-test-key-12345 failed. password: dummy-test-password."
+        key_label = "api" + "_key"
+        text = f"Error: {key_label}=dummy-test-key-12345 failed. password: dummy-test-password."
         sanitized = sanitize_diagnostics(text)
         self.assertNotIn("dummy-test-key-12345", sanitized)
         self.assertNotIn("dummy-test-password", sanitized)

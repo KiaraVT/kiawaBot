@@ -1,5 +1,5 @@
 [allowlist]
-description = "Allowlist test files and mock fixtures"
+description = "Allowlist documentation templates"
 paths = [
-    '''tests/.*''',
+    '''^\.env\.example$''',
 ]

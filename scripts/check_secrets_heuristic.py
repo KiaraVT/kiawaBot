@@ -24,7 +24,6 @@ PATTERNS = [
 
 ALLOWLIST_PATHS = {
     Path(".env.example"),
-    Path("tests"),
 }
 
 
@@ -62,8 +61,9 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
             return findings
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
-        print(f"::error file={path}::Failed to read file for secret scanning: {error}", file=sys.stderr)
-        findings.append((1, "unreadable_file", f"Unreadable file: {error}"))
+        error_cls = error.__class__.__name__
+        print(f"::error file={path}::Failed to read file for secret scanning ({error_cls}): {error}", file=sys.stderr)
+        findings.append((1, "unreadable_file", f"Unreadable file ({error_cls}): {error}"))
         return findings
 
     for line_number, line in enumerate(content.splitlines(), start=1):

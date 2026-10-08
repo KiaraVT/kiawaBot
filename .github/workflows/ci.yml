@@ -45,9 +45,19 @@ jobs:
           cache: "npm"
 
       - name: Validate JavaScript syntax
-        # Dynamically validate syntax across tracked Node.js source files
+        # Dynamically validate syntax across tracked Node.js source files without early abort
         run: |
-          git ls-files -z "*.js" | xargs -0 -r -n 1 node --check
+          errors=0
+          while IFS= read -r -d '' file; do
+            if ! node --check "$file"; then
+              echo "::error file=$file::JavaScript syntax check failed for $file"
+              errors=$((errors + 1))
+            fi
+          done < <(git ls-files -z -- '*.js')
+          if [ "$errors" -ne 0 ]; then
+            echo "::error::Total JavaScript syntax errors encountered: $errors"
+            exit 1
+          fi
 
       - name: Audit npm dependencies
         # Audits package-lock.json before npm ci to prevent installing unapproved packages

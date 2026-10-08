@@ -111,7 +111,32 @@ class TestCheckPolicyDrift(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_policy_url("https://raw.githubusercontent.com/abuzucom/unapproved_repo/main/QUALITY.md", "Euler")
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/abuzucom/euler/main/other_file.txt", "Euler")
+            validate_policy_url("https://raw.githubusercontent.com/abuzucom/euler/main/../attacker/QUALITY.md", "Euler")
+
+    def test_get_policy_config(self) -> None:
+        from scripts.check_policy_drift import get_policy_config
+        with patch.dict("os.environ", {}, clear=True):
+            euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
+            self.assertEqual(euler_url, "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md")
+            self.assertEqual(foucault_url, "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md")
+            self.assertEqual(retries, 3)
+            self.assertEqual(backoff, 1.0)
+            self.assertEqual(timeout, 30.0)
+
+        custom_env = {
+            "EULER_POLICY_REF": "v2.0",
+            "FOUCAULT_POLICY_REF": "v3.0",
+            "POLICY_DRIFT_RETRIES": "5",
+            "POLICY_DRIFT_BACKOFF_SECONDS": "2.5",
+            "POLICY_DRIFT_TIMEOUT_SECONDS": "45.0",
+        }
+        with patch.dict("os.environ", custom_env, clear=True):
+            euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
+            self.assertEqual(euler_url, "https://raw.githubusercontent.com/abuzucom/euler/v2.0/QUALITY.md")
+            self.assertEqual(foucault_url, "https://raw.githubusercontent.com/abuzucom/foucault/v3.0/AUDIT.md")
+            self.assertEqual(retries, 5)
+            self.assertEqual(backoff, 2.5)
+            self.assertEqual(timeout, 45.0)
 
     def test_parse_int_env(self) -> None:
         from scripts.check_policy_drift import parse_int_env
