@@ -1,0 +1,66 @@
+name: Annotate PR Review
+description: Prepend policy document links to automated PR review comments
+
+inputs:
+  pr-number:
+    description: "Pull request number"
+    required: true
+  doc-path:
+    description: "Relative path to the policy documentation file"
+    required: true
+  policy-name:
+    description: "Human-readable policy name"
+    required: true
+  markers:
+    description: "Comma-separated marker strings identifying the bot comment"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Annotate comment
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+        INPUT_DOC_PATH: ${{ inputs.doc-path }}
+        INPUT_POLICY_NAME: ${{ inputs.policy-name }}
+        INPUT_MARKERS: ${{ inputs.markers }}
+      with:
+        script: |
+          const issue_number = Number(process.env.INPUT_PR_NUMBER);
+          const docPath = process.env.INPUT_DOC_PATH;
+          const policyName = process.env.INPUT_POLICY_NAME;
+          const markers = process.env.INPUT_MARKERS.split(',').map((s) => s.trim()).filter(Boolean);
+
+          try {
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const defaultBranch = context.payload.repository?.default_branch || 'main';
+            const docUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/${docPath}`;
+            const header = `> **Policy Reference:** ${policyName} findings are evaluated against [${docPath}](${docUrl}).\n\n`;
+
+            for (const comment of comments.reverse()) {
+              const body = comment.body || '';
+              const matchesMarker = markers.some((marker) => body.includes(marker));
+              if (comment.user?.login === 'github-actions[bot]' && matchesMarker) {
+                if (!body.includes('Policy Reference:')) {
+                  await github.rest.issues.updateComment({
+                    ...context.repo,
+                    comment_id: comment.id,
+                    body: `${header}${body}`,
+                  });
+                  core.info(`Annotated comment ${comment.id} for ${policyName}`);
+                } else {
+                  core.info(`Comment ${comment.id} already carries Policy Reference`);
+                }
+                return;
+              }
+            }
+            core.warning(`No matching ${policyName} review comment found to annotate`);
+          } catch (error) {
+            core.warning(`Failed to annotate ${policyName} review comment: ${error.message}`);
+          }

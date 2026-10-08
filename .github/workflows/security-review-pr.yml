@@ -20,6 +20,8 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
+      found: ${{ steps.resolve.outputs.found }}
+      same_repo: ${{ steps.resolve.outputs.same_repo }}
       same_repository: ${{ steps.resolve.outputs.same_repository }}
       already_reviewed: ${{ steps.resolve.outputs.already_reviewed }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -36,6 +38,9 @@ jobs:
             const workflowRun = context.payload.workflow_run;
             const headSha = workflowRun?.head_sha;
             if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
+              core.setOutput("same_repository", "false");
               core.setFailed("workflow run head SHA is invalid");
               return;
             }
@@ -56,6 +61,9 @@ jobs:
               pullRequest.head?.sha?.toLowerCase() === headSha.toLowerCase()
             );
             if (candidates.length !== 1) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
+              core.setOutput("same_repository", "false");
               core.setFailed(
                 `expected one pull request for workflow run head, found ${candidates.length}`,
               );
@@ -65,6 +73,9 @@ jobs:
             const pullRequest = candidates[0];
             const headRepository = pullRequest.head?.repo;
             if (!headRepository?.full_name || !headRepository.clone_url) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
+              core.setOutput("same_repository", "false");
               core.setFailed("pull request head repository metadata is unavailable");
               return;
             }
@@ -131,12 +142,13 @@ jobs:
             const alreadyReviewed = hasVerdictCheck &&
               await hasTrustedVerdictRecord(headSha);
             core.setOutput("already_reviewed", alreadyReviewed ? "true" : "false");
-            core.setOutput(
-              "same_repository",
+            const sameRepo =
               headRepository.full_name.toLowerCase() === baseRepository.toLowerCase()
                 ? "true"
-                : "false",
-            );
+                : "false";
+            core.setOutput("found", "true");
+            core.setOutput("same_repo", sameRepo);
+            core.setOutput("same_repository", sameRepo);
             core.setOutput("pr_number", String(pullRequest.number));
             core.setOutput("base_sha", pullRequest.base.sha);
             core.setOutput("head_sha", pullRequest.head.sha);
@@ -187,34 +199,21 @@ jobs:
 
   annotate:
     needs: [resolve-pr, review]
-    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'true'
+    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && (needs.resolve-pr.outputs.same_repo == 'true' || needs.resolve-pr.outputs.same_repository == 'true')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
-      - name: Annotate review comment with policy document link
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          script: |
-            const issue_number = Number(process.env.PR_NUMBER);
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              ...context.repo,
-              issue_number,
-              per_page: 100,
-            });
-            const docUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/main/docs/pr-security-review.md`;
-            const header = `> **Policy Reference:** Security review findings are evaluated against [docs/pr-security-review.md](${docUrl}).\n\n`;
-            for (const comment of comments.reverse()) {
-              if (comment.user?.login === 'github-actions[bot]' && comment.body?.includes('Security review metadata')) {
-                if (!comment.body.includes('Policy Reference:')) {
-                  await github.rest.issues.updateComment({
-                    ...context.repo,
-                    comment_id: comment.id,
-                    body: `${header}${comment.body}`,
-                  });
-                }
-                break;
-              }
-            }
+          persist-credentials: false
+
+      - name: Annotate review comment with policy document link
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ needs.resolve-pr.outputs.pr_number }}
+          doc-path: "docs/pr-security-review.md"
+          policy-name: "Security review"
+          markers: "Security review metadata,<!-- foucault-security-review -->"
