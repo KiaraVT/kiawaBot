@@ -13,6 +13,10 @@ name: quality-review-pr
 permissions:
   contents: read
 
+concurrency:
+  group: quality-review-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
 jobs:
   resolve:
     if: github.event.workflow_run.event == 'pull_request'

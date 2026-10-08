@@ -9,9 +9,12 @@
     "ws": "^8.18.2"
   },
   "devDependencies": {
+    "eslint": "9.21.0",
     "nodemon": "^3.1.9"
   },
   "scripts": {
+    "test": "node --test",
+    "lint": "eslint .",
     "start": "node --env-file-if-exists .env start.js",
     "start:docker": "node start.js",
     "webserver": "node webserver/server.js",
