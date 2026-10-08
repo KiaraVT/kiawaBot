@@ -1,5 +1,5 @@
 # Use Node.js 22 Alpine for smaller image size
-FROM node:22-alpine
+FROM node:26-alpine
 
 # Install curl for health checks and process management
 RUN apk add --no-cache curl
