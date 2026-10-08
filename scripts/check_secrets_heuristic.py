@@ -34,7 +34,9 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     try:
         content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as error:
+        print(f"::error file={path}::Failed to read file for secret scanning: {error}", file=sys.stderr)
+        findings.append((1, "unreadable_file", f"Unreadable file: {error}"))
         return findings
 
     for line_number, line in enumerate(content.splitlines(), start=1):
@@ -67,7 +69,10 @@ def main() -> int:
             continue
         findings = scan_file(path)
         for line_num, rule_name, sample in findings:
-            print(f"::error file={path},line={line_num}::Secret pattern matched ({rule_name}): {sample}")
+            if rule_name == "unreadable_file":
+                print(f"::error file={path},line={line_num}::Failed to read file: {sample}")
+            else:
+                print(f"::error file={path},line={line_num}::Secret pattern matched ({rule_name}): {sample}")
             total_findings += 1
 
     if total_findings > 0:

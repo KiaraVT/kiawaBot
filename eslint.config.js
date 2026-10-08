@@ -35,8 +35,8 @@ export default [
         rules: {
             "no-unused-vars": "warn",
             "no-undef": "warn",
-            "no-empty": ["warn", { "allowEmptyCatch": true }],
-            "no-prototype-builtins": "off",
+            "no-empty": "warn",
+            "no-prototype-builtins": "warn",
             "no-redeclare": "warn",
             "no-useless-escape": "warn"
         }

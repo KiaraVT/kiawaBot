@@ -44,6 +44,12 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
         self.assertTrue(is_allowed(Path(".env.example")))
         self.assertFalse(is_allowed(Path("server.js")))
 
+    def test_unreadable_file_reported(self) -> None:
+        missing_path = Path("non_existent_file_xyz.txt")
+        findings = scan_file(missing_path)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0][1], "unreadable_file")
+
 
 if __name__ == "__main__":
     unittest.main()
