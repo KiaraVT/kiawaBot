@@ -49,15 +49,13 @@ jobs:
       - name: Run Node.js unit tests
         run: npm test
 
-      # Advisory audit check documented in README.md; triaged via Dependabot
-      - name: Advisory npm audit check
-        continue-on-error: true
-        run: npm audit --audit-level=high
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+
+      - name: Audit npm dependencies
+        run: python scripts/check_npm_audit.py
 
       - name: Run secret heuristic scan
         run: python scripts/check_secrets_heuristic.py
