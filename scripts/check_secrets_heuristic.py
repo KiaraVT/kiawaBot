@@ -57,11 +57,15 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     return findings
 
 
-def get_tracked_files() -> list[Path]:
+DEFAULT_GIT_TIMEOUT_SECONDS = 60
+
+
+def get_tracked_files(timeout: int = DEFAULT_GIT_TIMEOUT_SECONDS) -> list[Path]:
     result = subprocess.run(
         ["git", "ls-files", "-z"],
         capture_output=True,
         check=True,
+        timeout=timeout,
     )
     paths: list[Path] = []
     for raw in result.stdout.split(b"\x00"):

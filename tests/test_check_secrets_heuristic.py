@@ -4,7 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.check_secrets_heuristic import MAX_FILE_BYTES, is_allowed, main, scan_file
+from scripts.check_secrets_heuristic import (
+    DEFAULT_GIT_TIMEOUT_SECONDS,
+    MAX_FILE_BYTES,
+    get_tracked_files,
+    is_allowed,
+    main,
+    scan_file,
+)
 
 
 class TestCheckSecretsHeuristic(unittest.TestCase):
@@ -89,6 +96,17 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
         with patch("scripts.check_secrets_heuristic.get_tracked_files", return_value=[Path("unreadable.js")]):
             with patch("scripts.check_secrets_heuristic.scan_file", return_value=io_finding):
                 self.assertEqual(main(), 2)
+
+    def test_get_tracked_files_timeout(self) -> None:
+        from unittest.mock import MagicMock, patch
+        mock_result = MagicMock()
+        mock_result.stdout = b"file1.js\x00file2.js\x00"
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            files = get_tracked_files()
+            self.assertEqual(files, [Path("file1.js"), Path("file2.js")])
+            mock_run.assert_called_once()
+            _, kwargs = mock_run.call_args
+            self.assertEqual(kwargs.get("timeout"), DEFAULT_GIT_TIMEOUT_SECONDS)
 
 
 if __name__ == "__main__":

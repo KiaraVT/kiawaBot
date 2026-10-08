@@ -52,9 +52,35 @@ DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FO
 EULER_URL = validate_policy_url(os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL), "Euler")
 FOUCAULT_URL = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL), "Foucault")
 
-DEFAULT_RETRIES = int(os.getenv("POLICY_DRIFT_RETRIES", "3"))
-DEFAULT_BACKOFF_SECONDS = float(os.getenv("POLICY_DRIFT_BACKOFF_SECONDS", "1.0"))
-DEFAULT_TIMEOUT_SECONDS = float(os.getenv("POLICY_DRIFT_TIMEOUT_SECONDS", "30.0"))
+def parse_int_env(name: str, default: int, min_val: int, max_val: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = int(raw)
+        if val < min_val or val > max_val:
+            raise ValueError(f"{name} must be between {min_val} and {max_val}, got {val}")
+        return val
+    except ValueError as e:
+        raise ValueError(f"Invalid {name}: {e}") from e
+
+
+def parse_float_env(name: str, default: float, min_val: float, max_val: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = float(raw)
+        if val < min_val or val > max_val:
+            raise ValueError(f"{name} must be between {min_val} and {max_val}, got {val}")
+        return val
+    except ValueError as e:
+        raise ValueError(f"Invalid {name}: {e}") from e
+
+
+DEFAULT_RETRIES = parse_int_env("POLICY_DRIFT_RETRIES", 3, 1, 10)
+DEFAULT_BACKOFF_SECONDS = parse_float_env("POLICY_DRIFT_BACKOFF_SECONDS", 1.0, 0.0, 60.0)
+DEFAULT_TIMEOUT_SECONDS = parse_float_env("POLICY_DRIFT_TIMEOUT_SECONDS", 30.0, 1.0, 300.0)
 
 SEPARATOR = "\n---\n\n"
 

@@ -111,6 +111,32 @@ class TestCheckPolicyDrift(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_policy_url("https://raw.githubusercontent.com/abuzucom/", "Euler")
 
+    def test_parse_int_env(self) -> None:
+        from scripts.check_policy_drift import parse_int_env
+        with patch.dict("os.environ", {"TEST_INT": "5"}):
+            self.assertEqual(parse_int_env("TEST_INT", 3, 1, 10), 5)
+        with patch.dict("os.environ", {"TEST_INT": "20"}):
+            with self.assertRaises(ValueError):
+                parse_int_env("TEST_INT", 3, 1, 10)
+        with patch.dict("os.environ", {"TEST_INT": "invalid"}):
+            with self.assertRaises(ValueError):
+                parse_int_env("TEST_INT", 3, 1, 10)
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(parse_int_env("TEST_INT", 3, 1, 10), 3)
+
+    def test_parse_float_env(self) -> None:
+        from scripts.check_policy_drift import parse_float_env
+        with patch.dict("os.environ", {"TEST_FLOAT": "2.5"}):
+            self.assertEqual(parse_float_env("TEST_FLOAT", 1.0, 0.0, 60.0), 2.5)
+        with patch.dict("os.environ", {"TEST_FLOAT": "100.0"}):
+            with self.assertRaises(ValueError):
+                parse_float_env("TEST_FLOAT", 1.0, 0.0, 60.0)
+        with patch.dict("os.environ", {"TEST_FLOAT": "invalid"}):
+            with self.assertRaises(ValueError):
+                parse_float_env("TEST_FLOAT", 1.0, 0.0, 60.0)
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(parse_float_env("TEST_FLOAT", 1.0, 0.0, 60.0), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
