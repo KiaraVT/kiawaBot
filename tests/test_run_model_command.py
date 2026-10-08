@@ -64,10 +64,10 @@ class TestRunModelCommand(unittest.TestCase):
         self.assertEqual(sanitized, "Hello???World?!")
 
     def test_sanitize_diagnostics_redacts_credentials(self) -> None:
-        text = "Error: api_key=sk-1234567890abcdef failed. password: supersecret."
+        text = "Error: api_key=dummy-test-key-12345 failed. password: dummy-test-password."
         sanitized = sanitize_diagnostics(text)
-        self.assertNotIn("sk-1234567890abcdef", sanitized)
-        self.assertNotIn("supersecret", sanitized)
+        self.assertNotIn("dummy-test-key-12345", sanitized)
+        self.assertNotIn("dummy-test-password", sanitized)
         self.assertIn("<redacted>", sanitized)
 
     def test_sanitize_diagnostics_bounds_length(self) -> None:

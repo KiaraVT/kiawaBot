@@ -19,6 +19,7 @@ PATTERNS = [
 ALLOWLIST_PATHS = {
     Path(".env.example"),
     Path("tests/fixtures"),
+    Path("tests/test_check_secrets_heuristic.py"),
 }
 
 
