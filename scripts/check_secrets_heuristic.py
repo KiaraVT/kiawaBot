@@ -7,6 +7,7 @@ and CI gates. Comprehensive git-history secret scanning is performed by Gitleaks
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -33,7 +34,8 @@ def is_allowed(path: Path) -> bool:
     return False
 
 
-MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion in CI
+DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion in CI
+MAX_FILE_BYTES = int(os.getenv("SECRETS_SCAN_MAX_BYTES", str(DEFAULT_MAX_FILE_BYTES)))
 
 
 def scan_file(path: Path) -> list[tuple[int, str, str]]:

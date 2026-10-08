@@ -12,17 +12,17 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DEFAULT_EULER_PIN = "fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08"
-DEFAULT_FOUCAULT_PIN = "f59866d6e3ff71affa8404117877b58b8d79eea2"
+DEFAULT_EULER_REF = "main"
+DEFAULT_FOUCAULT_REF = "main"
 
-SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+REF_PATTERN = re.compile(r"^[0-9a-zA-Z._\-/]{1,100}$")
 
 
-def validate_policy_pin(pin: str, name: str) -> str:
-    """Validate that the policy commit PIN is a 40-character hex SHA."""
-    if not SHA_PATTERN.match(pin):
-        raise ValueError(f"Invalid {name} commit PIN: {pin} (must be 40-char hex SHA)")
-    return pin
+def validate_policy_ref(ref: str, name: str) -> str:
+    """Validate that the policy git ref is safe."""
+    if not REF_PATTERN.match(ref) or ".." in ref:
+        raise ValueError(f"Invalid {name} ref: {ref}")
+    return ref
 
 
 def validate_policy_url(url: str, name: str) -> str:
@@ -37,17 +37,24 @@ def validate_policy_url(url: str, name: str) -> str:
     return url
 
 
-EULER_PIN = validate_policy_pin(os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_PIN), "Euler")
-FOUCAULT_PIN = validate_policy_pin(os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_PIN), "Foucault")
+EULER_REF = validate_policy_ref(
+    os.getenv("EULER_POLICY_REF", os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_REF)),
+    "Euler",
+)
+FOUCAULT_REF = validate_policy_ref(
+    os.getenv("FOUCAULT_POLICY_REF", os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_REF)),
+    "Foucault",
+)
 
-DEFAULT_EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_PIN}/QUALITY.md"
-DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_PIN}/AUDIT.md"
+DEFAULT_EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_REF}/QUALITY.md"
+DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_REF}/AUDIT.md"
 
 EULER_URL = validate_policy_url(os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL), "Euler")
 FOUCAULT_URL = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL), "Foucault")
 
 DEFAULT_RETRIES = int(os.getenv("POLICY_DRIFT_RETRIES", "3"))
 DEFAULT_BACKOFF_SECONDS = float(os.getenv("POLICY_DRIFT_BACKOFF_SECONDS", "1.0"))
+DEFAULT_TIMEOUT_SECONDS = float(os.getenv("POLICY_DRIFT_TIMEOUT_SECONDS", "30.0"))
 
 SEPARATOR = "\n---\n\n"
 
@@ -56,6 +63,7 @@ def fetch_text(
     url: str,
     retries: int = DEFAULT_RETRIES,
     backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     """Fetch text from a URL with retry attempts and exponential backoff."""
     request = urllib.request.Request(url, headers={"User-Agent": "kiawaBot-CI"})
@@ -63,7 +71,7 @@ def fetch_text(
     delay = backoff_seconds
     for attempt in range(1, retries + 1):
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read().decode("utf-8")
         except (urllib.error.URLError, TimeoutError) as error:
             last_error = error
