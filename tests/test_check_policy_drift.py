@@ -107,9 +107,11 @@ class TestCheckPolicyDrift(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_policy_url("https://raw.githubusercontent.com/malicious/euler/main/QUALITY.md", "Euler")
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/abuzucom_attacker/euler/main/QUALITY.md", "Euler")
-        with self.assertRaises(ValueError):
             validate_policy_url("https://raw.githubusercontent.com/abuzucom/", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://raw.githubusercontent.com/abuzucom/unapproved_repo/main/QUALITY.md", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://raw.githubusercontent.com/abuzucom/euler/main/other_file.txt", "Euler")
 
     def test_parse_int_env(self) -> None:
         from scripts.check_policy_drift import parse_int_env

@@ -36,7 +36,22 @@ def is_allowed(path: Path) -> bool:
 
 
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion in CI
-MAX_FILE_BYTES = int(os.getenv("SECRETS_SCAN_MAX_BYTES", str(DEFAULT_MAX_FILE_BYTES)))
+
+
+def parse_max_bytes() -> int:
+    raw = os.getenv("SECRETS_SCAN_MAX_BYTES")
+    if not raw or not raw.strip():
+        return DEFAULT_MAX_FILE_BYTES
+    try:
+        val = int(raw)
+        if 1024 <= val <= 100 * 1024 * 1024:
+            return val
+    except ValueError:
+        pass
+    return DEFAULT_MAX_FILE_BYTES
+
+
+MAX_FILE_BYTES = parse_max_bytes()
 
 
 def scan_file(path: Path) -> list[tuple[int, str, str]]:
@@ -54,7 +69,7 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     for line_number, line in enumerate(content.splitlines(), start=1):
         for name, pattern in PATTERNS:
             if pattern.search(line):
-                findings.append((line_number, name, line.strip()[:100]))
+                findings.append((line_number, name, ""))
     return findings
 
 

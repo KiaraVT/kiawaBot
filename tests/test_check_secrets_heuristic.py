@@ -6,10 +6,12 @@ from pathlib import Path
 
 from scripts.check_secrets_heuristic import (
     DEFAULT_GIT_TIMEOUT_SECONDS,
+    DEFAULT_MAX_FILE_BYTES,
     MAX_FILE_BYTES,
     get_tracked_files,
     is_allowed,
     main,
+    parse_max_bytes,
     scan_file,
 )
 
@@ -107,6 +109,17 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
             mock_run.assert_called_once()
             _, kwargs = mock_run.call_args
             self.assertEqual(kwargs.get("timeout"), DEFAULT_GIT_TIMEOUT_SECONDS)
+
+    def test_parse_max_bytes(self) -> None:
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"SECRETS_SCAN_MAX_BYTES": "2048"}):
+            self.assertEqual(parse_max_bytes(), 2048)
+        with patch.dict("os.environ", {"SECRETS_SCAN_MAX_BYTES": "invalid"}):
+            self.assertEqual(parse_max_bytes(), DEFAULT_MAX_FILE_BYTES)
+        with patch.dict("os.environ", {"SECRETS_SCAN_MAX_BYTES": "100"}):
+            self.assertEqual(parse_max_bytes(), DEFAULT_MAX_FILE_BYTES)
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(parse_max_bytes(), DEFAULT_MAX_FILE_BYTES)
 
 
 if __name__ == "__main__":

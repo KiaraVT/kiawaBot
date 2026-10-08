@@ -70,6 +70,7 @@ RAW_BASELINE_ADVISORIES = [
     "GHSA-w9j2-pvgh-6h63",
     "GHSA-wqch-xfxh-vrr4",
     "GHSA-xhjh-pmcv-23jw",
+    "GHSA-xffm-g5w8-qvg7",
     "GHSA-xx6v-rp6x-q39c",
 ]
 KNOWN_BASELINE_ADVISORIES = {a.lower() for a in RAW_BASELINE_ADVISORIES}

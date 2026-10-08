@@ -32,8 +32,8 @@ def validate_policy_url(url: str, name: str) -> str:
         raise ValueError(f"Invalid scheme for {name} URL: {url} (must use https)")
     if parsed.netloc != "raw.githubusercontent.com":
         raise ValueError(f"Invalid host for {name} URL: {url} (must be raw.githubusercontent.com)")
-    if not re.fullmatch(r"/abuzucom/[^/]+/.+", parsed.path):
-        raise ValueError(f"Invalid path for {name} URL: {url} (must target abuzucom repo)")
+    if not re.fullmatch(r"/abuzucom/(euler|foucault)/[0-9a-zA-Z._\-/]+/(QUALITY|AUDIT)\.md", parsed.path):
+        raise ValueError(f"Invalid path for {name} URL: {url} (must target approved abuzucom policy document)")
     return url
 
 
