@@ -70,6 +70,9 @@ An explicit execution request authorizes only the named non-destructive actions 
 necessary bounded read-only verification. A plan, design, or status approval does not
 authorize execution.
 
+Incrementing MAJOR SemVer requires active human approval and input. Creating, tagging, or
+publishing repository releases is human-only.
+
 Obtain approval immediately before any act that requires it. State the exact action and
 target. Approval applies only to that action and target.
 
@@ -207,6 +210,8 @@ Never push directly to a protected branch.
 
 Obtain explicit approval from an active human before marking a pull request ready for review
 or merging it.
+
+Repository releases are human-only. AI agents must never create, tag, or publish releases.
 
 Include both attribution trailers at the end of every commit message and pull request
 description. Use the agent or tool name in `Co-authored-by:`. Use the active model name
@@ -687,9 +692,11 @@ unexplained implementation history. Explain why when the reason cannot be inferr
 
 Follow Semantic Versioning 2.0.0 (`https://semver.org/`) (`MAJOR.MINOR.PATCH`). Increment
 `MAJOR` for breaking changes, `MINOR` for backwards-compatible additions, and `PATCH` for
-backwards-compatible bug fixes and chores. AI agents are required to bump the version in
-`package.json` and document changes in `CHANGELOG.md` following Keep a Changelog conventions.
-Only AI agents are required to bump the changelog; human users are exempt from this requirement.
+backwards-compatible bug fixes and chores. Incrementing `MAJOR` requires active human approval
+and input. Creating repository releases is human-only; AI agents must never create or publish
+releases. AI agents are required to bump the version in `package.json` and document changes
+in `CHANGELOG.md` following Keep a Changelog conventions. The changelog is generally intended
+to be maintained by LLM agents only, but human contributors may add changes.
 
 Format commit subjects as `type: description`. Use an imperative verb, keep the subject to
 50 characters or fewer, and omit the trailing period. Wrap commit bodies at 72 characters.
