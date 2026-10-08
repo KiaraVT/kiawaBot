@@ -130,6 +130,27 @@ class TestCheckNpmAudit(unittest.TestCase):
         with patch("scripts.check_npm_audit.run_audit", side_effect=RuntimeError("npm failed")):
             self.assertEqual(main(), 1)
 
+    def test_load_baseline_advisories_from_env(self) -> None:
+        from scripts.check_npm_audit import load_baseline_advisories
+        with patch.dict("os.environ", {"NPM_AUDIT_BASELINE_ADVISORIES": "GHSA-1111-2222-3333, GHSA-4444-5555-6666"}):
+            baseline = load_baseline_advisories()
+            self.assertIn("ghsa-1111-2222-3333", baseline)
+            self.assertIn("ghsa-4444-5555-6666", baseline)
+
+    def test_load_baseline_advisories_from_file(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from scripts.check_npm_audit import load_baseline_advisories
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write('["GHSA-aaaa-bbbb-cccc"]')
+            temp_path = Path(f.name)
+        try:
+            with patch.dict("os.environ", {"NPM_AUDIT_BASELINE_FILE": str(temp_path)}, clear=True):
+                baseline = load_baseline_advisories()
+                self.assertIn("ghsa-aaaa-bbbb-cccc", baseline)
+        finally:
+            temp_path.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,10 +12,12 @@ Baseline advisory maintenance:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 GHSA_PATTERN = re.compile(r"GHSA-[a-z0-9-]+", re.IGNORECASE)
 
@@ -81,7 +83,31 @@ RAW_BASELINE_ADVISORIES = [
     "GHSA-xffm-g5w8-qvg7",
     "GHSA-xx6v-rp6x-q39c",
 ]
-KNOWN_BASELINE_ADVISORIES = {a.lower() for a in RAW_BASELINE_ADVISORIES}
+def load_baseline_advisories() -> set[str]:
+    """Load approved baseline advisories from environment, JSON file, or fallback."""
+    env_list = os.getenv("NPM_AUDIT_BASELINE_ADVISORIES")
+    if env_list:
+        return {a.strip().lower() for a in env_list.split(",") if a.strip()}
+
+    baseline_env_file = os.getenv("NPM_AUDIT_BASELINE_FILE")
+    candidate_paths = [
+        Path(baseline_env_file) if baseline_env_file else None,
+        Path(__file__).resolve().parent / "npm-audit-baseline.json",
+        Path(__file__).resolve().parent.parent / "npm-audit-baseline.json",
+    ]
+    for candidate in candidate_paths:
+        if candidate and candidate.is_file():
+            try:
+                content = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(content, list):
+                    return {str(a).strip().lower() for a in content if str(a).strip()}
+            except (OSError, json.JSONDecodeError) as error:
+                print(f"::warning::Failed to load {candidate}: {error}", file=sys.stderr)
+
+    return {a.lower() for a in RAW_BASELINE_ADVISORIES}
+
+
+KNOWN_BASELINE_ADVISORIES = load_baseline_advisories()
 DEFAULT_AUDIT_TIMEOUT_SECONDS = 300
 
 
@@ -113,7 +139,8 @@ def run_audit(timeout: int = DEFAULT_AUDIT_TIMEOUT_SECONDS) -> dict:
     return data
 
 
-def audit_dependencies(data: dict) -> int:
+def audit_dependencies(data: dict, baseline: set[str] | None = None) -> int:
+    active_baseline = baseline if baseline is not None else load_baseline_advisories()
     vulnerabilities = data.get("vulnerabilities", {})
     new_advisories: list[str] = []
     known_count = 0
@@ -146,7 +173,7 @@ def audit_dependencies(data: dict) -> int:
                 new_advisories.append(f"{pkg_name}: {advisory_ref}")
                 continue
 
-            if ghsa_id in KNOWN_BASELINE_ADVISORIES:
+            if ghsa_id in active_baseline:
                 print(f"::warning::[npm-audit] Known legacy advisory in {pkg_name}: {title} ({ghsa_id})")
                 known_count += 1
             else:

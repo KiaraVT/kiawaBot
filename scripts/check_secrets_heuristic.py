@@ -39,25 +39,30 @@ DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhau
 
 def parse_max_bytes() -> int:
     raw = os.getenv("SECRETS_SCAN_MAX_BYTES")
-    if not raw or not raw.strip():
+    if raw is None or not raw.strip():
         return DEFAULT_MAX_FILE_BYTES
     try:
         val = int(raw)
-        if 1024 <= val <= 100 * 1024 * 1024:
-            return val
     except ValueError:
-        pass
-    return DEFAULT_MAX_FILE_BYTES
+        print(
+            f"::warning::Invalid SECRETS_SCAN_MAX_BYTES '{raw}', using default {DEFAULT_MAX_FILE_BYTES}",
+            file=sys.stderr,
+        )
+        return DEFAULT_MAX_FILE_BYTES
+    if val < 1024 or val > 100 * 1024 * 1024:
+        print(
+            f"::warning::SECRETS_SCAN_MAX_BYTES out of bounds ({val}), using default {DEFAULT_MAX_FILE_BYTES}",
+            file=sys.stderr,
+        )
+        return DEFAULT_MAX_FILE_BYTES
+    return val
 
 
-MAX_FILE_BYTES = parse_max_bytes()
-
-
-def scan_file(path: Path) -> list[tuple[int, str, str]]:
+def scan_file(path: Path, max_file_bytes: int = DEFAULT_MAX_FILE_BYTES) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     try:
-        if path.stat().st_size > MAX_FILE_BYTES:
-            print(f"::warning file={path}::Skipped secret scanning for file exceeding 10 MB", file=sys.stderr)
+        if path.stat().st_size > max_file_bytes:
+            print(f"::warning file={path}::Skipped secret scanning for file exceeding {max_file_bytes} bytes", file=sys.stderr)
             return findings
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
@@ -91,13 +96,14 @@ def get_tracked_files(timeout: int = DEFAULT_GIT_TIMEOUT_SECONDS) -> list[Path]:
 
 
 def main() -> int:
+    max_file_bytes = parse_max_bytes()
     tracked = get_tracked_files()
     secret_findings = 0
     io_errors = 0
     for path in tracked:
         if is_allowed(path):
             continue
-        findings = scan_file(path)
+        findings = scan_file(path, max_file_bytes=max_file_bytes)
         for line_num, rule_name, sample in findings:
             if rule_name == "unreadable_file":
                 print(f"::error file={path},line={line_num}::Failed to read file: {sample}", file=sys.stderr)

@@ -7,7 +7,6 @@ from pathlib import Path
 from scripts.check_secrets_heuristic import (
     DEFAULT_GIT_TIMEOUT_SECONDS,
     DEFAULT_MAX_FILE_BYTES,
-    MAX_FILE_BYTES,
     get_tracked_files,
     is_allowed,
     main,
@@ -78,7 +77,7 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
     def test_oversized_file_skipped(self) -> None:
         from unittest.mock import MagicMock, patch
         mock_stat = MagicMock()
-        mock_stat.st_size = MAX_FILE_BYTES + 1024
+        mock_stat.st_size = DEFAULT_MAX_FILE_BYTES + 1024
         with patch.object(Path, "stat", return_value=mock_stat):
             findings = scan_file(Path("some_large_file.bin"))
             self.assertEqual(findings, [])

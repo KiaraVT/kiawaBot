@@ -12,6 +12,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+DEFAULT_UPSTREAM_HOST = "raw.githubusercontent.com"
+DEFAULT_POLICY_ORG = "abuzucom"
+DEFAULT_EULER_REPO = "euler"
+DEFAULT_FOUCAULT_REPO = "foucault"
 DEFAULT_EULER_REF = "main"
 DEFAULT_FOUCAULT_REF = "main"
 
@@ -25,16 +29,22 @@ def validate_policy_ref(ref: str, name: str) -> str:
     return ref
 
 
-def validate_policy_url(url: str, name: str) -> str:
+def validate_policy_url(
+    url: str,
+    name: str,
+    expected_host: str = DEFAULT_UPSTREAM_HOST,
+    expected_org: str = DEFAULT_POLICY_ORG,
+) -> str:
     """Validate that policy URL points to an approved HTTPS GitHub location."""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https":
         raise ValueError(f"Invalid scheme for {name} URL: {url} (must use https)")
-    if parsed.netloc != "raw.githubusercontent.com":
-        raise ValueError(f"Invalid host for {name} URL: {url} (must be raw.githubusercontent.com)")
+    if parsed.netloc != expected_host:
+        raise ValueError(f"Invalid host for {name} URL: {url} (must be {expected_host})")
     if ".." in parsed.path:
         raise ValueError(f"Path traversal ('..') detected in {name} URL: {url}")
-    if not re.fullmatch(r"/abuzucom/(euler|foucault)/[0-9a-zA-Z._\-/]+/(QUALITY|AUDIT)\.md", parsed.path):
+    pattern = rf"^/{re.escape(expected_org)}/({re.escape(DEFAULT_EULER_REPO)}|{re.escape(DEFAULT_FOUCAULT_REPO)})/[0-9a-zA-Z._\-/]+/(QUALITY|AUDIT)\.md$"
+    if not re.fullmatch(pattern, parsed.path):
         raise ValueError(f"Invalid path for {name} URL: {url} (must target approved abuzucom policy document)")
     return url
 
@@ -82,11 +92,26 @@ def get_policy_config() -> tuple[str, str, int, float, float]:
         "Foucault",
     )
 
-    default_euler_url = f"https://raw.githubusercontent.com/abuzucom/euler/{euler_ref}/QUALITY.md"
-    default_foucault_url = f"https://raw.githubusercontent.com/abuzucom/foucault/{foucault_ref}/AUDIT.md"
+    policy_host = os.getenv("POLICY_UPSTREAM_HOST", DEFAULT_UPSTREAM_HOST)
+    policy_org = os.getenv("POLICY_UPSTREAM_ORG", DEFAULT_POLICY_ORG)
+    euler_repo = os.getenv("EULER_POLICY_REPO", DEFAULT_EULER_REPO)
+    foucault_repo = os.getenv("FOUCAULT_POLICY_REPO", DEFAULT_FOUCAULT_REPO)
 
-    euler_url = validate_policy_url(os.getenv("EULER_POLICY_URL", default_euler_url), "Euler")
-    foucault_url = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", default_foucault_url), "Foucault")
+    default_euler_url = f"https://{policy_host}/{policy_org}/{euler_repo}/{euler_ref}/QUALITY.md"
+    default_foucault_url = f"https://{policy_host}/{policy_org}/{foucault_repo}/{foucault_ref}/AUDIT.md"
+
+    euler_url = validate_policy_url(
+        os.getenv("EULER_POLICY_URL", default_euler_url),
+        "Euler",
+        expected_host=policy_host,
+        expected_org=policy_org,
+    )
+    foucault_url = validate_policy_url(
+        os.getenv("FOUCAULT_POLICY_URL", default_foucault_url),
+        "Foucault",
+        expected_host=policy_host,
+        expected_org=policy_org,
+    )
 
     retries = parse_int_env("POLICY_DRIFT_RETRIES", DEFAULT_RETRIES, 1, 10)
     backoff = parse_float_env("POLICY_DRIFT_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS, 0.0, 60.0)

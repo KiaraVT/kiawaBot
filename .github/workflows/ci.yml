@@ -76,4 +76,5 @@ jobs:
         run: python -m unittest discover tests
 
       - name: Verify Docker container build
+        timeout-minutes: 5
         run: docker build -t kiara-bot:ci .
