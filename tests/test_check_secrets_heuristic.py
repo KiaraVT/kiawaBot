@@ -62,6 +62,14 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0][1], "unreadable_file")
 
+    def test_oversized_file_skipped(self) -> None:
+        from unittest.mock import MagicMock, patch
+        mock_stat = MagicMock()
+        mock_stat.st_size = 20 * 1024 * 1024
+        with patch.object(Path, "stat", return_value=mock_stat):
+            findings = scan_file(Path("some_large_file.bin"))
+            self.assertEqual(findings, [])
+
 
 if __name__ == "__main__":
     unittest.main()

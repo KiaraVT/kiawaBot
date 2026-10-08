@@ -89,6 +89,24 @@ class TestCheckPolicyDrift(unittest.TestCase):
                 with self.assertRaises(urllib.error.URLError):
                     fetch_text("https://example.com/policy", retries=3, backoff_seconds=0.1)
 
+    def test_validate_policy_pin(self) -> None:
+        from scripts.check_policy_drift import validate_policy_pin
+        valid_pin = "fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08"
+        self.assertEqual(validate_policy_pin(valid_pin, "Euler"), valid_pin)
+        with self.assertRaises(ValueError):
+            validate_policy_pin("short_or_invalid_pin", "Euler")
+
+    def test_validate_policy_url(self) -> None:
+        from scripts.check_policy_drift import validate_policy_url
+        valid_url = "https://raw.githubusercontent.com/abuzucom/euler/fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08/QUALITY.md"
+        self.assertEqual(validate_policy_url(valid_url, "Euler"), valid_url)
+        with self.assertRaises(ValueError):
+            validate_policy_url("http://raw.githubusercontent.com/abuzucom/euler/pin/QUALITY.md", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://attacker.com/abuzucom/euler/pin/QUALITY.md", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://raw.githubusercontent.com/malicious/euler/pin/QUALITY.md", "Euler")
+
     def test_env_var_configuration(self) -> None:
         import os
         custom_pin = "0123456789abcdef0123456789abcdef01234567"

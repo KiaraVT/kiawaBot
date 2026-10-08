@@ -4,23 +4,47 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 DEFAULT_EULER_PIN = "fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08"
 DEFAULT_FOUCAULT_PIN = "f59866d6e3ff71affa8404117877b58b8d79eea2"
 
-EULER_PIN = os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_PIN)
-FOUCAULT_PIN = os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_PIN)
+SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+
+
+def validate_policy_pin(pin: str, name: str) -> str:
+    """Validate that the policy commit PIN is a 40-character hex SHA."""
+    if not SHA_PATTERN.match(pin):
+        raise ValueError(f"Invalid {name} commit PIN: {pin} (must be 40-char hex SHA)")
+    return pin
+
+
+def validate_policy_url(url: str, name: str) -> str:
+    """Validate that policy URL points to an approved HTTPS GitHub location."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Invalid scheme for {name} URL: {url} (must use https)")
+    if parsed.netloc != "raw.githubusercontent.com":
+        raise ValueError(f"Invalid host for {name} URL: {url} (must be raw.githubusercontent.com)")
+    if not parsed.path.startswith("/abuzucom/"):
+        raise ValueError(f"Invalid path for {name} URL: {url} (must target abuzucom repo)")
+    return url
+
+
+EULER_PIN = validate_policy_pin(os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_PIN), "Euler")
+FOUCAULT_PIN = validate_policy_pin(os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_PIN), "Foucault")
 
 DEFAULT_EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_PIN}/QUALITY.md"
 DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_PIN}/AUDIT.md"
 
-EULER_URL = os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL)
-FOUCAULT_URL = os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL)
+EULER_URL = validate_policy_url(os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL), "Euler")
+FOUCAULT_URL = validate_policy_url(os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL), "Foucault")
 
 DEFAULT_RETRIES = int(os.getenv("POLICY_DRIFT_RETRIES", "3"))
 DEFAULT_BACKOFF_SECONDS = float(os.getenv("POLICY_DRIFT_BACKOFF_SECONDS", "1.0"))

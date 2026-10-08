@@ -33,9 +33,15 @@ def is_allowed(path: Path) -> bool:
     return False
 
 
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion in CI
+
+
 def scan_file(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            print(f"::warning file={path}::Skipped secret scanning for file exceeding 10 MB", file=sys.stderr)
+            return findings
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         print(f"::error file={path}::Failed to read file for secret scanning: {error}", file=sys.stderr)
