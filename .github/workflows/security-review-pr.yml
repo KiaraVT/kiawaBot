@@ -20,7 +20,8 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      same_repository: ${{ steps.resolve.outputs.same_repository }}
+      found: ${{ steps.resolve.outputs.found }}
+      same_repo: ${{ steps.resolve.outputs.same_repo }}
       already_reviewed: ${{ steps.resolve.outputs.already_reviewed }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
@@ -36,6 +37,8 @@ jobs:
             const workflowRun = context.payload.workflow_run;
             const headSha = workflowRun?.head_sha;
             if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
               core.setFailed("workflow run head SHA is invalid");
               return;
             }
@@ -56,6 +59,8 @@ jobs:
               pullRequest.head?.sha?.toLowerCase() === headSha.toLowerCase()
             );
             if (candidates.length !== 1) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
               core.setFailed(
                 `expected one pull request for workflow run head, found ${candidates.length}`,
               );
@@ -65,6 +70,8 @@ jobs:
             const pullRequest = candidates[0];
             const headRepository = pullRequest.head?.repo;
             if (!headRepository?.full_name || !headRepository.clone_url) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
               core.setFailed("pull request head repository metadata is unavailable");
               return;
             }
@@ -131,12 +138,12 @@ jobs:
             const alreadyReviewed = hasVerdictCheck &&
               await hasTrustedVerdictRecord(headSha);
             core.setOutput("already_reviewed", alreadyReviewed ? "true" : "false");
-            core.setOutput(
-              "same_repository",
+            const sameRepo =
               headRepository.full_name.toLowerCase() === baseRepository.toLowerCase()
                 ? "true"
-                : "false",
-            );
+                : "false";
+            core.setOutput("found", "true");
+            core.setOutput("same_repo", sameRepo);
             core.setOutput("pr_number", String(pullRequest.number));
             core.setOutput("base_sha", pullRequest.base.sha);
             core.setOutput("head_sha", pullRequest.head.sha);
@@ -145,7 +152,7 @@ jobs:
 
   review:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f59866d6e3ff71affa8404117877b58b8d79eea2
     with:
       audit_ref: "f59866d6e3ff71affa8404117877b58b8d79eea2"
@@ -162,7 +169,7 @@ jobs:
 
   fork-review-skipped:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'false'
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -184,3 +191,24 @@ jobs:
                 summary: 'Fork pull requests receive no provider secret.',
               },
             });
+
+  annotate:
+    needs: [resolve-pr, review]
+    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && needs.resolve-pr.outputs.same_repo == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Annotate review comment with policy document link
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ needs.resolve-pr.outputs.pr_number }}
+          doc-path: "docs/pr-security-review.md"
+          policy-name: "Security review"
+          markers: "Security review metadata,<!-- foucault-security-review -->"

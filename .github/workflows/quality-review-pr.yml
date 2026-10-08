@@ -41,12 +41,14 @@ jobs:
             const matches = pulls.filter((pull) => pull.head.sha === headSha);
             if (matches.length !== 1) {
               core.setOutput('found', 'false');
+              core.setOutput('same_repo', 'false');
               return;
             }
             const pull = matches[0];
+            const isSameRepo = Boolean(pull.head.repo) &&
+              pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
             core.setOutput('found', 'true');
-            const sameRepo = Boolean(pull.head.repo) && pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
-            core.setOutput('same_repo', String(sameRepo));
+            core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);
@@ -96,3 +98,24 @@ jobs:
                 summary: 'Fork pull requests receive no provider secret.',
               },
             });
+
+  annotate:
+    needs: [resolve, review]
+    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Annotate review comment with policy document link
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ needs.resolve.outputs.number }}
+          doc-path: "docs/pr-quality-review.md"
+          policy-name: "Quality review"
+          markers: "<!-- euler-quality-review -->,Euler quality review:"
