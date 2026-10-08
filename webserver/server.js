@@ -13,7 +13,7 @@ const command_Path = path.join(import.meta.dirname, '..', 'data', 'command_List.
 const incentive_Path = path.join(import.meta.dirname, '..', 'data', 'incentives.json');
 
 // Ensure data directory exists
-const dataDir = path.join('..', 'data');
+const dataDir = path.join(import.meta.dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) {
     console.log('Web Server: Creating data directory...');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -206,7 +206,18 @@ app.get("/commands", (req, res) => {
 // Simple HTML page to display incentive
 app.get("/incentives", (req, res) => {
     try {
-        const incentiveData = safeReadJSON(incentive_Path, []);
+        const defaultIncentive = {
+            incentive: {
+                command: '!update',
+                amount: 0,
+                goal: 0
+            }
+        };
+        const rawData = safeReadJSON(incentive_Path, defaultIncentive);
+        const incentive = (rawData && typeof rawData === 'object' && rawData.incentive) ? rawData.incentive : defaultIncentive.incentive;
+        const command = incentive.command || '!update';
+        const amount = typeof incentive.amount === 'number' ? incentive.amount : 0;
+        const goal = typeof incentive.goal === 'number' ? incentive.goal : 0;
         const html = `
         <!DOCTYPE html>
         <html>
@@ -236,7 +247,7 @@ app.get("/incentives", (req, res) => {
                 <a href="/api/incentives">Incentives API</a>
             </div>
             <h2>Incentive Data</h2>
-            <pre>${escapeHtml(incentiveData.incentive.command)} $${incentiveData.incentive.amount.toFixed(2)} / $${incentiveData.incentive.goal.toFixed(0)}</pre>
+            <pre>${escapeHtml(command)} $${amount.toFixed(2)} / $${goal.toFixed(0)}</pre>
         </body>
         </html>`;
         res.send(html);
@@ -297,13 +308,13 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/chatwidget", (_req, res) => {
-    res.sendFile(path.join(import.meta.dirname, "www/chatwidget.html"))
-})
+    res.sendFile("chatwidget.html", { root: path.join(import.meta.dirname, "www") });
+});
 
-app.listen(port, '127.0.0.1', () => {
+const server = app.listen(port, '127.0.0.1', () => {
     console.log(`Kiara Bot Web Server running on port ${port}`);
     console.log(`Dashboard available at: http://127.0.0.1:${port}`);
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
-export { app }
+export { app, server }
