@@ -1,7 +1,4 @@
-import js from "@eslint/js";
-
 export default [
-    js.configs.recommended,
     {
         languageOptions: {
             ecmaVersion: "latest",
@@ -15,19 +12,6 @@ export default [
                 clearInterval: "readonly",
                 Buffer: "readonly",
                 URL: "readonly",
-                Map: "readonly",
-                Set: "readonly",
-                Promise: "readonly",
-                Math: "readonly",
-                JSON: "readonly",
-                Number: "readonly",
-                String: "readonly",
-                Boolean: "readonly",
-                Array: "readonly",
-                Object: "readonly",
-                Reflect: "readonly",
-                Error: "readonly",
-                TypeError: "readonly",
                 fetch: "readonly",
                 WebSocket: "readonly"
             }

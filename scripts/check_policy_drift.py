@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
     print(f"Checking {name} policy against upstream...")
     try:
         upstream_text = fetch_text(upstream_url).rstrip() + "\n"
-    except Exception as error:
+    except (urllib.error.URLError, UnicodeDecodeError, TimeoutError) as error:
         print(f"::error::Failed to fetch upstream {name} from {upstream_url}: {error}")
         return False
 

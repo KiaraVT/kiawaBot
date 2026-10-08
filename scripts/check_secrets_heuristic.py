@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Scan repository files for potential hardcoded secrets and credentials."""
+"""Heuristic scanner for potential hardcoded secrets and credentials.
+
+Note: This script provides lightweight heuristic scanning for fast local checks
+and CI gates. Comprehensive git-history secret scanning is performed by Gitleaks.
+"""
 
 from __future__ import annotations
 
@@ -13,13 +17,14 @@ PATTERNS = [
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z]{10,48}\b")),
-    ("generic_secret_assignment", re.compile(r"""(?i)(?:api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*['"][A-Za-z0-9_\-]{20,}['"]""")),
+    ("generic_secret_assignment", re.compile(r"""(?i)(?:api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*(?:[`'"][A-Za-z0-9_\-]{16,}[`'"]|[A-Za-z0-9_\-]{20,})""")),
 ]
 
 ALLOWLIST_PATHS = {
     Path(".env.example"),
     Path("tests/fixtures"),
     Path("tests/test_check_secrets_heuristic.py"),
+    Path("tests/test_run_model_command.py"),
 }
 
 
@@ -40,8 +45,6 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
         return findings
 
     for line_number, line in enumerate(content.splitlines(), start=1):
-        if "test" in path.parts and ("dummy" in line.lower() or "mock" in line.lower() or "fake" in line.lower()):
-            continue
         for name, pattern in PATTERNS:
             if pattern.search(line):
                 findings.append((line_number, name, line.strip()[:100]))

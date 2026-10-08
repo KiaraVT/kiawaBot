@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # Full git history is required for Gitleaks commit scanning
           fetch-depth: 0
 
       - name: Run Gitleaks secret scanner
@@ -47,8 +48,10 @@ jobs:
       - name: Run Node.js unit tests
         run: npm test
 
+      # Non-blocking advisory audit gate per repository policy
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high || echo "::warning::npm audit identified vulnerabilities"
+        continue-on-error: true
+        run: npm audit --audit-level=high
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

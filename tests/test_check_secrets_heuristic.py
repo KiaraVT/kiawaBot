@@ -40,8 +40,20 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
         finally:
             temp_path.unlink()
 
+    def test_generic_secret_with_backticks_detected(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("const api_key = `abcdef0123456789`;\n")
+            temp_path = Path(f.name)
+        try:
+            findings = scan_file(temp_path)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0][1], "generic_secret_assignment")
+        finally:
+            temp_path.unlink()
+
     def test_allowlist_matching(self) -> None:
         self.assertTrue(is_allowed(Path(".env.example")))
+        self.assertTrue(is_allowed(Path("tests/test_run_model_command.py")))
         self.assertFalse(is_allowed(Path("server.js")))
 
     def test_unreadable_file_reported(self) -> None:
