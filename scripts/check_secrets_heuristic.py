@@ -3,6 +3,7 @@
 
 Note: This script provides lightweight heuristic scanning for fast local checks
 and CI gates. Comprehensive git-history secret scanning is performed by Gitleaks.
+Exit codes: 0 = clean, 1 = potential secret detected, 2 = unreadable file I/O error.
 """
 
 from __future__ import annotations

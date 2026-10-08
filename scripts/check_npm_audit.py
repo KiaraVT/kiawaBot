@@ -78,18 +78,14 @@ DEFAULT_AUDIT_TIMEOUT_SECONDS = 300
 
 def run_audit(timeout: int = DEFAULT_AUDIT_TIMEOUT_SECONDS) -> dict:
     npm_path = shutil.which("npm") or "npm"
-    try:
-        result = subprocess.run(
-            [npm_path, "audit", "--json"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        return json.loads(result.stdout)
-    except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:
-        print(f"::error::Failed to execute npm audit or parse output: {error}", file=sys.stderr)
-        raise
+    result = subprocess.run(
+        [npm_path, "audit", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+    return json.loads(result.stdout)
 
 
 def audit_dependencies(data: dict) -> int:
@@ -130,7 +126,8 @@ def audit_dependencies(data: dict) -> int:
 def main() -> int:
     try:
         data = run_audit()
-    except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:
+        print(f"::error::Failed to execute npm audit or parse output: {error}", file=sys.stderr)
         return 1
     return audit_dependencies(data)
 
