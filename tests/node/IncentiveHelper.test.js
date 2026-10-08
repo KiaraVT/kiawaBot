@@ -39,3 +39,20 @@ test("IncentiveHelper - loadData, update, read, has, and file persistence", () =
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("IncentiveHelper - handles missing intermediate path segments correctly", () => {
+    const helper = new IncentiveHelper();
+    helper.data = { a: { c: 123 } };
+
+    // Intermediate segment "b" does not exist
+    assert.equal(helper.has("a.b.c"), false);
+    assert.equal(helper.read("a.b.c"), undefined);
+
+    const updateResult = helper.update("a.b.c", 999, false);
+    assert.equal(updateResult, false);
+    assert.equal(helper.data.a.c, 123);
+
+    const deleteResult = helper.delete("a.b.c");
+    assert.equal(deleteResult, false);
+    assert.equal(helper.data.a.c, 123);
+});

@@ -5,7 +5,6 @@
     "jsonfile": "6.2.1",
     "qs": "6.16.0",
     "tesjs": "1.0.7",
-    "tmi.js": "1.8.5",
     "ws": "8.22.0"
   },
   "devDependencies": {

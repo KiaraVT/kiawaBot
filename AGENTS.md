@@ -41,7 +41,7 @@
 - Files requiring active-human approval: `package.json`, `package-lock.json`, `.env`, `.env.example`, `AGENTS.md`, and runtime data files in `data/`
 
 ### 1.3 Architecture
-- Languages and frameworks: Node.js 22 (ESM), Express 4.21, WebSocket (ws), tmi.js, Python 3.12
+- Languages and frameworks: Node.js 22 (ESM), Express 5.2, WebSocket (ws), tesjs, Python 3.12
 - Application entry points: `start.js` (bot supervisor), `Kiara_bot.js` (chat bot core), `webserver/server.js` (overlay dashboard)
 - JavaScript and HTML paths: `start.js`, `Kiara_bot.js`, `AuthDataHelper.js`, `IncentiveHelper.js`, `QuoteHelper.js`, `webserver/`
 - Python paths: `scripts/` (CI checks), `ci/` (review adapters), `tests/test_*.py`
@@ -50,7 +50,7 @@
 
 ### 1.4 Gotchas
 - Runtime versions: Node.js 22+, Python 3.12+
-- Required services: Twitch IRC/API, YouTube Data API, local overlay WebSocket
+- Required services: Twitch EventSub WebSocket/API, YouTube Data API, local overlay WebSocket
 - Build or test constraints: Exactly pinned dependencies, 7-bit ASCII, LF line endings, npm audit gate against `scripts/npm-audit-baseline.json`, Gitleaks history scanning
 
 ### 1.5 Read before changing
