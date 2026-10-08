@@ -24,7 +24,7 @@ import jsonfile from "jsonfile";
 
 /**
  * Convert input ID to a rounded positive integer, or 0 if invalid.
- * Uses Math.round to parse numeric strings to positive integers.
+ * Parses the input with Number, rounds with Math.round, and returns the positive integer or 0.
  * @param {string|number} id
  * @param {boolean} [logWarning=false]
  * @returns { number }

@@ -3,22 +3,36 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-EULER_PIN = "fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08"
-FOUCAULT_PIN = "f59866d6e3ff71affa8404117877b58b8d79eea2"
+DEFAULT_EULER_PIN = "fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08"
+DEFAULT_FOUCAULT_PIN = "f59866d6e3ff71affa8404117877b58b8d79eea2"
 
-EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_PIN}/QUALITY.md"
-FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_PIN}/AUDIT.md"
+EULER_PIN = os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_PIN)
+FOUCAULT_PIN = os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_PIN)
+
+DEFAULT_EULER_URL = f"https://raw.githubusercontent.com/abuzucom/euler/{EULER_PIN}/QUALITY.md"
+DEFAULT_FOUCAULT_URL = f"https://raw.githubusercontent.com/abuzucom/foucault/{FOUCAULT_PIN}/AUDIT.md"
+
+EULER_URL = os.getenv("EULER_POLICY_URL", DEFAULT_EULER_URL)
+FOUCAULT_URL = os.getenv("FOUCAULT_POLICY_URL", DEFAULT_FOUCAULT_URL)
+
+DEFAULT_RETRIES = int(os.getenv("POLICY_DRIFT_RETRIES", "3"))
+DEFAULT_BACKOFF_SECONDS = float(os.getenv("POLICY_DRIFT_BACKOFF_SECONDS", "1.0"))
 
 SEPARATOR = "\n---\n\n"
 
 
-def fetch_text(url: str, retries: int = 3, backoff_seconds: float = 1.0) -> str:
+def fetch_text(
+    url: str,
+    retries: int = DEFAULT_RETRIES,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+) -> str:
     """Fetch text from a URL with retry attempts and exponential backoff."""
     request = urllib.request.Request(url, headers={"User-Agent": "kiawaBot-CI"})
     last_error: Exception | None = None
@@ -30,6 +44,10 @@ def fetch_text(url: str, retries: int = 3, backoff_seconds: float = 1.0) -> str:
         except (urllib.error.URLError, TimeoutError) as error:
             last_error = error
             if attempt < retries:
+                print(
+                    f"Fetch attempt {attempt}/{retries} failed for {url} ({error}); retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
                 time.sleep(delay)
                 delay *= 2.0
     raise urllib.error.URLError(f"Failed after {retries} attempts: {last_error}")

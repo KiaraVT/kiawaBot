@@ -39,7 +39,7 @@ jobs:
       - name: Validate JavaScript syntax
         # Dynamically validate syntax across tracked Node.js source files
         run: |
-          git ls-files -z "*.js" | xargs -0 -n 1 node --check
+          git ls-files -z "*.js" | xargs -0 -r -n 1 node --check
 
       - name: Install Node.js dependencies
         run: npm ci

@@ -13,7 +13,12 @@ export default [
                 Buffer: "readonly",
                 URL: "readonly",
                 fetch: "readonly",
-                WebSocket: "readonly"
+                WebSocket: "readonly",
+                __dirname: "readonly",
+                __filename: "readonly",
+                require: "readonly",
+                module: "readonly",
+                exports: "readonly"
             }
         },
         rules: {

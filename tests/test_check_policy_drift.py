@@ -89,6 +89,18 @@ class TestCheckPolicyDrift(unittest.TestCase):
                 with self.assertRaises(urllib.error.URLError):
                     fetch_text("https://example.com/policy", retries=3, backoff_seconds=0.1)
 
+    def test_env_var_configuration(self) -> None:
+        import os
+        custom_pin = "0123456789abcdef0123456789abcdef01234567"
+        with patch.dict(os.environ, {"EULER_POLICY_PIN": custom_pin}):
+            from importlib import reload
+            import scripts.check_policy_drift as drift_mod
+            reload(drift_mod)
+            self.assertEqual(drift_mod.EULER_PIN, custom_pin)
+            self.assertIn(custom_pin, drift_mod.EULER_URL)
+        # Restore module state
+        reload(drift_mod)
+
 
 if __name__ == "__main__":
     unittest.main()
