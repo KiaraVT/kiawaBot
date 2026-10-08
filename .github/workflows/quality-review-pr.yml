@@ -45,7 +45,7 @@ jobs:
             }
             const pull = matches[0];
             core.setOutput('found', 'true');
-            const sameRepo = Boolean(pull.head.repo) && pull.head.repo.full_name === pull.base.repo.full_name;
+            const sameRepo = Boolean(pull.head.repo) && pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
             core.setOutput('same_repo', String(sameRepo));
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);

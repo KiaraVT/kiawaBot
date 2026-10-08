@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   resolve-pr:
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       same_repository: ${{ steps.resolve.outputs.same_repository }}
@@ -163,8 +164,23 @@ jobs:
     needs: resolve-pr
     if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'false'
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
     steps:
-      - name: Explain skipped review
-        run: >-
-          echo "Model review skipped for a fork pull request because provider
-          secrets are not available to this job."
+      - name: Publish skip result
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+        with:
+          script: |
+            await github.rest.checks.create({
+              ...context.repo,
+              name: 'security-review',
+              head_sha: process.env.HEAD_SHA,
+              status: 'completed',
+              conclusion: 'skipped',
+              output: {
+                title: 'Skipped for fork pull request',
+                summary: 'Fork pull requests receive no provider secret.',
+              },
+            });

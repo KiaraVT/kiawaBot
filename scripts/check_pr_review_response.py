@@ -98,6 +98,10 @@ def validate_response(response: str) -> tuple[str, dict[str, Any]]:
         raise ResponseError("findings is not a list")
     for finding in findings:
         _validate_finding(finding)
+    if verdict == "APPROVE" and any(
+        finding["severity"] in {"HIGH", "CRITICAL"} for finding in findings
+    ):
+        raise ResponseError("APPROVE verdict cannot contain HIGH or CRITICAL findings")
     return verdict, payload
 
 
