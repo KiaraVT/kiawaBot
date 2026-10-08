@@ -103,6 +103,10 @@ def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
         print(f"::error::Failed to fetch upstream {name} from {upstream_url}: {error}")
         return False
 
+    if not doc_path.is_file():
+        print(f"::error file={doc_path}::Policy documentation file {doc_path} not found")
+        return False
+
     try:
         embedded_text = extract_embedded_policy(doc_path)
     except (OSError, ValueError) as error:
@@ -110,7 +114,7 @@ def verify_policy(doc_path: Path, upstream_url: str, name: str) -> bool:
         return False
 
     if embedded_text != upstream_text:
-        print(f"::error file={doc_path}::Embedded {name} policy does not match upstream at pinned commit")
+        print(f"::error file={doc_path}::Embedded {name} policy does not match upstream at {upstream_url}")
         return False
 
     print(f"SUCCESS: {name} policy matches upstream specification.")
