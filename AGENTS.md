@@ -51,7 +51,7 @@
 ### 1.4 Gotchas
 - Runtime versions: Node.js 22+, Python 3.12+
 - Required services: Twitch EventSub WebSocket/API, YouTube Data API, local overlay WebSocket
-- Build or test constraints: Exactly pinned dependencies, 7-bit ASCII, LF line endings, npm audit gate against `scripts/npm-audit-baseline.json`, Gitleaks history scanning
+- Build or test constraints: Exactly pinned dependencies, npm audit gate against `scripts/npm-audit-baseline.json`, Gitleaks history scanning
 
 ### 1.5 Read before changing
 - Code quality review instructions:
@@ -675,14 +675,21 @@ retry_limit = 30
 Use concise, direct, active prose. Avoid personal pronouns when naming the actor or artifact
 makes the sentence clearer. Keep sentences focused on one main point.
 
-Use ASCII for documentation and comments unless required data or a source string needs
-Unicode. Avoid emojis unless the task requires them and an active human approves them.
+AI agents must use 7-bit ASCII for code, documentation, and comments unless domain data
+or a runtime string requires Unicode. Avoid emojis unless the task requires them and an
+active human approves them.
 
 Do not use literal escape sequences such as `\n`, `\r`, or `\t` in prose. Use actual
 whitespace. Fenced code blocks and inline code spans may contain literal escapes.
 
 State facts, requirements, results, and concrete effects. Omit hedging, filler, and
 unexplained implementation history. Explain why when the reason cannot be inferred from the code.
+
+Follow Semantic Versioning 2.0.0 (`https://semver.org/`) (`MAJOR.MINOR.PATCH`). Increment
+`MAJOR` for breaking changes, `MINOR` for backwards-compatible additions, and `PATCH` for
+backwards-compatible bug fixes and chores. AI agents are required to bump the version in
+`package.json` and document changes in `CHANGELOG.md` following Keep a Changelog conventions.
+Only AI agents are required to bump the changelog; human users are exempt from this requirement.
 
 Format commit subjects as `type: description`. Use an imperative verb, keep the subject to
 50 characters or fewer, and omit the trailing period. Wrap commit bodies at 72 characters.
@@ -692,9 +699,8 @@ only for mathematical values.
 
 Name functions with verb-noun phrases. Provide a docstring, return type hints, or both.
 
-Use UTF-8 encoding and LF line endings for source, documentation, configuration, and test
-files. Keep another encoding or line ending only when an external format or runtime requires
-it. Document that exception nearby.
+Use UTF-8 encoding for source, documentation, configuration, and test files. Keep another
+encoding only when an external format or runtime requires it. Document that exception nearby.
 
 **GOOD:** Use role-based names such as `active_user_records` and verb-noun function names
 such as `validate_user_email`.
