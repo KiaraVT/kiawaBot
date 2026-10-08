@@ -46,6 +46,42 @@ class TestCheckPolicyDrift(unittest.TestCase):
         finally:
             temp_path.unlink()
 
+    def test_verify_policy_sha256_integrity_matching(self) -> None:
+        import hashlib
+        policy_content = "Policy text\n"
+        expected_sha = hashlib.sha256(policy_content.encode("utf-8")).hexdigest()
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            f.write(f"# Preamble\nInfo{SEPARATOR}{policy_content}")
+            temp_path = Path(f.name)
+        try:
+            with patch("scripts.check_policy_drift.fetch_text", return_value=policy_content):
+                ok = verify_policy(
+                    temp_path,
+                    "https://example.com/policy",
+                    "Test Policy",
+                    expected_sha256=expected_sha,
+                )
+                self.assertTrue(ok)
+        finally:
+            temp_path.unlink()
+
+    def test_verify_policy_sha256_integrity_mismatch_fails(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            f.write(f"# Preamble\nInfo{SEPARATOR}Policy text\n")
+            temp_path = Path(f.name)
+        try:
+            with patch("scripts.check_policy_drift.fetch_text", return_value="Policy text\n"):
+                wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000"
+                ok = verify_policy(
+                    temp_path,
+                    "https://example.com/policy",
+                    "Test Policy",
+                    expected_sha256=wrong_sha,
+                )
+                self.assertFalse(ok)
+        finally:
+            temp_path.unlink()
+
     def test_verify_policy_mismatch(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
             f.write(f"# Preamble\nInfo{SEPARATOR}Local text\n")

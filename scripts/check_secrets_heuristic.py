@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Heuristic scanner for potential hardcoded secrets and credentials.
+"""Defense-in-depth heuristic scanner for potential hardcoded credentials in tracked files.
 
-Note: This script provides lightweight heuristic scanning for fast local checks
-and CI gates. Comprehensive git-history secret scanning is performed by Gitleaks.
+Note: This script provides fast working-tree checks for local pre-commit and CI defense-in-depth.
+Full git-history secret scanning is performed by Gitleaks as the primary gate in CI.
 Exit codes: 0 = clean, 1 = potential secret detected, 2 = unreadable file I/O error.
 """
 
@@ -15,10 +15,13 @@ import sys
 from pathlib import Path
 
 PATTERNS = [
-    ("private_key", re.compile(r"-----BEGIN (?:RSA|EC|DSA|OPENSSH|PGP)?\s?PRIVATE KEY-----")),
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9_-]+\s+)?PRIVATE KEY-----")),
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z]{10,48}\b")),
+    ("npm_token", re.compile(r"\bnpm_[A-Za-z0-9_]{32,}\b")),
+    ("pypi_token", re.compile(r"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\-]{50,}\b")),
+    ("dockerhub_token", re.compile(r"\bdckr_pat_[A-Za-z0-9_\-]{20,}\b")),
     ("generic_secret_assignment", re.compile(r"""(?i)\b(?:api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*(?:[`'"][A-Za-z0-9_\-]{16,64}[`'"]|[A-Za-z0-9_\-]{20,64})""")),
 ]
 

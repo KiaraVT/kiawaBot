@@ -3,9 +3,9 @@ import fs from "fs"
 export default class IncentiveHelper {
 
     //this runs when we create a new instance of the class
-    constructor() {
+    constructor(dataPath = './data/incentives.json') {
         this.data = null;
-        this.dataPath = './data/incentives.json';
+        this.dataPath = dataPath;
         this.defaultData = {
             incentive: {
                 command: '!update',

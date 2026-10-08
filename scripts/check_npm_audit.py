@@ -20,6 +20,17 @@ import sys
 from pathlib import Path
 
 GHSA_PATTERN = re.compile(r"GHSA-[a-z0-9-]+", re.IGNORECASE)
+CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
+
+
+def _extract_advisory_id(item: Any) -> str | None:
+    if isinstance(item, str) and item.strip():
+        return item.strip().lower()
+    if isinstance(item, dict):
+        val = item.get("id") or item.get("ghsa_id") or item.get("cve")
+        if val and isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    return None
 
 RAW_BASELINE_ADVISORIES = [
     "GHSA-27v5-c462-wpq7",
@@ -100,7 +111,12 @@ def load_baseline_advisories() -> set[str]:
             try:
                 content = json.loads(candidate.read_text(encoding="utf-8"))
                 if isinstance(content, list):
-                    return {str(a).strip().lower() for a in content if str(a).strip()}
+                    advisories = set()
+                    for item in content:
+                        extracted = _extract_advisory_id(item)
+                        if extracted:
+                            advisories.add(extracted)
+                    return advisories
             except (OSError, json.JSONDecodeError) as error:
                 print(f"::warning::Failed to load {candidate}: {error}", file=sys.stderr)
 
@@ -161,27 +177,40 @@ def audit_dependencies(data: dict, baseline: set[str] | None = None) -> int:
 
             url = item.get("url", "")
             title = item.get("title", "Unknown advisory")
-            match = GHSA_PATTERN.search(url)
-            ghsa_id = match.group(0).lower() if match else ""
+            source = str(item.get("source", ""))
+            cve_field = str(item.get("cve", ""))
 
-            if not ghsa_id:
-                advisory_ref = item.get("cve") or item.get("source") or url or "missing-ghsa-id"
+            ghsa_match = GHSA_PATTERN.search(url) or GHSA_PATTERN.search(source)
+            cve_match = (
+                CVE_PATTERN.search(url)
+                or CVE_PATTERN.search(cve_field)
+                or CVE_PATTERN.search(source)
+            )
+
+            advisory_id = ""
+            if ghsa_match:
+                advisory_id = ghsa_match.group(0).lower()
+            elif cve_match:
+                advisory_id = cve_match.group(0).lower()
+
+            if not advisory_id:
+                advisory_ref = url or source or cve_field or "unidentifiable-advisory"
                 print(
-                    f"::error::[npm-audit] Non-GHSA or unidentifiable vulnerability in {pkg_name}: {title} ({advisory_ref})",
+                    f"::error::[npm-audit] Unidentifiable vulnerability in {pkg_name}: {title} ({advisory_ref})",
                     file=sys.stderr,
                 )
                 new_advisories.append(f"{pkg_name}: {advisory_ref}")
                 continue
 
-            if ghsa_id in active_baseline:
-                print(f"::warning::[npm-audit] Known legacy advisory in {pkg_name}: {title} ({ghsa_id})")
+            if advisory_id in active_baseline:
+                print(f"::warning::[npm-audit] Known legacy advisory in {pkg_name}: {title} ({advisory_id})")
                 known_count += 1
             else:
                 print(
-                    f"::error::[npm-audit] New or unapproved vulnerability in {pkg_name}: {title} ({ghsa_id})",
+                    f"::error::[npm-audit] New or unapproved vulnerability in {pkg_name}: {title} ({advisory_id})",
                     file=sys.stderr,
                 )
-                new_advisories.append(f"{pkg_name}: {ghsa_id}")
+                new_advisories.append(f"{pkg_name}: {advisory_id}")
 
     if new_advisories:
         print(

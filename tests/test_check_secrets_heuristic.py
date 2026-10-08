@@ -62,6 +62,30 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
         finally:
             temp_path.unlink()
 
+    def test_npm_token_detected(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            token = "npm_" + "0123456789abcdef0123456789abcdef"
+            f.write(f"NPM_TOKEN={token}\n")
+            temp_path = Path(f.name)
+        try:
+            findings = scan_file(temp_path)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0][1], "npm_token")
+        finally:
+            temp_path.unlink()
+
+    def test_dockerhub_token_detected(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            token = "dckr_pat_" + "abcdef0123456789abcdef"
+            f.write(f"DOCKER_PAT={token}\n")
+            temp_path = Path(f.name)
+        try:
+            findings = scan_file(temp_path)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0][1], "dockerhub_token")
+        finally:
+            temp_path.unlink()
+
     def test_allowlist_matching(self) -> None:
         self.assertTrue(is_allowed(Path(".env.example")))
         self.assertFalse(is_allowed(Path("tests/test_run_model_command.py")))

@@ -75,6 +75,22 @@ class TestCheckNpmAudit(unittest.TestCase):
         }
         self.assertEqual(audit_dependencies(payload), 1)
 
+    def test_audit_dependencies_cve_advisory_in_baseline_succeeds(self) -> None:
+        payload = {
+            "vulnerabilities": {
+                "cve-approved-pkg": {
+                    "via": [
+                        {
+                            "url": "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-1234",
+                            "title": "Approved CVE Flaw",
+                            "cve": "CVE-2026-1234",
+                        }
+                    ]
+                },
+            },
+        }
+        self.assertEqual(audit_dependencies(payload, baseline={"cve-2026-1234"}), 0)
+
     def test_audit_dependencies_non_dict_non_str_via_fails(self) -> None:
         payload = {
             "vulnerabilities": {
