@@ -696,7 +696,9 @@ backwards-compatible bug fixes and chores. Incrementing `MAJOR` requires active 
 and input. Creating repository releases is human-only; AI agents must never create or publish
 releases. AI agents are required to bump the version in `package.json` and document changes
 in `CHANGELOG.md` following Keep a Changelog conventions. The changelog is generally intended
-to be maintained by LLM agents only, but human contributors may add changes.
+to be maintained by LLM agents only, but human contributors may add changes. When encountering
+unrecorded repository changes, present them to an active human for approval with the
+appropriate SemVer classification before including them in the next changelog update.
 
 Format commit subjects as `type: description`. Use an imperative verb, keep the subject to
 50 characters or fewer, and omit the trailing period. Wrap commit bodies at 72 characters.
