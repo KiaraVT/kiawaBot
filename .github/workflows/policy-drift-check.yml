@@ -1,3 +1,5 @@
+# Scheduled weekly check for upstream policy drift.
+# Failures trigger GitHub Actions default notifications to repository maintainers.
 name: policy-drift-check
 
 on:

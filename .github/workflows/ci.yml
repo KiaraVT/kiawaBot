@@ -36,6 +36,7 @@ jobs:
           cache: "npm"
 
       - name: Validate JavaScript syntax
+        # Dynamically validate syntax across tracked Node.js source files
         run: |
           git ls-files -z "*.js" | xargs -0 -n 1 node --check
 
@@ -48,8 +49,8 @@ jobs:
       - name: Run Node.js unit tests
         run: npm test
 
-      # Non-blocking advisory audit gate per repository policy
-      - name: Audit npm dependencies
+      # Advisory audit check documented in README.md; triaged via Dependabot
+      - name: Advisory npm audit check
         continue-on-error: true
         run: npm audit --audit-level=high
 

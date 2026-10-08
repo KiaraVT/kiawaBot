@@ -31,3 +31,9 @@ ___________
 THINGS TO TEST
 -Do channel bands work?
 -do global unicode emotes that you can put in twitch work?
+
+
+CI POLICY
+_________
+- Dependency Security Audits: `npm audit` runs as an advisory check (`continue-on-error: true`) in CI rather than a blocking build gate. Legacy runtime dependencies carry upstream vulnerability disclosures that require coordinated framework migrations; vulnerability updates are monitored and triaged continuously via Dependabot.
+

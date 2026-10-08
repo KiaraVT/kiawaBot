@@ -4,8 +4,8 @@ import IncentiveHelper from "../../IncentiveHelper.js";
 
 test("IncentiveHelper - defaults and path navigation", () => {
     const helper = new IncentiveHelper();
-    // Test in-memory path navigation directly to avoid reading/writing
-    // to the persistent host filesystem path (./data/incentives.json).
+    // Test path navigation via public data property in memory to isolate unit test
+    // without reading or writing to persistent host storage at ./data/incentives.json.
     helper.data = {
         incentive: {
             command: "!update",

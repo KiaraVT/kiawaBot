@@ -5,6 +5,7 @@ import { castIdToNumber, castIdToString } from "../../QuoteHelper.js";
 test("QuoteHelper - castIdToNumber parses valid positive integers", () => {
     assert.equal(castIdToNumber("42"), 42);
     assert.equal(castIdToNumber(42), 42);
+    // castIdToNumber uses Math.round to round decimal inputs to nearest integer ID
     assert.equal(castIdToNumber("42.4"), 42);
     assert.equal(castIdToNumber("42.6"), 43);
 });
