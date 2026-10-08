@@ -22,7 +22,12 @@ import jsonfile from "jsonfile";
  * @typedef { [QuoteCounter, ...Quote[]] } Quotes
  */
 
-/** @returns { number } */
+/**
+ * Convert input ID to a rounded positive integer, or 0 if invalid.
+ * @param {string|number} id
+ * @param {boolean} [logWarning=false]
+ * @returns { number }
+ */
 export function castIdToNumber(id, logWarning = false) {
     try {
         const number = Math.round(Number(id));

@@ -64,7 +64,7 @@ runs:
               const matchesMarker = markers.some((marker) => lowerBody.includes(marker));
               if (comment.user?.login === 'github-actions[bot]' && matchesMarker) {
                 matchedAny = true;
-                if (!body.includes('Policy Reference:')) {
+                if (!lowerBody.includes('policy reference:')) {
                   await github.rest.issues.updateComment({
                     ...context.repo,
                     comment_id: comment.id,

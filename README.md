@@ -31,3 +31,9 @@ ___________
 THINGS TO TEST
 -Do channel bands work?
 -do global unicode emotes that you can put in twitch work?
+
+
+CI POLICY
+_________
+- Dependency Security Audits: `scripts/check_npm_audit.py` inspects `npm audit` findings in CI. It grandfathers known legacy runtime advisories as warnings while blocking any new or regressing vulnerable packages; vulnerability upgrades are actively triaged via Dependabot.
+
