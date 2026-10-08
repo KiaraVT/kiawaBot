@@ -106,6 +106,10 @@ class TestCheckPolicyDrift(unittest.TestCase):
             validate_policy_url("https://attacker.com/abuzucom/euler/main/QUALITY.md", "Euler")
         with self.assertRaises(ValueError):
             validate_policy_url("https://raw.githubusercontent.com/malicious/euler/main/QUALITY.md", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://raw.githubusercontent.com/abuzucom_attacker/euler/main/QUALITY.md", "Euler")
+        with self.assertRaises(ValueError):
+            validate_policy_url("https://raw.githubusercontent.com/abuzucom/", "Euler")
 
 
 if __name__ == "__main__":

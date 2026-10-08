@@ -83,6 +83,7 @@ def run_audit() -> dict:
             capture_output=True,
             text=True,
             check=False,
+            timeout=300,
         )
         return json.loads(result.stdout)
     except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:

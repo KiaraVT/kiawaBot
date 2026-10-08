@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
+from unittest.mock import MagicMock, patch
 
-from scripts.check_npm_audit import audit_dependencies
+from scripts.check_npm_audit import audit_dependencies, main, run_audit
 
 
 class TestCheckNpmAudit(unittest.TestCase):
@@ -51,6 +53,25 @@ class TestCheckNpmAudit(unittest.TestCase):
             },
         }
         self.assertEqual(audit_dependencies(payload), 0)
+
+    def test_run_audit_success(self) -> None:
+        mock_result = MagicMock()
+        mock_result.stdout = '{"vulnerabilities": {}}'
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            data = run_audit()
+            self.assertEqual(data, {"vulnerabilities": {}})
+            mock_run.assert_called_once()
+            _, kwargs = mock_run.call_args
+            self.assertEqual(kwargs.get("timeout"), 300)
+
+    def test_run_audit_timeout_raises(self) -> None:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["npm", "audit"], timeout=300)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_audit()
+
+    def test_main_handles_subprocess_error(self) -> None:
+        with patch("scripts.check_npm_audit.run_audit", side_effect=subprocess.SubprocessError("Failed")):
+            self.assertEqual(main(), 1)
 
 
 if __name__ == "__main__":
