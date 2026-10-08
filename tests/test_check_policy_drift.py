@@ -153,8 +153,14 @@ class TestCheckPolicyDrift(unittest.TestCase):
         from scripts.check_policy_drift import get_policy_config
         with patch.dict("os.environ", {}, clear=True):
             euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
-            self.assertEqual(euler_url, "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md")
-            self.assertEqual(foucault_url, "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md")
+            self.assertEqual(
+                euler_url,
+                "https://raw.githubusercontent.com/abuzucom/euler/fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08/QUALITY.md",
+            )
+            self.assertEqual(
+                foucault_url,
+                "https://raw.githubusercontent.com/abuzucom/foucault/f59866d6e3ff71affa8404117877b58b8d79eea2/AUDIT.md",
+            )
             self.assertEqual(retries, 3)
             self.assertEqual(backoff, 1.0)
             self.assertEqual(timeout, 30.0)

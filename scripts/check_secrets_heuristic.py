@@ -31,10 +31,7 @@ ALLOWLIST_PATHS = {
 
 
 def is_allowed(path: Path) -> bool:
-    for allowed in ALLOWLIST_PATHS:
-        if path == allowed or allowed in path.parents:
-            return True
-    return False
+    return path in ALLOWLIST_PATHS
 
 
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion in CI

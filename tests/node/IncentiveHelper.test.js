@@ -11,7 +11,8 @@ test("IncentiveHelper - loadData, update, read, has, and file persistence", () =
     let helper = null;
 
     try {
-        helper = new IncentiveHelper(tempFilePath);
+        helper = new IncentiveHelper();
+        helper.dataPath = tempFilePath;
         helper.loadData();
 
         // Verifies default initialized data via public methods
@@ -27,7 +28,8 @@ test("IncentiveHelper - loadData, update, read, has, and file persistence", () =
 
         // Verifies synchronous save and reloading from persistent storage
         assert.equal(helper.saveData(), true);
-        const reloadedHelper = new IncentiveHelper(tempFilePath);
+        const reloadedHelper = new IncentiveHelper();
+        reloadedHelper.dataPath = tempFilePath;
         reloadedHelper.loadData();
         assert.equal(reloadedHelper.read("incentive.amount"), 100);
     } finally {
