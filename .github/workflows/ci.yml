@@ -47,15 +47,15 @@ jobs:
       - name: Validate JavaScript syntax
         # Dynamically validate syntax across tracked Node.js source files without early abort
         run: |
-          errors=0
+          failed_files=0
           while IFS= read -r -d '' file; do
             if ! node --check "$file"; then
               echo "::error file=$file::JavaScript syntax check failed for $file"
-              errors=$((errors + 1))
+              failed_files=$((failed_files + 1))
             fi
           done < <(git ls-files -z -- '*.js')
-          if [ "$errors" -ne 0 ]; then
-            echo "::error::Total JavaScript syntax errors encountered: $errors"
+          if [ "$failed_files" -ne 0 ]; then
+            echo "::error::Total files with JavaScript syntax errors: $failed_files"
             exit 1
           fi
 
