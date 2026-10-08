@@ -16,13 +16,13 @@ KiaraBot is built on Node.js 22 (ESM) and consists of four primary components:
             +------------------+------------------+
             |                                     |
             v                                     v
-+-----------------------+             +-----------------------+
-|  Kiara_bot.js (Core)  |             |  webserver/server.js  |
-| - Twitch IRC (tmi.js) |             | - Express 5.2.1 REST  |
-| - YouTube API Polling |             | - Web Dashboard Views |
-| - WebSocket Broadcaster             | - OBS Overlay Host    |
-| - Quote / Goal State  |             | - Healthcheck (/health|
-+-----------+-----------+             +-----------+-----------+
++-------------------------------------+             +-----------------------+
+|         Kiara_bot.js (Core)         |             |  webserver/server.js  |
+| - Twitch EventSub & Helix API       |             | - Express 5.2.1 REST  |
+| - YouTube API Polling               |             | - Web Dashboard Views |
+| - WebSocket Broadcaster             |             | - OBS Overlay Host    |
+| - Quote / Goal State                |             | - Healthcheck (/health|
++------------------+------------------+             +-----------+-----------+
             |                                     |
             |            WebSocket Feed           |
             +------------------------------------>+
@@ -42,7 +42,7 @@ Coordinates the application services as managed child processes:
 
 ### 2. Bot Core (`Kiara_bot.js`)
 Handles stream platform integration and chat interactivity:
-- **Twitch IRC**: Connects via `tmi.js` to process incoming chat messages and dispatch bot responses.
+- **Twitch EventSub WebSocket & Helix API**: Ingests chat messages (`channel.chat.message`) and event subscriptions via EventSub WebSocket (`tesjs`) and dispatches bot responses via Twitch Helix REST API (`POST /helix/chat/messages`).
 - **Twitch OAuth Lifecycle**: Manages access tokens and automatic refresh routines with `AuthDataHelper.js`.
 - **YouTube Data API**: Polls live broadcast status and stream metrics.
 - **Overlay Broadcast**: Runs a WebSocket server (`ws`) broadcasting formatted messages, emotes, and badge metadata to connected overlay clients.
@@ -144,7 +144,6 @@ To display the chat widget in OBS Studio:
    |---|---|
    | `CLIENT_ID` | Twitch Developer Application Client ID |
    | `CLIENT_SECRET` | Twitch Developer Application Client Secret |
-   | `IRC_OAUTH` | Bot account Twitch IRC OAuth token (`oauth:...`) |
    | `BOT_NAME` | Twitch username of the bot account |
    | `BOT_ID` | Twitch user ID of the bot account |
    | `BROADCASTER_NAME` | Twitch channel name where the bot operates |

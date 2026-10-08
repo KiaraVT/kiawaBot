@@ -18,7 +18,6 @@ import { spawn } from "child_process"
 //Include line reading module
 import fs from "fs"
 import crypto from "crypto"
-//const { getFileCache } = require("./FileCacheService");
 
 // Ensure data directory exists
 const dataDir = './data';
@@ -830,10 +829,10 @@ class TesManager {
                         }
                     }
 
-                    // if replacementSub exists (by definition in a good "enabled" state), put it in the cache
-                    if (replacementSub) {
-                        console.log(`Repairing EventSub subscriptions: replacing, ${type} ${otherSub.status} ${existingSub.created_at} ${existingSub.id}`);
-                        this.#subscriptionByType[type] = replacementSub;
+                    // if potentialReplacementSub exists (by definition in a good "enabled" state), put it in the cache
+                    if (potentialReplacementSub) {
+                        console.log(`Repairing EventSub subscriptions: replacing, ${type} ${potentialReplacementSub.status} ${potentialReplacementSub.created_at} ${potentialReplacementSub.id}`);
+                        this.#subscriptionByType[type] = potentialReplacementSub;
                     }
 
                     // last thing - if we didn't wind up with a subscription in the cache of this type, try and make an entirely new one.
@@ -1074,9 +1073,11 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
                         }
                     }
                 }
-                say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                if (userInfo.Best_Streak < userInfo.Streak) {
-                    userInfo.Best_Streak = userInfo.Streak
+                else {
+                    say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
+                    if (userInfo.Best_Streak < userInfo.Streak) {
+                        userInfo.Best_Streak = userInfo.Streak
+                    }
                 }
             }
             //check if 5 hours since last stream or for the reset time
@@ -1250,11 +1251,6 @@ function getStreamInfo(broadcaster_id, type, first) {
             return;
         }
         //if file is empty then initialize it
-        let currentStart = new Date(data.data[0].started_at);
-        let currentStartISO=currentStart;
-        let sanityCheck= new Date(streak_List.Current_Stream.Start);
-        currentStart=Date.parse(currentStart);
-        sanityCheck=Date.parse(sanityCheck);
         if (!streak_List) {
             console.log("No File, Creating New File");
             let lastStart = data.data[0].started_at;
@@ -1262,56 +1258,61 @@ function getStreamInfo(broadcaster_id, type, first) {
             const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
             writeAtomicSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
         }
-        else if((currentStart - sanityCheck) < 5*60*60*1000){
-            console.log('Bot Restarted, do not update times')
-        }
-        //if file is not empty, update stream info
         else {
-            console.log("Updating Current Stream Date");
-            console.log(data.data[0].started_at);
-            let lastStart = new Date(streak_List.Last_Stream.Start);
-            lastStart = Date.parse(lastStart);
-            let lastEnd = new Date(streak_List.Last_Stream.End);
-            let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
-            let savedStart=new Date(streak_List.Current_Stream.Start);
-            lastEnd = Date.parse(lastEnd);
-            backupEnd=Date.parse(backupEnd);
-            console.log(currentStart - backupEnd)
-            //update stream times
-            //the end of stream was not detected last time, reset the end to a blank value
-            if (!lastEnd) {
-                console.log('End time was null');
+            let currentStart = new Date(data.data[0].started_at);
+            let currentStartISO = currentStart;
+            let sanityCheck = new Date(streak_List.Current_Stream.Start);
+            currentStart = Date.parse(currentStart);
+            sanityCheck = Date.parse(sanityCheck);
+            if ((currentStart - sanityCheck) < 5*60*60*1000) {
+                console.log('Bot Restarted, do not update times')
+            }
+            //if file is not empty, update stream info
+            else {
+                console.log("Updating Current Stream Date");
+                console.log(data.data[0].started_at);
+                let lastStart = new Date(streak_List.Last_Stream.Start);
+                lastStart = Date.parse(lastStart);
+                let lastEnd = new Date(streak_List.Last_Stream.End);
+                let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
+                let savedStart=new Date(streak_List.Current_Stream.Start);
+                lastEnd = Date.parse(lastEnd);
+                backupEnd=Date.parse(backupEnd);
+                console.log(currentStart - backupEnd)
+                //update stream times
+                //the end of stream was not detected last time, reset the end to a blank value
+                if (!lastEnd) {
+                    console.log('End time was null');
                     streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
                     streak_List.Current_Stream.Start = currentStartISO;
                     writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
 
-            }
-            
-            else if ((currentStart - backupEnd) < 5*60*60*1000) {
+                }
+                
+                else if ((currentStart - backupEnd) < 5*60*60*1000) {
                     //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
                     console.log('Stream Started shortly after last stream, do not update times')
+                }
+                else if (backupEnd < lastStart) {
+                    console.log('stream end detection did not work last stream');
+                    streak_List.Last_Stream.End = "";
+                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                    streak_List.Current_Stream.Start = currentStartISO;
+                    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+                }
+                //all is good, do standard procedure
+                else {
+                    console.log('all is good on stream online check')
+                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
+                    streak_List.Current_Stream.Start = currentStartISO;
+                    streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
+                    Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
+                    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
+                }
+                console.log(lastStart);
+                console.log(lastEnd);
+                console.log(currentStart);
             }
-            else if (backupEnd < lastStart) {
-                console.log('stream end detection did not work last stream');
-                streak_List.Last_Stream.End = "";
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStartISO;
-                writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-            }
-            //all is good, do standard procedure
-
-
-            else {
-                console.log('all is good on stream online check')
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStartISO;
-                streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
-                Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
-                writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-            }
-            console.log(lastStart);
-            console.log(lastEnd);
-            console.log(currentStart);
         }
             })
 
