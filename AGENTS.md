@@ -694,11 +694,12 @@ Follow Semantic Versioning 2.0.0 (`https://semver.org/`) (`MAJOR.MINOR.PATCH`). 
 `MAJOR` for breaking changes, `MINOR` for backwards-compatible additions, and `PATCH` for
 backwards-compatible bug fixes and chores. Incrementing `MAJOR` requires active human approval
 and input. Creating repository releases is human-only; AI agents must never create or publish
-releases. AI agents are required to bump the version in `package.json` and document changes
-in `CHANGELOG.md` following Keep a Changelog conventions. The changelog is generally intended
-to be maintained by LLM agents only, but human contributors may add changes. When encountering
+releases. During development, AI agents must document changes under `## [Unreleased]` in
+`CHANGELOG.md` following Keep a Changelog conventions; `package.json` is bumped only when
+cutting a release under human authorization. The changelog is generally intended to be
+maintained by LLM agents only, but human contributors may add changes. When encountering
 unrecorded repository changes, present them to an active human for approval with the
-appropriate SemVer classification before including them in the next changelog update.
+appropriate SemVer classification before including them in `## [Unreleased]`.
 
 Format commit subjects as `type: description`. Use an imperative verb, keep the subject to
 50 characters or fewer, and omit the trailing period. Wrap commit bodies at 72 characters.
