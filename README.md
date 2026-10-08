@@ -214,11 +214,3 @@ python scripts/check_npm_audit.py
 python scripts/check_secrets_heuristic.py
 ```
 
----
-
-## Repository Policies
-
-Development on this repository is governed by the rules outlined in [`AGENTS.md`](./AGENTS.md):
-- All dependencies must be pinned to exact versions (no `^` or `~`).
-- Public API backwards compatibility must be preserved across helper classes and HTTP routes.
-- Commits and pull requests must follow standard branch naming (`feat/`, `fix/`, `chore/`, `docs/`, `test/`) and include mandatory co-authorship trailers without email addresses.
