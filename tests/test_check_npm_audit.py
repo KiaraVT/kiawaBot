@@ -4,7 +4,12 @@ import subprocess
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scripts.check_npm_audit import audit_dependencies, main, run_audit
+from scripts.check_npm_audit import (
+    DEFAULT_AUDIT_TIMEOUT_SECONDS,
+    audit_dependencies,
+    main,
+    run_audit,
+)
 
 
 class TestCheckNpmAudit(unittest.TestCase):
@@ -62,10 +67,10 @@ class TestCheckNpmAudit(unittest.TestCase):
             self.assertEqual(data, {"vulnerabilities": {}})
             mock_run.assert_called_once()
             _, kwargs = mock_run.call_args
-            self.assertEqual(kwargs.get("timeout"), 300)
+            self.assertEqual(kwargs.get("timeout"), DEFAULT_AUDIT_TIMEOUT_SECONDS)
 
     def test_run_audit_timeout_raises(self) -> None:
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["npm", "audit"], timeout=300)):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["npm", "audit"], timeout=DEFAULT_AUDIT_TIMEOUT_SECONDS)):
             with self.assertRaises(subprocess.TimeoutExpired):
                 run_audit()
 

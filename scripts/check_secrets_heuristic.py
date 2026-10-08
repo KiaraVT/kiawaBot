@@ -72,21 +72,26 @@ def get_tracked_files() -> list[Path]:
 
 def main() -> int:
     tracked = get_tracked_files()
-    total_findings = 0
+    secret_findings = 0
+    io_errors = 0
     for path in tracked:
         if is_allowed(path):
             continue
         findings = scan_file(path)
         for line_num, rule_name, sample in findings:
             if rule_name == "unreadable_file":
-                print(f"::error file={path},line={line_num}::Failed to read file: {sample}")
+                print(f"::error file={path},line={line_num}::Failed to read file: {sample}", file=sys.stderr)
+                io_errors += 1
             else:
                 print(f"::error file={path},line={line_num}::Secret pattern matched ({rule_name})")
-            total_findings += 1
+                secret_findings += 1
 
-    if total_findings > 0:
-        print(f"FAILED: Found {total_findings} potential secret(s) in repository", file=sys.stderr)
+    if secret_findings > 0:
+        print(f"FAILED: Found {secret_findings} potential secret(s) in repository", file=sys.stderr)
         return 1
+    if io_errors > 0:
+        print(f"FAILED: Encountered {io_errors} unreadable file(s) during scan", file=sys.stderr)
+        return 2
     print("SUCCESS: No secrets detected in tracked files")
     return 0
 

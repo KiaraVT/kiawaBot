@@ -73,9 +73,10 @@ RAW_BASELINE_ADVISORIES = [
     "GHSA-xx6v-rp6x-q39c",
 ]
 KNOWN_BASELINE_ADVISORIES = {a.lower() for a in RAW_BASELINE_ADVISORIES}
+DEFAULT_AUDIT_TIMEOUT_SECONDS = 300
 
 
-def run_audit() -> dict:
+def run_audit(timeout: int = DEFAULT_AUDIT_TIMEOUT_SECONDS) -> dict:
     npm_path = shutil.which("npm") or "npm"
     try:
         result = subprocess.run(
@@ -83,7 +84,7 @@ def run_audit() -> dict:
             capture_output=True,
             text=True,
             check=False,
-            timeout=300,
+            timeout=timeout,
         )
         return json.loads(result.stdout)
     except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:

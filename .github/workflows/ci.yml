@@ -49,6 +49,9 @@ jobs:
         run: |
           git ls-files -z "*.js" | xargs -0 -r -n 1 node --check
 
+      - name: Audit npm dependencies
+        run: python scripts/check_npm_audit.py
+
       - name: Install Node.js dependencies
         run: npm ci
 
@@ -57,9 +60,6 @@ jobs:
 
       - name: Run Node.js unit tests
         run: npm test
-
-      - name: Audit npm dependencies
-        run: python scripts/check_npm_audit.py
 
       - name: Run Python unit tests
         run: python -m unittest discover tests

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.check_secrets_heuristic import is_allowed, scan_file
+from scripts.check_secrets_heuristic import MAX_FILE_BYTES, is_allowed, main, scan_file
 
 
 class TestCheckSecretsHeuristic(unittest.TestCase):
@@ -65,10 +65,30 @@ class TestCheckSecretsHeuristic(unittest.TestCase):
     def test_oversized_file_skipped(self) -> None:
         from unittest.mock import MagicMock, patch
         mock_stat = MagicMock()
-        mock_stat.st_size = 20 * 1024 * 1024
+        mock_stat.st_size = MAX_FILE_BYTES + 1024
         with patch.object(Path, "stat", return_value=mock_stat):
             findings = scan_file(Path("some_large_file.bin"))
             self.assertEqual(findings, [])
+
+    def test_main_clean_returns_zero(self) -> None:
+        from unittest.mock import patch
+        with patch("scripts.check_secrets_heuristic.get_tracked_files", return_value=[Path("clean.js")]):
+            with patch("scripts.check_secrets_heuristic.scan_file", return_value=[]):
+                self.assertEqual(main(), 0)
+
+    def test_main_secret_detected_returns_one(self) -> None:
+        from unittest.mock import patch
+        secret_finding = [(10, "generic_secret_assignment", "token = 123")]
+        with patch("scripts.check_secrets_heuristic.get_tracked_files", return_value=[Path("leak.js")]):
+            with patch("scripts.check_secrets_heuristic.scan_file", return_value=secret_finding):
+                self.assertEqual(main(), 1)
+
+    def test_main_io_error_returns_two(self) -> None:
+        from unittest.mock import patch
+        io_finding = [(1, "unreadable_file", "Permission denied")]
+        with patch("scripts.check_secrets_heuristic.get_tracked_files", return_value=[Path("unreadable.js")]):
+            with patch("scripts.check_secrets_heuristic.scan_file", return_value=io_finding):
+                self.assertEqual(main(), 2)
 
 
 if __name__ == "__main__":

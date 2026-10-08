@@ -1,7 +1,7 @@
 export default [
     {
         languageOptions: {
-            ecmaVersion: "latest",
+            ecmaVersion: 2024,
             sourceType: "module",
             globals: {
                 console: "readonly",
