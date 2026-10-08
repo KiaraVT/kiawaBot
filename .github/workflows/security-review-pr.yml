@@ -184,3 +184,37 @@ jobs:
                 summary: 'Fork pull requests receive no provider secret.',
               },
             });
+
+  annotate:
+    needs: [resolve-pr, review]
+    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Annotate review comment with policy document link
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+        with:
+          script: |
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number,
+              per_page: 100,
+            });
+            const docUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/main/docs/pr-security-review.md`;
+            const header = `> **Policy Reference:** Security review findings are evaluated against [docs/pr-security-review.md](${docUrl}).\n\n`;
+            for (const comment of comments.reverse()) {
+              if (comment.user?.login === 'github-actions[bot]' && comment.body?.includes('Security review metadata')) {
+                if (!comment.body.includes('Policy Reference:')) {
+                  await github.rest.issues.updateComment({
+                    ...context.repo,
+                    comment_id: comment.id,
+                    body: `${header}${comment.body}`,
+                  });
+                }
+                break;
+              }
+            }
