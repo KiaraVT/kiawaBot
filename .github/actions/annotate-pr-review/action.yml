@@ -30,7 +30,10 @@ runs:
           const issue_number = Number(process.env.INPUT_PR_NUMBER);
           const docPath = process.env.INPUT_DOC_PATH;
           const policyName = process.env.INPUT_POLICY_NAME;
-          const markers = process.env.INPUT_MARKERS.split(',').map((s) => s.trim()).filter(Boolean);
+          const markers = process.env.INPUT_MARKERS
+            .split(',')
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
 
           try {
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -39,14 +42,28 @@ runs:
               per_page: 100,
             });
 
-            const defaultBranch = context.payload.repository?.default_branch || 'main';
+            let defaultBranch = context.payload.repository?.default_branch;
+            if (!defaultBranch) {
+              const repoData = await github.rest.repos.get({
+                ...context.repo,
+              });
+              defaultBranch = repoData.data?.default_branch;
+            }
+            if (!defaultBranch) {
+              core.warning(`Default branch unresolved for ${context.repo.owner}/${context.repo.repo}`);
+              return;
+            }
+
             const docUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/${docPath}`;
             const header = `> **Policy Reference:** ${policyName} findings are evaluated against [${docPath}](${docUrl}).\n\n`;
 
-            for (const comment of comments.reverse()) {
+            let matchedAny = false;
+            for (const comment of comments) {
               const body = comment.body || '';
-              const matchesMarker = markers.some((marker) => body.includes(marker));
+              const lowerBody = body.toLowerCase();
+              const matchesMarker = markers.some((marker) => lowerBody.includes(marker));
               if (comment.user?.login === 'github-actions[bot]' && matchesMarker) {
+                matchedAny = true;
                 if (!body.includes('Policy Reference:')) {
                   await github.rest.issues.updateComment({
                     ...context.repo,
@@ -57,10 +74,12 @@ runs:
                 } else {
                   core.info(`Comment ${comment.id} already carries Policy Reference`);
                 }
-                return;
               }
             }
-            core.warning(`No matching ${policyName} review comment found to annotate`);
+
+            if (!matchedAny) {
+              core.warning(`No matching ${policyName} review comment found to annotate`);
+            }
           } catch (error) {
             core.warning(`Failed to annotate ${policyName} review comment: ${error.message}`);
           }

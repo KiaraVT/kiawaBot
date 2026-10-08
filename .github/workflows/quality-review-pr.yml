@@ -45,9 +45,10 @@ jobs:
               return;
             }
             const pull = matches[0];
+            const isSameRepo = Boolean(pull.head.repo) &&
+              pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
             core.setOutput('found', 'true');
-            const sameRepo = Boolean(pull.head.repo) && pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
-            core.setOutput('same_repo', String(sameRepo));
+            core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);

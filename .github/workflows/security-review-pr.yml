@@ -22,7 +22,6 @@ jobs:
     outputs:
       found: ${{ steps.resolve.outputs.found }}
       same_repo: ${{ steps.resolve.outputs.same_repo }}
-      same_repository: ${{ steps.resolve.outputs.same_repository }}
       already_reviewed: ${{ steps.resolve.outputs.already_reviewed }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
@@ -40,7 +39,6 @@ jobs:
             if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
-              core.setOutput("same_repository", "false");
               core.setFailed("workflow run head SHA is invalid");
               return;
             }
@@ -63,7 +61,6 @@ jobs:
             if (candidates.length !== 1) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
-              core.setOutput("same_repository", "false");
               core.setFailed(
                 `expected one pull request for workflow run head, found ${candidates.length}`,
               );
@@ -75,7 +72,6 @@ jobs:
             if (!headRepository?.full_name || !headRepository.clone_url) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
-              core.setOutput("same_repository", "false");
               core.setFailed("pull request head repository metadata is unavailable");
               return;
             }
@@ -148,7 +144,6 @@ jobs:
                 : "false";
             core.setOutput("found", "true");
             core.setOutput("same_repo", sameRepo);
-            core.setOutput("same_repository", sameRepo);
             core.setOutput("pr_number", String(pullRequest.number));
             core.setOutput("base_sha", pullRequest.base.sha);
             core.setOutput("head_sha", pullRequest.head.sha);
@@ -157,7 +152,7 @@ jobs:
 
   review:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f59866d6e3ff71affa8404117877b58b8d79eea2
     with:
       audit_ref: "f59866d6e3ff71affa8404117877b58b8d79eea2"
@@ -174,7 +169,7 @@ jobs:
 
   fork-review-skipped:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repository == 'false'
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -199,7 +194,7 @@ jobs:
 
   annotate:
     needs: [resolve-pr, review]
-    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && (needs.resolve-pr.outputs.same_repo == 'true' || needs.resolve-pr.outputs.same_repository == 'true')
+    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && needs.resolve-pr.outputs.same_repo == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
