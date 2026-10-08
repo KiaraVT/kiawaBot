@@ -22,6 +22,7 @@ jobs:
     outputs:
       found: ${{ steps.resolve.outputs.found }}
       same_repo: ${{ steps.resolve.outputs.same_repo }}
+      safe_to_review: ${{ steps.resolve.outputs.safe_to_review }}
       already_reviewed: ${{ steps.resolve.outputs.already_reviewed }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
@@ -39,6 +40,7 @@ jobs:
             if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
+              core.setOutput("safe_to_review", "false");
               core.setFailed("workflow run head SHA is invalid");
               return;
             }
@@ -61,6 +63,7 @@ jobs:
             if (candidates.length !== 1) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
+              core.setOutput("safe_to_review", "false");
               core.setFailed(
                 `expected one pull request for workflow run head, found ${candidates.length}`,
               );
@@ -72,6 +75,7 @@ jobs:
             if (!headRepository?.full_name || !headRepository.clone_url) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
+              core.setOutput("safe_to_review", "false");
               core.setFailed("pull request head repository metadata is unavailable");
               return;
             }
@@ -142,8 +146,22 @@ jobs:
               headRepository.full_name.toLowerCase() === baseRepository.toLowerCase()
                 ? "true"
                 : "false";
+            let safeToReview = false;
+            try {
+              const { data: prData } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pullRequest.number,
+              });
+              const labels = (prData.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+              safeToReview = labels.includes("safe-to-review");
+            } catch (err) {
+              const labels = (pullRequest.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+              safeToReview = labels.includes("safe-to-review");
+            }
             core.setOutput("found", "true");
             core.setOutput("same_repo", sameRepo);
+            core.setOutput("safe_to_review", safeToReview ? "true" : "false");
             core.setOutput("pr_number", String(pullRequest.number));
             core.setOutput("base_sha", pullRequest.base.sha);
             core.setOutput("head_sha", pullRequest.head.sha);
@@ -167,9 +185,27 @@ jobs:
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
+  review-fork:
+    needs: resolve-pr
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    environment: fork-review
+    uses: abuzucom/foucault/.github/workflows/security-review.yml@f59866d6e3ff71affa8404117877b58b8d79eea2
+    with:
+      audit_ref: "f59866d6e3ff71affa8404117877b58b8d79eea2"
+      model_call_command: "python3 ci/call_model.py"
+      pr_comment: true
+      fail_on_block: true
+      pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
+      base_sha: ${{ needs.resolve-pr.outputs.base_sha }}
+      head_sha: ${{ needs.resolve-pr.outputs.head_sha }}
+      head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
+      head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
   fork-review-skipped:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false'
+    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review != 'true'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -188,13 +224,13 @@ jobs:
               conclusion: 'skipped',
               output: {
                 title: 'Skipped for fork pull request',
-                summary: 'Fork pull requests receive no provider secret.',
+                summary: 'Fork pull requests require the safe-to-review label and maintainer environment approval.',
               },
             });
 
   annotate:
-    needs: [resolve-pr, review]
-    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && needs.resolve-pr.outputs.same_repo == 'true'
+    needs: [resolve-pr, review, review-fork]
+    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && (needs.review.result == 'success' || needs.review-fork.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read

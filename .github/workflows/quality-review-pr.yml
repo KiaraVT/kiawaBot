@@ -3,7 +3,7 @@ name: quality-review-pr
 
 # Runs the euler quality review on pull requests. The workflow_run trigger runs
 # default-branch code after ci completes. Pull request files stay review data.
-# Fork pull requests receive an explicit skip result and no secret.
+# Fork pull requests require the safe-to-review label and fork-review environment approval.
 
 "on":
   workflow_run:
@@ -27,6 +27,7 @@ jobs:
     outputs:
       found: ${{ steps.pr.outputs.found }}
       same_repo: ${{ steps.pr.outputs.same_repo }}
+      safe_to_review: ${{ steps.pr.outputs.safe_to_review }}
       number: ${{ steps.pr.outputs.number }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
@@ -46,13 +47,17 @@ jobs:
             if (matches.length !== 1) {
               core.setOutput('found', 'false');
               core.setOutput('same_repo', 'false');
+              core.setOutput('safe_to_review', 'false');
               return;
             }
             const pull = matches[0];
             const isSameRepo = Boolean(pull.head.repo) &&
               pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
+            const labels = (pull.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+            const safeToReview = labels.includes('safe-to-review');
             core.setOutput('found', 'true');
             core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
+            core.setOutput('safe_to_review', safeToReview ? 'true' : 'false');
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);
@@ -78,9 +83,29 @@ jobs:
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
+  review-fork:
+    needs: resolve
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true' && needs.resolve.outputs.safe_to_review == 'true'
+    environment: fork-review
+    uses: abuzucom/euler/.github/workflows/quality-review.yml@fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      pr_title: ${{ needs.resolve.outputs.title }}
+      pr_body: ${{ needs.resolve.outputs.body }}
+      quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+      fail_on_block: true
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
   fork-skip:
     needs: resolve
-    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true'
+    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true' && needs.resolve.outputs.safe_to_review != 'true'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -99,13 +124,13 @@ jobs:
               conclusion: 'skipped',
               output: {
                 title: 'Skipped for fork pull request',
-                summary: 'Fork pull requests receive no provider secret.',
+                summary: 'Fork pull requests require the safe-to-review label and maintainer environment approval.',
               },
             });
 
   annotate:
-    needs: [resolve, review]
-    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'true'
+    needs: [resolve, review, review-fork]
+    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.found == 'true' && (needs.review.result == 'success' || needs.review-fork.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read

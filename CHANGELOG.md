@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Fork pull request support for Euler quality review and Foucault security review gated by the `safe-to-review` label and `fork-review` GitHub environment approval.
+
+### Changed
+- Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`.
+
 ## [2.3.0] - 2026-10-08
 
 ### Added
