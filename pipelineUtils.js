@@ -36,11 +36,14 @@ export function createSingleFlightMutex() {
  * @param {(err: any) => boolean} [options.isTransient]
  * @param {(err: any, attempt: number, delayMs: number) => void} [options.onRetry]
  * @param {number} [options.baseDelayMs=1000]
+ * @param {number} [options.maxDelayMs=10000]
+ * @param {boolean} [options.jitter=true]
  * @returns {Promise<any>}
  */
 export async function executeWithBackoff(operation, options = {}) {
     const maxRetries = options.maxRetries ?? 3;
     const baseDelayMs = options.baseDelayMs ?? 1000;
+    const maxDelayMs = options.maxDelayMs ?? 10000;
     const isTransient = options.isTransient ?? ((err) => {
         const status = err?.response?.status;
         return !err?.response || [429, 500, 502, 503, 504].includes(status);
@@ -54,7 +57,9 @@ export async function executeWithBackoff(operation, options = {}) {
         } catch (error) {
             if (attempt < maxRetries && isTransient(error)) {
                 attempt += 1;
-                const delayMs = Math.pow(2, attempt) * baseDelayMs;
+                const rawDelay = Math.min(Math.pow(2, attempt) * baseDelayMs, maxDelayMs);
+                const jitterFactor = options.jitter === false ? 1 : (0.8 + Math.random() * 0.4);
+                const delayMs = Math.round(rawDelay * jitterFactor);
                 onRetry(error, attempt, delayMs);
                 await new Promise(resolve => setTimeout(resolve, delayMs));
                 continue;
@@ -63,6 +68,7 @@ export async function executeWithBackoff(operation, options = {}) {
         }
     }
 }
+
 
 /**
  * Update streaks safely upon stream start.

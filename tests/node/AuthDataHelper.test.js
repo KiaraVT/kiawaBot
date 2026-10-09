@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import AuthDataHelper from "../../AuthDataHelper.js";
+import AuthDataHelper, { deepMerge } from "../../AuthDataHelper.js";
 
 test("AuthDataHelper - does not have dead constructorIncentive method", () => {
     const helper = new AuthDataHelper();
@@ -161,5 +161,36 @@ test("AuthDataHelper - preserves nested unknown keys and defaults when loading e
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+test("deepMerge - clones arrays and handles null values safely", () => {
+    const target = {
+        twitch: { access_token: "old", scopes: ["chat:read"] },
+        flags: { active: true },
+        count: 10
+    };
+    const sourceArr = ["chat:read", "chat:edit"];
+    const source = {
+        twitch: { access_token: "new", scopes: sourceArr },
+        flags: null,
+        extra: [1, 2, 3]
+    };
+
+    const merged = deepMerge(target, source);
+
+    // Array is cloned, not referenced directly
+    assert.deepEqual(merged.twitch.scopes, ["chat:read", "chat:edit"]);
+    assert.notEqual(merged.twitch.scopes, sourceArr, "Array should be cloned, not shared by reference");
+    sourceArr.push("whispers:read");
+    assert.equal(merged.twitch.scopes.length, 2, "Mutating source array should not affect merged result");
+
+    // Null source values override target safely without wiping sibling keys
+    assert.equal(merged.flags, null);
+    assert.equal(merged.count, 10, "Target sibling keys must be preserved");
+    assert.deepEqual(merged.extra, [1, 2, 3]);
+
+    // Array target or source top-level handling
+    assert.deepEqual(deepMerge(["a"], ["b", "c"]), ["b", "c"]);
+    assert.equal(deepMerge({ a: 1 }, null), null);
 });
 

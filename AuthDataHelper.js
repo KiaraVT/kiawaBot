@@ -3,6 +3,9 @@ import path from "path"
 
 function deepMerge(target, source) {
     if (!source || typeof source !== "object" || Array.isArray(source)) {
+        if (Array.isArray(source)) {
+            return [...source];
+        }
         return source !== undefined ? source : target;
     }
     const output = { ...(target && typeof target === "object" && !Array.isArray(target) ? target : {}) };
@@ -18,12 +21,17 @@ function deepMerge(target, source) {
             !Array.isArray(targetVal)
         ) {
             output[key] = deepMerge(targetVal, sourceVal);
-        } else {
+        } else if (Array.isArray(sourceVal)) {
+            output[key] = [...sourceVal];
+        } else if (sourceVal !== undefined) {
             output[key] = sourceVal;
         }
     }
     return output;
 }
+
+export { deepMerge };
+
 
 export default class AuthDataHelper {
 

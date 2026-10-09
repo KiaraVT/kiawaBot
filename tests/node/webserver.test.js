@@ -84,4 +84,18 @@ test("Webserver - error handling middleware respects Accept header", () => {
     errorHandler(new Error("Test JSON err"), mockJsonReq, mockJsonRes, () => {});
     assert.equal(jsonStatus, 500);
     assert.deepEqual(jsonData, { error: "Internal Server Error" });
+
+    // When req.accepts returns false (e.g. client requests neither html nor json), default to JSON 500
+    let fallbackStatus = 0, fallbackData = null;
+    const mockFallbackReq = {
+        accepts: () => false
+    };
+    const mockFallbackRes = {
+        status: (s) => { fallbackStatus = s; return mockFallbackRes; },
+        json: (data) => { fallbackData = data; return mockFallbackRes; }
+    };
+    errorHandler(new Error("Test fallback err"), mockFallbackReq, mockFallbackRes, () => {});
+    assert.equal(fallbackStatus, 500);
+    assert.deepEqual(fallbackData, { error: "Internal Server Error" });
 });
+

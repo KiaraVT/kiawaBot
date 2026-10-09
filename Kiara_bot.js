@@ -11,7 +11,7 @@ import IncentiveHelper from "./IncentiveHelper.js";
 import QuoteHelper, {castIdToNumber} from "./QuoteHelper.js";
 import { WebSocketServer } from "ws";
 import express from "express"
-import { formatAxiosError } from "./errorUtils.js";
+import { formatAxiosError, redactSensitiveUrl } from "./errorUtils.js";
 import {
     createSingleFlightMutex,
     executeWithBackoff,
@@ -128,7 +128,17 @@ let broadcasterAuthReady = false;
 let botAuthReady = false;
 let initialValidationHandled = false;
 let isValidating = false;
-let currentAuthState = null;
+const activeAuthStates = new Map();
+
+function cleanupExpiredAuthStates() {
+    const now = Date.now();
+    const TTL_MS = 15 * 60 * 1000;
+    for (const [nonce, session] of activeAuthStates.entries()) {
+        if (now - session.createdAt > TTL_MS) {
+            activeAuthStates.delete(nonce);
+        }
+    }
+}
 
 let lastRefreshBroadcasterAttempt = 0;
 let lastRefreshBotAttempt = 0;
@@ -147,7 +157,6 @@ function ensureAuthListener() {
         });
     }
 }
-ensureAuthListener();
 
 authListener.get("/", (req, res) => {
     if (!req.query.code) {
@@ -156,20 +165,30 @@ authListener.get("/", (req, res) => {
         return;
     }
 
-    if (!req.query.state || req.query.state !== currentAuthState) {
-        console.warn("[Auth] Authorization callback state mismatch or expired nonce:", req.query.state);
+    cleanupExpiredAuthStates();
+    const stateNonce = req.query.state;
+    const authSession = stateNonce ? activeAuthStates.get(stateNonce) : null;
+
+    if (!authSession) {
+        console.warn("[Auth] Authorization callback state mismatch or expired nonce:", stateNonce);
         res.status(400).send("Authorization failed: invalid or expired state parameter.");
         return;
     }
 
-    // Invalidate state immediately to prevent replay/duplicate token exchanges
-    currentAuthState = null;
+    const { accountKey, accountName } = authSession;
 
     exchangeCodeForAccessToken(req.query.code)
         .then(tokenData => {
-            res.send("You're now Authorized!  You can close this tab and return to the bot");
-            authData.update('twitchBroadcaster.access_token', tokenData.access_token, true, true);
-            authData.update('twitchBroadcaster.refresh_token', tokenData.refresh_token, true, true);
+            activeAuthStates.delete(stateNonce);
+            cancelGracefulAuthExit();
+            res.send(`You're now Authorized for ${accountName}!  You can close this tab and return to the bot`);
+            authData.update(`${accountKey}.access_token`, tokenData.access_token, true, true);
+            authData.update(`${accountKey}.refresh_token`, tokenData.refresh_token, true, true);
+            if (accountKey === 'twitchBroadcaster') {
+                broadcasterAuthReady = true;
+            } else if (accountKey === 'twitchBot') {
+                botAuthReady = true;
+            }
             validateAccessToken();
             if (validationTicker) {
                 clearInterval(validationTicker);
@@ -177,12 +196,18 @@ authListener.get("/", (req, res) => {
             validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
         })
         .catch(error => {
+            activeAuthStates.delete(stateNonce);
             res.status(500).send("Authorization error: failed to exchange authorization code for access tokens.");
-            broadcasterAuthReady = false;
-            botAuthReady = false;
-            console.error("[Auth] Token exchange failed:", formatAxiosError(error));
+            if (accountKey === 'twitchBroadcaster') {
+                broadcasterAuthReady = false;
+            } else if (accountKey === 'twitchBot') {
+                botAuthReady = false;
+            }
+            console.error(`[Auth] Token exchange failed for ${accountName}:`, formatAxiosError(error));
         });
 });
+
+ensureAuthListener();
 
 function buildAuthUrl(stateNonce) {
     const authQueryString = querystring.stringify({
@@ -199,10 +224,11 @@ async function notifyAuthRequired(reason, authUrl) {
     const webhookUrl = process.env.AUTH_WEBHOOK_URL;
     if (webhookUrl) {
         try {
+            const sanitizedWebhookUrl = authUrl.replace(/([?&]state=)[^&]+/i, "$1[REDACTED]");
             await axios.post(webhookUrl, {
                 event: 'auth_required',
                 reason: reason,
-                auth_url: authUrl,
+                auth_url: sanitizedWebhookUrl,
                 timestamp: new Date().toISOString()
             }, { timeout: 5000 }).catch(err => {
                 console.error('[Auth] Failed to send auth webhook alert:', formatAxiosError(err));
@@ -238,27 +264,50 @@ function performGracefulExit() {
     process.exit(1);
 }
 
-let isAuthPromptActive = false;
-let authExitPending = false;
+let authExitTimer = null;
+const AUTH_EXIT_GRACE_PERIOD_MS = parseInt(process.env.AUTH_EXIT_GRACE_PERIOD_MS || "120000", 10);
 
-//Begin the auth process by opening the user's browser to the consent screen
-async function startAuth(reason = "Twitch Authorization Needed") {
-    if (isAuthPromptActive) {
+function scheduleGracefulAuthExit() {
+    if (!shouldExitOnAuthFailure()) {
         return;
     }
-    isAuthPromptActive = true;
-    try {
-        ensureAuthListener();
-        currentAuthState = crypto.randomBytes(16).toString('hex');
-        const authUrl = buildAuthUrl(currentAuthState);
-        await notifyAuthRequired(reason, authUrl);
-        if (shouldExitOnAuthFailure()) {
-            authExitPending = true;
-        }
-    } finally {
-        isAuthPromptActive = false;
+    if (!authExitTimer) {
+        console.warn(`[Auth] AUTH_FAILURE_ACTION=exit configured. Bot will shut down in ${AUTH_EXIT_GRACE_PERIOD_MS / 1000}s if authorization is not completed.`);
+        authExitTimer = setTimeout(() => {
+            authExitTimer = null;
+            if (!broadcasterAuthReady || !botAuthReady) {
+                performGracefulExit();
+            }
+        }, AUTH_EXIT_GRACE_PERIOD_MS);
     }
 }
+
+function cancelGracefulAuthExit() {
+    if (authExitTimer) {
+        console.info('[Auth] Canceling scheduled shutdown: authorization recovered.');
+        clearTimeout(authExitTimer);
+        authExitTimer = null;
+    }
+}
+
+//Begin the auth process by opening the user's browser to the consent screen
+async function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
+    cleanupExpiredAuthStates();
+    for (const session of activeAuthStates.values()) {
+        if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
+            return;
+        }
+    }
+    ensureAuthListener();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    activeAuthStates.set(nonce, { accountKey, accountName, createdAt: Date.now() });
+    const authUrl = buildAuthUrl(nonce);
+    await notifyAuthRequired(`[${accountName}] ${reason}`, authUrl);
+    if (shouldExitOnAuthFailure()) {
+        scheduleGracefulAuthExit();
+    }
+}
+
 
 //exchange the authorization code we get from Twitch when the user consents to get an Access Token
 function exchangeCodeForAccessToken(code) {
@@ -329,31 +378,26 @@ async function refreshSingleToken(accountKey, accountName) {
 
 //attempt to refresh the Access Token using the Refresh Token
 async function refreshAccessToken() {
-    const [broadcasterResult, botResult] = await Promise.allSettled([
-        singleFlightBroadcaster(() => refreshSingleToken('twitchBroadcaster', 'Broadcaster')),
-        singleFlightBot(() => refreshSingleToken('twitchBot', 'Bot'))
-    ]);
+    // Sequentially execute broadcaster and bot refreshes to avoid parallel token endpoint races
+    const broadcaster = await singleFlightBroadcaster(() => refreshSingleToken('twitchBroadcaster', 'Broadcaster'));
+    const bot = await singleFlightBot(() => refreshSingleToken('twitchBot', 'Bot'));
 
-    const broadcaster = broadcasterResult.status === 'fulfilled'
-        ? broadcasterResult.value
-        : { refreshed: false, error: broadcasterResult.reason, authRequired: false };
-    const bot = botResult.status === 'fulfilled'
-        ? botResult.value
-        : { refreshed: false, error: botResult.reason, authRequired: false };
-
-    // Coordinate auth prompt so only one prompt/cycle runs across both accounts
+    let authPrompted = false;
     if (broadcaster.authRequired || bot.authRequired) {
+        authPrompted = true;
         if (validationTicker) {
             clearInterval(validationTicker);
             validationTicker = null;
         }
-        const reasons = [];
-        if (broadcaster.authRequired) reasons.push(`Broadcaster (${broadcaster.reason})`);
-        if (bot.authRequired) reasons.push(`Bot (${bot.reason})`);
-        await startAuth(`Authorization required for ${reasons.join(', ')}`);
+        if (broadcaster.authRequired) {
+            await startAuth(`Broadcaster (${broadcaster.reason})`, 'twitchBroadcaster', 'Broadcaster');
+        }
+        if (bot.authRequired) {
+            await startAuth(`Bot (${bot.reason})`, 'twitchBot', 'Bot');
+        }
     }
 
-    return { broadcaster, bot };
+    return { broadcaster, bot, authPrompted };
 }
 
 let transientRetryTimer = null;
@@ -362,8 +406,9 @@ function scheduleTransientValidationRetry(delayMs = 15000) {
         console.info(`[Auth] Scheduling validation retry in ${delayMs / 1000}s due to transient failure...`);
         transientRetryTimer = setTimeout(() => {
             transientRetryTimer = null;
-            lastRefreshBroadcasterAttempt = 0;
-            lastRefreshBotAttempt = 0;
+            const now = Date.now();
+            lastRefreshBroadcasterAttempt = now;
+            lastRefreshBotAttempt = now;
             validateAccessToken();
         }, delayMs);
     }
@@ -386,15 +431,11 @@ async function validateAccessToken() {
         .catch(async error => {
             console.warn('[Auth] Unable to validate Broadcaster Access Token:', formatAxiosError(error));
             broadcasterAuthReady = false;
-            try {
-                const refreshRes = await refreshAccessToken();
-                if (refreshRes.broadcaster?.refreshed) {
-                    broadcasterAuthReady = true;
-                } else if (refreshRes.broadcaster?.reason === 'transient_retry_exhausted') {
-                    scheduleTransientValidationRetry();
-                }
-            } catch (err) {
-                console.error('[Auth] Refresh failed during Broadcaster validation:', formatAxiosError(err));
+            const refreshRes = await refreshAccessToken();
+            if (refreshRes.broadcaster?.refreshed) {
+                broadcasterAuthReady = true;
+            } else if (refreshRes.broadcaster?.reason === 'transient_retry_exhausted') {
+                scheduleTransientValidationRetry();
             }
         });
 
@@ -408,21 +449,18 @@ async function validateAccessToken() {
         .catch(async error => {
             console.warn('[Auth] Unable to validate Bot Access Token:', formatAxiosError(error));
             botAuthReady = false;
-            try {
-                const refreshRes = await refreshAccessToken();
-                if (refreshRes.bot?.refreshed) {
-                    botAuthReady = true;
-                } else if (refreshRes.bot?.reason === 'transient_retry_exhausted') {
-                    scheduleTransientValidationRetry();
-                }
-            } catch (err) {
-                console.error('[Auth] Refresh failed during Bot validation:', formatAxiosError(err));
+            const refreshRes = await refreshAccessToken();
+            if (refreshRes.bot?.refreshed) {
+                botAuthReady = true;
+            } else if (refreshRes.bot?.reason === 'transient_retry_exhausted') {
+                scheduleTransientValidationRetry();
             }
         });
 
     try {
         await Promise.allSettled([validateBroadcaster, validateBot]);
         if (broadcasterAuthReady && botAuthReady) {
+            cancelGracefulAuthExit();
             if (transientRetryTimer) {
                 clearTimeout(transientRetryTimer);
                 transientRetryTimer = null;
@@ -434,9 +472,6 @@ async function validateAccessToken() {
         }
     } finally {
         isValidating = false;
-        if (authExitPending && shouldExitOnAuthFailure()) {
-            performGracefulExit();
-        }
     }
 }
 
@@ -503,6 +538,9 @@ async function apiGetRequest(method, parameters, isRetry = false) {
                 console.error('[Auth] Refresh failed during apiGetRequest retry:', formatAxiosError(refreshErr));
             }
         }
+        if (error?.config?.url) {
+            error.config.url = redactSensitiveUrl(error.config.url);
+        }
         throw error;
     }
 }
@@ -542,6 +580,9 @@ async function apiPostRequest(method, parameters, data, isRetry = false) {
         if (error?.response?.status === 400) {
             console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
         }
+        if (error?.config?.url) {
+            error.config.url = redactSensitiveUrl(error.config.url);
+        }
         throw error;
     }
 }
@@ -579,6 +620,9 @@ async function apiPostRequestBot(method, parameters, data, isRetry = false) {
         }
         if (error?.response?.status === 400) {
             console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
+        }
+        if (error?.config?.url) {
+            error.config.url = redactSensitiveUrl(error.config.url);
         }
         throw error;
     }

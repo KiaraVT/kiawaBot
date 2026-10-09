@@ -20,6 +20,15 @@ export function redactSensitiveUrl(rawUrl) {
                 changed = true;
             }
         }
+        if (parsed.hash) {
+            for (const key of sensitiveKeys) {
+                const hashRegex = new RegExp(`([#&?])${key}=([^&]*)`, "gi");
+                if (hashRegex.test(parsed.hash)) {
+                    parsed.hash = parsed.hash.replace(hashRegex, `$1${key}=REDACTED`);
+                    changed = true;
+                }
+            }
+        }
         if (!changed) {
             return rawUrl;
         }
@@ -27,11 +36,11 @@ export function redactSensitiveUrl(rawUrl) {
         if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
             result = parsed.toString();
         } else {
-            result = parsed.pathname + parsed.search;
+            result = parsed.pathname + parsed.search + (parsed.hash || "");
         }
         return result.replace(/=REDACTED/g, "=[REDACTED]");
     } catch {
-        return rawUrl.replace(/(^|[?&])(client_secret|refresh_token|code|access_token)=([^&#]*)/gi, "$1$2=[REDACTED]");
+        return rawUrl.replace(/(^|[?&#/])(client_secret|refresh_token|code|access_token)=([^&#]*)/gi, "$1$2=[REDACTED]");
     }
 }
 

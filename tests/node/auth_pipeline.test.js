@@ -69,6 +69,21 @@ test("redactSensitiveUrl - preserves non-oauth token parameters", () => {
     assert.ok(redacted.includes("access_token=[REDACTED]"), "access_token must be redacted");
 });
 
+test("redactSensitiveUrl - redacts tokens in hash fragments and fallback strings", () => {
+    const fragmentUrl = "https://example.com/callback#access_token=secretFragment&state=xyz&refresh_token=refreshFragment";
+    const redactedFrag = redactSensitiveUrl(fragmentUrl);
+    assert.ok(redactedFrag.includes("access_token=[REDACTED]"));
+    assert.ok(redactedFrag.includes("refresh_token=[REDACTED]"));
+    assert.ok(redactedFrag.includes("state=xyz"));
+    assert.equal(redactedFrag.includes("secretFragment"), false);
+
+    const fallbackString = "invalid-url?code=secretCode#access_token=hashToken";
+    const redactedFallback = redactSensitiveUrl(fallbackString);
+    assert.ok(redactedFallback.includes("code=[REDACTED]"));
+    assert.ok(redactedFallback.includes("access_token=[REDACTED]"));
+});
+
+
 test("formatAxiosError - formats network error where response is undefined", () => {
     const networkError = {
         message: "connect ECONNREFUSED 127.0.0.1:3000",
@@ -259,6 +274,35 @@ test("executeWithBackoff - throws after exhausting max retries", async () => {
     );
     assert.equal(callCount, 3, "Initial attempt (0) + 2 retries = 3 total attempts");
 });
+
+test("executeWithBackoff - enforces maxDelayMs cap and applies jitter", async () => {
+    const recordedDelays = [];
+    const transientError = { response: { status: 503 } };
+
+    const operation = async () => {
+        throw transientError;
+    };
+
+    await assert.rejects(
+        () => executeWithBackoff(operation, {
+            maxRetries: 3,
+            baseDelayMs: 20,
+            maxDelayMs: 30,
+            onRetry: (_err, _attempt, delayMs) => {
+                recordedDelays.push(delayMs);
+            }
+        }),
+        (err) => err?.response?.status === 503
+    );
+
+    assert.equal(recordedDelays.length, 3);
+    // With maxDelayMs=30, raw delay is capped at 30 before jitter (0.8 - 1.2), so max is around 36
+    for (const delay of recordedDelays) {
+        assert.ok(delay <= 36, `Delay ${delay} should be bounded near maxDelayMs with jitter`);
+        assert.ok(delay >= 10, `Delay ${delay} should be non-zero`);
+    }
+});
+
 
 test("processStreamStartStreak - handles missing or invalid dates safely", () => {
     const res1 = processStreamStartStreak("path.json", null);
