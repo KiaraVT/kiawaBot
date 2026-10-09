@@ -17,7 +17,7 @@ function deepMerge(target, source) {
         if (Array.isArray(source)) {
             return source.map(item => (item && typeof item === "object" && !Array.isArray(item)) ? deepMerge({}, item) : Array.isArray(item) ? [...item] : item);
         }
-        return source !== undefined ? source : target;
+        return source === null ? target : (source !== undefined ? source : target);
     }
     const output = { ...(target && typeof target === "object" && !Array.isArray(target) ? target : {}) };
     for (const key of Object.keys(source)) {
@@ -31,7 +31,7 @@ function deepMerge(target, source) {
             output[key] = deepMerge(baseTarget, sourceVal);
         } else if (Array.isArray(sourceVal)) {
             output[key] = sourceVal.map(item => (item && typeof item === "object" && !Array.isArray(item)) ? deepMerge({}, item) : Array.isArray(item) ? [...item] : item);
-        } else if (sourceVal !== undefined) {
+        } else if (sourceVal !== undefined && sourceVal !== null) {
             output[key] = sourceVal;
         }
     }
@@ -100,6 +100,9 @@ export default class AuthDataHelper {
 
         try {
             const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                throw new Error("Auth data must be a plain JSON object");
+            }
             this.data = deepMerge(this.defaultData, parsed);
         } catch (err) {
             const timestamp = `${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
@@ -107,19 +110,27 @@ export default class AuthDataHelper {
             try {
                 if (fs.existsSync(this.dataPath)) {
                     let diskValid = false;
+                    let parsedDisk = null;
                     try {
-                        JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
-                        diskValid = true;
+                        const raw = fs.readFileSync(this.dataPath, "utf8");
+                        parsedDisk = JSON.parse(raw);
+                        if (parsedDisk && typeof parsedDisk === "object" && !Array.isArray(parsedDisk)) {
+                            diskValid = true;
+                        }
                     } catch {
                         diskValid = false;
                     }
 
-                    if (!diskValid) {
-                        fs.renameSync(this.dataPath, corruptedPath);
-                        fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
-                        safeSetPermission(this.dataPath, 0o600);
-                        console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
+                    if (diskValid) {
+                        this.data = deepMerge(this.defaultData, parsedDisk);
+                        if (this.statusCallback) this.statusCallback("loaded");
+                        return;
                     }
+
+                    fs.renameSync(this.dataPath, corruptedPath);
+                    fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
+                    safeSetPermission(this.dataPath, 0o600);
+                    console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
                 }
             } catch (backupErr) {
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
@@ -129,6 +140,7 @@ export default class AuthDataHelper {
 
         if (this.statusCallback) this.statusCallback("loaded");
     }
+
 
     //save the data back to the file
     saveData() {

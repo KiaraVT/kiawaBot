@@ -184,14 +184,14 @@ test("deepMerge - clones arrays and handles null values safely", () => {
     sourceArr.push("whispers:read");
     assert.equal(merged.twitch.scopes.length, 2, "Mutating source array should not affect merged result");
 
-    // Null source values override target safely without wiping sibling keys
-    assert.equal(merged.flags, null);
+    // Null source values preserve target safely without wiping target or sibling keys
+    assert.deepEqual(merged.flags, { active: true }, "Null source values should preserve target property");
     assert.equal(merged.count, 10, "Target sibling keys must be preserved");
     assert.deepEqual(merged.extra, [1, 2, 3]);
 
     // Array target or source top-level handling
     assert.deepEqual(deepMerge(["a"], ["b", "c"]), ["b", "c"]);
-    assert.equal(deepMerge({ a: 1 }, null), null);
+    assert.deepEqual(deepMerge({ a: 1 }, null), { a: 1 }, "Null source must preserve target object");
 });
 
 test("deepMerge - protects against prototype pollution keys", () => {
@@ -354,3 +354,60 @@ test("loadData - does not rename or overwrite file if disk content is valid JSON
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("loadData - treats non-object valid JSON as corrupted and resets to defaults", () => {
+    const nonObjectPayloads = ['"string value"', "[1, 2, 3]", "12345", "null", "true"];
+    for (const payload of nonObjectPayloads) {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-non-object-"));
+        const authPath = path.join(tempDir, "auth-data.json");
+        try {
+            fs.writeFileSync(authPath, payload);
+            const helper = new AuthDataHelper();
+            helper.dataPath = authPath;
+            helper.legacyPath = null;
+            helper.loadData();
+
+            assert.equal(typeof helper.data, "object");
+            assert.notEqual(helper.data, null);
+            assert.equal(helper.data.twitch.access_token, "");
+            const files = fs.readdirSync(tempDir);
+            const backupFile = files.find(f => f.includes(".corrupted."));
+            assert.ok(backupFile, `Non-object payload ${payload} must be backed up as corrupted`);
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    }
+});
+
+test("loadData - loads disk content when valid JSON object is available on retry", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-valid-retry-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    try {
+        const validJson = JSON.stringify({ twitch: { access_token: "persisted_valid_token" } });
+        fs.writeFileSync(authPath, validJson);
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+
+        const origParse = JSON.parse;
+        let parseCallCount = 0;
+        JSON.parse = (text, reviver) => {
+            parseCallCount += 1;
+            if (parseCallCount === 1) {
+                throw new Error("Simulated transient parse error");
+            }
+            return origParse(text, reviver);
+        };
+
+        try {
+            helper.loadData();
+        } finally {
+            JSON.parse = origParse;
+        }
+
+        assert.equal(helper.data.twitch.access_token, "persisted_valid_token", "Valid disk tokens must be loaded on retry");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+

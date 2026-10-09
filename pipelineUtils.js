@@ -4,6 +4,7 @@
 
 import crypto from "node:crypto";
 import querystring from "node:querystring";
+import { AsyncLocalStorage } from "node:async_hooks";
 import axios from "axios";
 import { formatAxiosError, sanitizeAxiosConfig } from "./errorUtils.js";
 
@@ -12,6 +13,7 @@ export const TWITCH_TOKEN_URL = process.env.TWITCH_TOKEN_URL || "https://id.twit
 export const TWITCH_VALIDATE_URL = process.env.TWITCH_VALIDATE_URL || "https://id.twitch.tv/oauth2/validate";
 export const TWITCH_API_BASE_URL = process.env.TWITCH_API_BASE_URL || "https://api.twitch.tv/helix";
 
+const singleFlightStorage = new AsyncLocalStorage();
 
 /**
  * Creates a single-flight mutex runner.
@@ -22,12 +24,20 @@ export const TWITCH_API_BASE_URL = process.env.TWITCH_API_BASE_URL || "https://a
  */
 export function createSingleFlightMutex() {
     let inFlight = null;
+    const mutexKey = Symbol("singleFlight");
     return function execute(fn) {
+        if (singleFlightStorage.getStore()?.has(mutexKey)) {
+            return Promise.resolve().then(() => fn());
+        }
         if (inFlight) {
             return inFlight;
         }
+        const currentStore = singleFlightStorage.getStore() || new Set();
+        const nextStore = new Set(currentStore);
+        nextStore.add(mutexKey);
+
         const promise = Promise.resolve()
-            .then(() => fn())
+            .then(() => singleFlightStorage.run(nextStore, () => fn()))
             .finally(() => {
                 if (inFlight === promise) {
                     inFlight = null;
@@ -37,6 +47,22 @@ export function createSingleFlightMutex() {
         return inFlight;
     };
 }
+
+
+/**
+ * Creates a sequential FIFO mutex lock to serialize operations.
+ *
+ * @returns {<T>(fn: () => Promise<T>|T) => Promise<T>}
+ */
+export function createSequentialLock() {
+    let current = Promise.resolve();
+    return function acquire(fn) {
+        const next = current.then(fn, fn);
+        current = next.catch(() => {});
+        return next;
+    };
+}
+
 
 /**
  * Executes an async operation with exponential backoff for transient failures.
@@ -128,6 +154,10 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
         return { updated: true, reason: "initialized_new_file" };
     }
 
+    streakList = typeof globalThis.structuredClone === "function"
+        ? globalThis.structuredClone(streakList)
+        : JSON.parse(JSON.stringify(streakList));
+
     if (!streakList.Last_Stream) {
         streakList.Last_Stream = { Start: startedAtStr, End: "" };
     }
@@ -138,14 +168,16 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
         streakList.Users = {};
     }
 
-    const currentStreamStart = new Date(streakList.Current_Stream.Start || 0).getTime();
-    if (!isNaN(currentStreamStart) && (currentStart - currentStreamStart) < 5 * 60 * 60 * 1000) {
-        return { updated: false, reason: "restarted_within_window" };
+    if (streakList.Current_Stream.Start) {
+        const currentStreamStart = new Date(streakList.Current_Stream.Start).getTime();
+        if (!isNaN(currentStreamStart) && (currentStart - currentStreamStart) < 5 * 60 * 60 * 1000) {
+            return { updated: false, reason: "restarted_within_window" };
+        }
     }
 
-    const lastStart = new Date(streakList.Last_Stream.Start || 0).getTime();
-    const lastEnd = new Date(streakList.Last_Stream.End || 0).getTime();
-    const backupEnd = new Date(streakList.Last_Stream.Backup_End || 0).getTime();
+    const lastStart = streakList.Last_Stream.Start ? new Date(streakList.Last_Stream.Start).getTime() : NaN;
+    const lastEnd = streakList.Last_Stream.End ? new Date(streakList.Last_Stream.End).getTime() : NaN;
+    const backupEnd = streakList.Last_Stream.Backup_End ? new Date(streakList.Last_Stream.Backup_End).getTime() : NaN;
 
     if (!lastEnd || isNaN(lastEnd)) {
         streakList.Last_Stream.Start = streakList.Current_Stream.Start;
@@ -163,6 +195,7 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
         streakList.Last_Stream.Start = streakList.Current_Stream.Start;
         streakList.Current_Stream.Start = startedAtStr;
         writeFn(streakPath, streakList, { spaces: 2, EOL: "\n" });
+
         return { updated: true, reason: "end_detection_failed" };
     }
 
@@ -192,7 +225,7 @@ export function validateCommandArguments(command, args) {
         if (!args[1] || args.length < 3) {
             return { valid: false, error: `Usage: ${command} <tag> <response>` };
         }
-        const tag = args[1].toLowerCase().replace(/^!/, "");
+        const tag = String(args[1]).trim().toLowerCase().replace(/^!/, "");
         const text = args.slice(2).join(" ").trim();
         if (!tag || !text) {
             return { valid: false, error: `Usage: ${command} <tag> <response>` };
@@ -205,13 +238,14 @@ export function validateCommandArguments(command, args) {
         if (!args[1] || args.length < 3) {
             return { valid: false, error: "Usage: !updateincentive <command> <goal>" };
         }
-        const identifier = "!" + args[1].toLowerCase().replace(/^!/, "");
+        const identifier = "!" + String(args[1]).trim().toLowerCase().replace(/^!/, "");
         const goal = Number(args.slice(2).join(" "));
         if (!Number.isFinite(goal) || goal <= 0) {
             return { valid: false, error: "Incentive goal must be a positive number." };
         }
         return { valid: true, identifier, goal };
     }
+
 
     if (command === "!addincentive") {
         if (!args[1]) {
@@ -621,16 +655,19 @@ export class TwitchAuthPipeline {
      */
     async ensureBroadcasterAuth() {
         if (this.broadcasterAuthReady) return true;
-        const now = Date.now();
-        if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
-            const refreshRes = await this.refreshAccount("twitchBroadcaster", "Broadcaster");
-            if (refreshRes?.refreshed) {
-                this.lastRefreshBroadcasterAttempt = Date.now();
-                this.broadcasterAuthReady = true;
-                return true;
+        return this.singleFlightBroadcaster(async () => {
+            if (this.broadcasterAuthReady) return true;
+            const now = Date.now();
+            if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
+                this.lastRefreshBroadcasterAttempt = now;
+                const refreshRes = await this.refreshAccount("twitchBroadcaster", "Broadcaster");
+                if (refreshRes?.refreshed) {
+                    this.broadcasterAuthReady = true;
+                    return true;
+                }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     /**
@@ -640,16 +677,19 @@ export class TwitchAuthPipeline {
      */
     async ensureBotAuth() {
         if (this.botAuthReady) return true;
-        const now = Date.now();
-        if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
-            const refreshRes = await this.refreshAccount("twitchBot", "Bot");
-            if (refreshRes?.refreshed) {
-                this.lastRefreshBotAttempt = Date.now();
-                this.botAuthReady = true;
-                return true;
+        return this.singleFlightBot(async () => {
+            if (this.botAuthReady) return true;
+            const now = Date.now();
+            if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
+                this.lastRefreshBotAttempt = now;
+                const refreshRes = await this.refreshAccount("twitchBot", "Bot");
+                if (refreshRes?.refreshed) {
+                    this.botAuthReady = true;
+                    return true;
+                }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     /**

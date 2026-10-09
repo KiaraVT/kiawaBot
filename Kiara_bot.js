@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 import express from "express"
 import { formatAxiosError, redactSensitiveUrl, redactSensitiveData } from "./errorUtils.js";
 import {
+    createSequentialLock,
     processStreamStartStreak,
     validateCommandArguments,
     TwitchAuthPipeline,
@@ -258,38 +259,49 @@ const authPipeline = new TwitchAuthPipeline({
     }
 });
 
-authListener.get("/", async (req, res) => {
-    if (!req.query.code) {
-        const sanitizedQuery = redactSensitiveData({ ...req.query });
-        console.warn("[Auth] Received authorization callback without code parameter:", sanitizedQuery);
-        if (!res.headersSent) {
-            res.status(400).send("Authorization failed: missing authorization code or access denied.");
+const commandFileLock = createSequentialLock();
+
+async function handleOAuthCallbackRoute(req, res) {
+    try {
+        if (!req.query.code) {
+            const sanitizedQuery = redactSensitiveData({ ...req.query });
+            console.warn("[Auth] Received authorization callback without code parameter:", sanitizedQuery);
+            if (!res.headersSent) {
+                res.status(400).send("Authorization failed: missing authorization code or access denied.");
+            }
+            return;
         }
-        return;
-    }
 
-    const stateNonce = req.query.state;
-    const result = await authPipeline.handleOAuthCallback(req.query.code, stateNonce);
+        const stateNonce = req.query.state;
+        const result = await authPipeline.handleOAuthCallback(req.query.code, stateNonce);
 
-    if (result.status !== 200) {
-        console.warn("[Auth] Authorization callback error:", result.error);
-        if (!res.headersSent) {
-            res.status(result.status).send(result.error);
+        if (result.status !== 200) {
+            console.warn("[Auth] Authorization callback error:", result.error);
+            if (!res.headersSent) {
+                res.status(result.status).send(result.error);
+            }
+            return;
         }
-        return;
-    }
 
-    cancelGracefulAuthExit();
-    if (!res.headersSent) {
-        res.send(result.message);
-    }
+        cancelGracefulAuthExit();
+        if (!res.headersSent) {
+            res.send(result.message);
+        }
 
-    authPipeline.validateAccessToken();
-    if (validationTicker) {
-        clearInterval(validationTicker);
+        authPipeline.validateAccessToken();
+        if (validationTicker) {
+            clearInterval(validationTicker);
+        }
+        validationTicker = setInterval(() => { authPipeline.validateAccessToken(); }, 1000 * 600);
+    } catch (err) {
+        console.error("[Auth] Unhandled error during authorization callback:", formatAxiosError(err) || err?.message || String(err));
+        if (!res.headersSent) {
+            res.status(500).send("Internal Server Error during authorization callback.");
+        }
     }
-    validationTicker = setInterval(() => { authPipeline.validateAccessToken(); }, 1000 * 600);
-});
+}
+
+authListener.get("/", handleOAuthCallbackRoute);
 
 //Begin the auth process by opening the user's browser to the consent screen
 function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster", options = {}) {
@@ -321,6 +333,9 @@ function ensureBotAuth() {
 }
 
 export {
+    authListener,
+    handleOAuthCallbackRoute,
+    commandFileLock,
     authPipeline,
     startAuth,
     refreshSingleToken,
@@ -332,6 +347,7 @@ export {
     startBot,
     tesManager
 };
+
 
 //send a GET request to the Twitch API
 async function apiGetRequest(method, parameters) {
@@ -563,9 +579,9 @@ async function startBot(options = {}) {
     }
     validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
     incentiveData.statusCallback = handleIncentiveFileStatusChange;
-    incentiveData.loadData();
+    await incentiveData.loadData();
     if (typeof tesManager !== "undefined" && tesManager && typeof tesManager.start === "function") {
-        tesManager.start();
+        await tesManager.start();
     }
     return await validationPromise;
 }
@@ -613,7 +629,7 @@ class TesManager {
         if (this.#tes && this.#tes.on) { // if TES was able to auth properly
             this.#initializeSubscriptionQueue();
         } else {
-            console.log("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.");
+            console.warn("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.");
         }
     }
 
@@ -648,7 +664,7 @@ class TesManager {
              */
             const onConnectionLost = subscriptionTypeAndConditionById => {
                 const types = Object.values(subscriptionTypeAndConditionById).map(({ type }) => type).sort().join(", ");
-                console.log(`Connection lost for subscription types ${types}; let's repair them.`)
+                console.warn(`Connection lost for subscription types ${types}; let's repair them.`);
                 this.#repairSubscriptions();
             };
             tes.on("connection_lost", onConnectionLost);
@@ -656,8 +672,9 @@ class TesManager {
             return tes;
         } catch (error) {
             //let's assume any error here is due to a bad access token and re-auth
-            const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
+            const warning = () => console.error("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
             warning();
+
             if (process.env.AUTO_START_AUTH_LISTENER !== "false") {
                 startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
             }
@@ -1561,52 +1578,34 @@ async function messageHandler(tags) {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true ) {
 
+            const parsed = validateCommandArguments(command, args);
+            if (!parsed.valid) {
+                postMessage(botID, parsed.error || 'Usage: !addcommand <tag> <response>');
+                return;
+            }
+            const command_Tag = parsed.tag;
+            const command_Text = parsed.text;
 
-            //Grab the Current Command total
-            jsonfile.readFile(command_Path, async function(err, command_List) {
-                if (err) {
-                    console.error(err)
-                }
-
-                //search the relevant field in the json
-                var command_Count = command_List.find(
-                    (search) => {
-                        return search.Command_Count;
-                    }
-                );
-
-                //the comparison needs a number and not a string, convert it here
-                command_Count = Number(command_Count.Command_Count);
-                command_Count = command_Count + 1;
-                
-                const parsed = validateCommandArguments(command, args);
-                if (!parsed.valid) {
-                    postMessage(botID, parsed.error || 'Usage: !addcommand <tag> <response>');
-                    return;
-                }
-                const command_Tag = parsed.tag;
-                const command_Text = parsed.text;
-
-                //Generate json format data object to add to the file
-                const command_Formatted = { Index: `${command_Count}`, Tag: `${command_Tag}`, Response: `${command_Text}`, Timer: 'No' }
-
-                //Update the command count in the json file
-                command_List[0].Command_Count = `${command_Count}`
-
-                //add the new command to the json object
-                command_List.push(command_Formatted)
-
-                //dump out a new file
+            commandFileLock(async () => {
                 try {
-                    writeAtomicSync(command_Path, command_List, { spaces: 2 })
-                    
-                }
-                catch (error) {
+                    const command_List = await jsonfile.readFile(command_Path);
+                    var command_Count = command_List.find(
+                        (search) => {
+                            return search.Command_Count;
+                        }
+                    );
+                    command_Count = Number(command_Count?.Command_Count || 0) + 1;
+                    const command_Formatted = { Index: `${command_Count}`, Tag: `${command_Tag}`, Response: `${command_Text}`, Timer: 'No' };
+                    if (command_List[0]) {
+                        command_List[0].Command_Count = `${command_Count}`;
+                    }
+                    command_List.push(command_Formatted);
+                    writeAtomicSync(command_Path, command_List, { spaces: 2 });
+                    postMessage(botID, `Added Command "!${command_Tag}"`);
+                } catch (error) {
                     console.error('[Command] Failed to write command file:', error.message);
                     postMessage(botID, `Adding command failed, retrying...`);
                 }
-                //respond with success?
-                postMessage(botID, `Added Command "!${command_Tag}"`);
             });
         }
     }
@@ -1624,36 +1623,29 @@ async function messageHandler(tags) {
             const command_Tag = parsed.tag;
             const command_Text = parsed.text;
 
-            //search the relevant field in the json
+            commandFileLock(async () => {
+                try {
+                    const command_List = await jsonfile.readFile(command_Path);
+                    var command_Info = command_List.find(
+                        (search) => {
+                            return search.Tag === command_Tag;
+                        }
+                    );
 
-            jsonfile.readFile(command_Path, async function(err, command_List) {
-                if (err) {
-                    console.error('[Command] Failed to read command file:', err.message);
-                    return;
-                }
-                //search for the command tag and get all the info
-                var command_Info = command_List.find(
-                    (search) => {
-                        return search.Tag === command_Tag;
+                    if (!command_Info) {
+                        postMessage(botID, `Command "!${command_Tag}" not found.`);
+                        return;
                     }
-                );
 
-                if (!command_Info) {
-                    postMessage(botID, `Command "!${command_Tag}" not found.`);
-                    return;
+                    command_List[Number(command_Info.Index)].Response = command_Text;
+                    writeAtomicSync(command_Path, command_List, { spaces: 2 });
+                    postMessage(botID, `Command "!${command_Tag}" Updated Successfully!`);
+                } catch (err) {
+                    console.error('[Command] Failed to edit command file:', err.message);
                 }
-
-                //update the command text
-                command_List[Number(command_Info.Index)].Response = command_Text
-
-                //dump out a new file
-                writeAtomicSync(command_Path, command_List, { spaces: 2 })
-
-                //respond with success?
-                postMessage(botID, `Command "!${command_Tag}" Updated Successfully!`);
             });
-        };
-    };
+        }
+    }
     ///////////////////////////////////
     //                               //
     //                               //

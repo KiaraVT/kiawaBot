@@ -7,9 +7,15 @@ const app = express();
 const port = process.env.WEB_PORT || 8081;
 
 // Data file paths - look in parent directory's data folder
-const quote_Path = path.join(import.meta.dirname, '..', 'data', 'quotes.json');
-const streak_Path = path.join(import.meta.dirname, '..', 'data', 'streaks.json');
-const command_Path = path.join(import.meta.dirname, '..', 'data', 'command_List.json');
+function getQuotePath() {
+    return process.env.QUOTES_PATH || path.join(import.meta.dirname, '..', 'data', 'quotes.json');
+}
+function getStreakPath() {
+    return process.env.STREAKS_PATH || path.join(import.meta.dirname, '..', 'data', 'streaks.json');
+}
+function getCommandPath() {
+    return process.env.COMMANDS_PATH || path.join(import.meta.dirname, '..', 'data', 'command_List.json');
+}
 function getIncentivePath() {
     return process.env.INCENTIVE_PATH || path.join(import.meta.dirname, '..', 'data', 'incentives.json');
 }
@@ -31,18 +37,14 @@ const DEFAULT_INCENTIVE = Object.freeze({
 
 // Helper function to safely read JSON files
 function safeReadJSON(filePath, defaultValue = {}) {
-    try {
-        if (!fs.existsSync(filePath)) {
-            console.log(`Web Server: Creating default ${filePath}...`);
-            jsonfile.writeFileSync(filePath, defaultValue, { spaces: 2, EOL: "\n" });
-            return defaultValue;
-        }
-        return jsonfile.readFileSync(filePath);
-    } catch (error) {
-        console.error(`Web Server: Error reading ${filePath}:`, error);
+    if (!fs.existsSync(filePath)) {
+        console.log(`Web Server: Creating default ${filePath}...`);
+        jsonfile.writeFileSync(filePath, defaultValue, { spaces: 2, EOL: "\n" });
         return defaultValue;
     }
+    return jsonfile.readFileSync(filePath);
 }
+
 
 // Helper function to escape HTML to prevent XSS
 function escapeHtml(unsafe) {
@@ -58,7 +60,7 @@ function escapeHtml(unsafe) {
 // Web endpoint to serve streaks data
 app.get("/api/streaks", (req, res) => {
     try {
-        const streaksData = safeReadJSON(streak_Path, {});
+        const streaksData = safeReadJSON(getStreakPath(), {});
         res.setHeader('Content-Type', 'application/json');
         res.json(streaksData);
     } catch (error) {
@@ -70,7 +72,7 @@ app.get("/api/streaks", (req, res) => {
 // Web endpoint to serve quotes data
 app.get("/api/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(getQuotePath(), []);
         res.setHeader('Content-Type', 'application/json');
         res.json(quotesData);
     } catch (error) {
@@ -82,7 +84,7 @@ app.get("/api/quotes", (req, res) => {
 // Web endpoint to serve commands data
 app.get("/api/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(getCommandPath(), []);
         res.setHeader('Content-Type', 'application/json');
         res.json(commandsData);
     } catch (error) {
@@ -90,6 +92,7 @@ app.get("/api/commands", (req, res) => {
         res.status(500).json({ error: 'Failed to read commands data' });
     }
 });
+
 
 // Web endpoint to serve incentives data
 app.get("/api/incentives", async (req, res) => {
@@ -139,7 +142,7 @@ app.get("/api/incentives", async (req, res) => {
 // Simple HTML page to display the data
 app.get("/streaks", (req, res) => {
     try {
-        const streaksData = safeReadJSON(streak_Path, {});
+        const streaksData = safeReadJSON(getStreakPath(), {});
         const html = `
         <!DOCTYPE html>
         <html>
@@ -180,7 +183,7 @@ app.get("/streaks", (req, res) => {
 // Simple HTML page to display quotes
 app.get("/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(getQuotePath(), []);
         const html = `
         <!DOCTYPE html>
         <html>
@@ -221,7 +224,8 @@ app.get("/quotes", (req, res) => {
 // Simple HTML page to display commands
 app.get("/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(getCommandPath(), []);
+
         const html = `
         <!DOCTYPE html>
         <html>

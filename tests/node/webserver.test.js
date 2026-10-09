@@ -80,6 +80,41 @@ test("Webserver - /api/incentives handles malformed JSON and file size limits", 
     }
 });
 
+test("Webserver - /api/streaks, /api/quotes, /api/commands return 500 on malformed JSON", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "api-malformed-test-"));
+    const badStreaksPath = path.join(tempDir, "streaks.json");
+    const badQuotesPath = path.join(tempDir, "quotes.json");
+    const badCommandsPath = path.join(tempDir, "commands.json");
+
+    fs.writeFileSync(badStreaksPath, "{ bad json");
+    fs.writeFileSync(badQuotesPath, "{ bad json");
+    fs.writeFileSync(badCommandsPath, "{ bad json");
+
+    const prevStreaks = process.env.STREAKS_PATH;
+    const prevQuotes = process.env.QUOTES_PATH;
+    const prevCommands = process.env.COMMANDS_PATH;
+
+    process.env.STREAKS_PATH = badStreaksPath;
+    process.env.QUOTES_PATH = badQuotesPath;
+    process.env.COMMANDS_PATH = badCommandsPath;
+
+    try {
+        const streakRes = await fetch(`${BASE_URL}/api/streaks`);
+        assert.equal(streakRes.status, 500, "Streaks API must return 500 on malformed JSON");
+
+        const quoteRes = await fetch(`${BASE_URL}/api/quotes`);
+        assert.equal(quoteRes.status, 500, "Quotes API must return 500 on malformed JSON");
+
+        const cmdRes = await fetch(`${BASE_URL}/api/commands`);
+        assert.equal(cmdRes.status, 500, "Commands API must return 500 on malformed JSON");
+    } finally {
+        if (prevStreaks !== undefined) process.env.STREAKS_PATH = prevStreaks; else delete process.env.STREAKS_PATH;
+        if (prevQuotes !== undefined) process.env.QUOTES_PATH = prevQuotes; else delete process.env.QUOTES_PATH;
+        if (prevCommands !== undefined) process.env.COMMANDS_PATH = prevCommands; else delete process.env.COMMANDS_PATH;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 
 test("Webserver - HTML dashboard views return 200 and text/html", async () => {
     const endpoints = ["/", "/streaks", "/quotes", "/commands", "/incentives"];

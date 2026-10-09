@@ -8,6 +8,7 @@ import { formatAxiosError, redactSensitiveUrl, sanitizeAxiosConfig, redactSensit
 import AuthDataHelper from "../../AuthDataHelper.js";
 import {
     createSingleFlightMutex,
+    createSequentialLock,
     executeWithBackoff,
     processStreamStartStreak,
     validateCommandArguments,
@@ -1120,13 +1121,16 @@ test("formatAxiosError - does not mutate input error.config object", () => {
     assert.equal(error.config.data.client_secret, "secret", "error.config.data must not be mutated by formatAxiosError");
 });
 
-test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth do not mutate cooldown on failure", async () => {
+test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth throttle via cooldown on attempt and deduplicate via singleFlight", async () => {
     const mockAuthData = {
         read: () => "mock_ref",
         update: () => {}
     };
+    let postCallCount = 0;
     const mockAxios = {
         post: async () => {
+            postCallCount += 1;
+            await new Promise((r) => setTimeout(r, 10));
             const err = new Error("Refresh failed");
             err.response = { status: 400 };
             throw err;
@@ -1141,17 +1145,46 @@ test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth do not mutate
 
     pipeline.broadcasterAuthReady = false;
     pipeline.botAuthReady = false;
-    const initialBroadcasterAttempt = pipeline.lastRefreshBroadcasterAttempt;
-    const initialBotAttempt = pipeline.lastRefreshBotAttempt;
+    const beforeAttempt = Date.now();
 
-    const bRes = await pipeline.ensureBroadcasterAuth();
-    assert.equal(bRes, false);
-    assert.equal(pipeline.lastRefreshBroadcasterAttempt, initialBroadcasterAttempt, "Broadcaster cooldown must not mutate on failure");
+    // Concurrent calls should be deduplicated by singleFlight
+    const [res1, res2] = await Promise.all([
+        pipeline.ensureBroadcasterAuth(),
+        pipeline.ensureBroadcasterAuth()
+    ]);
+    assert.equal(res1, false);
+    assert.equal(res2, false);
+    assert.equal(postCallCount, 1, "Concurrent ensureBroadcasterAuth calls must share singleFlight execution");
+    assert.ok(pipeline.lastRefreshBroadcasterAttempt >= beforeAttempt, "Attempt timestamp must be updated on attempt to enter cooldown");
 
-    const botRes = await pipeline.ensureBotAuth();
-    assert.equal(botRes, false);
-    assert.equal(pipeline.lastRefreshBotAttempt, initialBotAttempt, "Bot cooldown must not mutate on failure");
+    // Immediate second call should be throttled by cooldown and not call post again
+    const res3 = await pipeline.ensureBroadcasterAuth();
+    assert.equal(res3, false);
+    assert.equal(postCallCount, 1, "Immediate subsequent call within cooldownMs must not call endpoint");
+
+    // Bot account cooldown and singleFlight verification
+    let botPostCalls = 0;
+    mockAxios.post = async () => {
+        botPostCalls += 1;
+        await new Promise((r) => setTimeout(r, 10));
+        const err = new Error("Bot refresh failed");
+        err.response = { status: 400 };
+        throw err;
+    };
+    const beforeBotAttempt = Date.now();
+    const [botRes1, botRes2] = await Promise.all([
+        pipeline.ensureBotAuth(),
+        pipeline.ensureBotAuth()
+    ]);
+    assert.equal(botRes1, false);
+    assert.equal(botRes2, false);
+    assert.equal(botPostCalls, 1, "Concurrent ensureBotAuth calls must share singleFlight execution");
+    assert.ok(pipeline.lastRefreshBotAttempt >= beforeBotAttempt, "Bot attempt timestamp must be updated on attempt to enter cooldown");
+    const botRes3 = await pipeline.ensureBotAuth();
+    assert.equal(botRes3, false);
+    assert.equal(botPostCalls, 1, "Immediate bot call within cooldownMs must not call endpoint");
 });
+
 
 test("TwitchAuthPipeline - withAuthRetry does not mutate cooldown on 401 refresh failure and sanitizes error.request", async () => {
     const mockAuthData = {
@@ -1203,3 +1236,111 @@ test("Kiara_bot - startBot awaits validation and tesManager defers startup", asy
     assert.equal(typeof tesManager.start, "function", "tesManager should provide start method");
     assert.equal(typeof startBot, "function", "startBot should be a function");
 });
+
+test("redactSensitiveUrl - redacts code_verifier in standard urls and fallback regex", () => {
+    const stdUrl = "https://id.twitch.tv/oauth2/token?client_id=123&code_verifier=secret_verifier_value&client_secret=sec";
+    const redactedStd = redactSensitiveUrl(stdUrl);
+    assert.ok(redactedStd.includes("code_verifier=[REDACTED]"));
+    assert.equal(redactedStd.includes("secret_verifier_value"), false);
+
+    const fallbackUrl = "invalid-url://token?code_verifier=fallback_verifier_secret";
+    const redactedFallback = redactSensitiveUrl(fallbackUrl);
+    assert.ok(redactedFallback.includes("code_verifier=[REDACTED]"));
+    assert.equal(redactedFallback.includes("fallback_verifier_secret"), false);
+});
+
+test("validateCommandArguments - trims whitespace around tag and identifier", () => {
+    const addRes = validateCommandArguments("!addcommand", ["!addcommand", "  !hello  ", "World response"]);
+    assert.equal(addRes.valid, true);
+    assert.equal(addRes.tag, "hello", "Tag must be trimmed and stripped of leading !");
+    assert.equal(addRes.text, "World response");
+
+    const editRes = validateCommandArguments("!editcommand", ["!editcommand", "  foo  ", "Bar response"]);
+    assert.equal(editRes.valid, true);
+    assert.equal(editRes.tag, "foo", "Tag must be trimmed");
+
+    const updateRes = validateCommandArguments("!updateincentive", ["!updateincentive", "  !sub  ", "50"]);
+    assert.equal(updateRes.valid, true);
+    assert.equal(updateRes.identifier, "!sub", "Identifier must be trimmed and formatted with leading !");
+});
+
+test("processStreamStartStreak - does not mutate caller object returned by readFn", () => {
+    const existing = {
+        Current_Stream: { Start: "2026-10-08T08:00:00Z" },
+        Last_Stream: {
+            Start: "2026-10-07T08:00:00Z",
+            End: "2026-10-07T12:00:00Z",
+            Backup_End: "2026-10-08T13:00:00Z"
+        },
+        Users: { user1: 5 }
+    };
+    const originalStart = existing.Current_Stream.Start;
+    const io = {
+        readFn: () => existing,
+        writeFn: () => {}
+    };
+    processStreamStartStreak("path.json", "2026-10-09T18:00:00Z", io);
+    assert.equal(existing.Current_Stream.Start, originalStart, "readFn return must not be mutated in place");
+});
+
+test("processStreamStartStreak - does not treat empty string or missing Current_Stream.Start as Unix epoch", () => {
+    const existing = {
+        Current_Stream: { Start: "" },
+        Last_Stream: { Start: "", End: "" },
+        Users: {}
+    };
+    const io = {
+        readFn: () => existing,
+        writeFn: () => {}
+    };
+    const res = processStreamStartStreak("path.json", "1970-01-01T02:00:00Z", io);
+    assert.notEqual(res.reason, "restarted_within_window", "Empty start must not be treated as epoch 0 triggering false restart window");
+});
+
+test("createSequentialLock - serializes asynchronous operations sequentially", async () => {
+    const lock = createSequentialLock();
+    const executionOrder = [];
+
+    const p1 = lock(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        executionOrder.push("op1");
+        return "val1";
+    });
+
+    const p2 = lock(async () => {
+        executionOrder.push("op2");
+        return "val2";
+    });
+
+    const [v1, v2] = await Promise.all([p1, p2]);
+    assert.equal(v1, "val1");
+    assert.equal(v2, "val2");
+    assert.deepEqual(executionOrder, ["op1", "op2"], "Operations must execute strictly sequentially");
+});
+
+test("Kiara_bot - OAuth callback route catches unhandled errors and responds with 500", async () => {
+    const { handleOAuthCallbackRoute, authPipeline } = await import("../../Kiara_bot.js");
+    const origHandle = authPipeline.handleOAuthCallback;
+    authPipeline.handleOAuthCallback = async () => {
+        throw new Error("Simulated unexpected crash in OAuth callback");
+    };
+    try {
+        let statusSent = null;
+        let bodySent = null;
+        const mockReq = {
+            query: { code: "some_code", state: "some_state" }
+        };
+        const mockRes = {
+            headersSent: false,
+            status(code) { statusSent = code; return this; },
+            send(body) { bodySent = body; return this; }
+        };
+        await handleOAuthCallbackRoute(mockReq, mockRes);
+        assert.equal(statusSent, 500);
+        assert.ok(bodySent.includes("Internal Server Error"));
+    } finally {
+        authPipeline.handleOAuthCallback = origHandle;
+    }
+});
+
+
