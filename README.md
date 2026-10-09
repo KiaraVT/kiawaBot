@@ -211,5 +211,32 @@ python scripts/check_npm_audit.py
 
 # Run heuristic secret detection on tracked files
 python scripts/check_secrets_heuristic.py
+
+# Verify review policies against upstream Euler and Foucault specifications
+python scripts/check_policy_drift.py
+```
+
+---
+
+## Automated Pull Request Reviews (Euler and Foucault)
+
+Pull requests are automatically evaluated by two review workflows upon CI completion:
+- **Quality Review** (`.github/workflows/quality-review-pr.yml`): Evaluates code quality against Euler `QUALITY.md` rules using [abuzucom/euler](https://github.com/abuzucom/euler). See [docs/pr-quality-review.md](docs/pr-quality-review.md).
+- **Security Review** (`.github/workflows/security-review-pr.yml`): Evaluates security hazards and correctness against Foucault `AUDIT.md` rules using [abuzucom/foucault](https://github.com/abuzucom/foucault). See [docs/pr-security-review.md](docs/pr-security-review.md).
+
+### Model Authentication
+The model evaluation adapter (`ci/call_model.py`) supports either `OLLAMA_API_KEY` or `MODEL_API_KEY`. The adapter checks `MODEL_API_KEY` first and falls back to `OLLAMA_API_KEY`.
+
+### Fork Pull Request Gating
+Pull requests from forks are untrusted and subject to two-factor gating:
+1. **Maintainer Label Gate**: A repository maintainer must apply the `safe-to-review` label to the pull request.
+2. **Environment Approval Gate**: The workflow executes in the protected `fork-review` GitHub environment, requiring manual deployment approval by a maintainer before running evaluation containers or granting access to environment secrets.
+
+Workflows pass `fork_review: true` to upstream review workflows when evaluating forks. Pull request files are parsed purely as untrusted review data without execution. Unlabeled or unapproved fork pull requests skip model evaluation cleanly without credential exposure.
+
+### Policy Drift Verification
+Local policy documentation incorporates exact upstream specifications. Run the drift check script to verify SHA-256 integrity:
+```bash
+python scripts/check_policy_drift.py
 ```
 

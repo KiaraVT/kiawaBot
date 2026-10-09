@@ -9,34 +9,35 @@ The PR quality reviewer applies `QUALITY.md` to pull requests. The reviewer prod
 - `QUALITY.md`: commit `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44`, through `quality_ref`.
 - `quality-review.yml`: the same commit, through the `uses:` pin.
 
-## Wiring
+## Wiring and Lifecycle
 
 - `.github/workflows/quality-review-pr.yml` runs the caller workflow.
-- The workflow triggers on completion of `ci`.
-- Same-repository pull requests map repository secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
-- Same-repository pull requests call `quality-review.yml` with default inputs (omitting `fork_review`).
-- Approved fork pull requests (`safe-to-review` label) call `quality-review.yml` with `fork_review: true`, running in the protected `fork-review` environment and consuming environment-specific `MODEL_API_KEY`.
-- Unapproved fork pull requests receive a skipped check run and no secret.
+- Trigger: fires on completion of `ci` (`workflow_run` event).
+- Concurrency: grouped by `quality-review-${{ head_sha }}` with `cancel-in-progress: true`.
+- Permissions: workflow and caller jobs declare `actions: read`, `checks: write`, `contents: read`, and `pull-requests: write`. The `actions: read` permission enables the reusable workflow to access and download workflow run artifacts.
+- Resolution (`resolve` job): matches `head_sha` against open pull requests, verifies same-repository origin, queries current labels via GitHub API, and strips carriage returns and ASCII control characters from pull request titles and descriptions. Fails closed if label queries fail.
+- Same-repository review (`review` job): calls `quality-review.yml` with default inputs (omitting `fork_review`), mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}` to secret `MODEL_API_KEY`.
+- Approved fork review (`review-fork` job): calls `quality-review.yml` with `fork_review: true` in the protected `fork-review` environment, mapping environment secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
+- Unapproved fork skip (`fork-skip` job): executes when a fork PR lacks `safe-to-review`, publishing a GitHub Check Run with status `completed` and conclusion `skipped`.
+- Comment annotation (`annotate` job): executes upon review completion (success or failure), running `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-quality-review.md` on review comments matching marker `<!-- euler-quality-review -->`.
 
-## Trust Boundary
+## Trust Boundary and Gating
 
 The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. The read-only preparation job builds review envelopes without model credentials, and fork reviews require maintainer label and environment approval before model evaluation.
 
-Environment approvers must verify that the `safe-to-review` label was applied by a trusted repository maintainer before approving execution in `fork-review`. The label check is an initial gate and not cryptographic proof; manual environment approval provides the authoritative security gate. Passing `fork_review: true` to upstream `quality-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
+Fork pull requests enforce two-factor gating:
+1. **Maintainer Label Gate**: A repository maintainer must verify the pull request contents and apply the `safe-to-review` label. Removing the label triggers CI cancellation of active review runs.
+2. **Environment Approval Gate**: The `review-fork` job targets the protected `fork-review` GitHub environment, requiring explicit maintainer deployment approval before releasing environment secrets or initiating evaluation containers.
 
-The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and
-restrict deployments to trusted branches or pull request head references. The environment-level `MODEL_API_KEY`
-must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle
-and preventing privilege escalation across review scopes.
+The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and restrict deployments to trusted branches or pull request head references. The environment-level `OLLAMA_API_KEY` or `MODEL_API_KEY` must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle and preventing privilege escalation across review scopes.
 
-Pull request titles and descriptions are sanitized in `resolve` to strip non-printable ASCII control characters.
-Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review
-context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state
-re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
+Pull request titles and descriptions are sanitized in `resolve` to strip non-printable ASCII control characters. Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
 
-## Policy Provenance
+## Policy Provenance and Drift Detection
 
 This document incorporates the exact policy specification from [abuzucom/euler](https://github.com/abuzucom/euler) pinned at commit `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44`. Source file: [QUALITY.md](https://github.com/abuzucom/euler/blob/aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44/QUALITY.md).
+
+Run `python scripts/check_policy_drift.py` to verify local policy integrity against the upstream SHA-256 digest (`73782cbc6ae30dab4ba561c77e5341671738e85a91dfd8a6a2ef02b02f44a300`).
 
 ---
 

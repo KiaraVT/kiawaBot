@@ -9,37 +9,53 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 - `AUDIT.md`: commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, through `audit_ref`.
 - `security-review.yml`: the same commit, through the `uses:` pin.
 
-## Wiring
+## Review Adapter and Execution Stack
+
+The security reviewer utilizes local adopter scripts to prepare context, invoke models, and normalize responses:
+- `ci/build_pr_case.py`: extracts pull request diffs, commits, and metadata into a review envelope.
+- `ci/run_model_command.py`: executes model invocation commands with environment variable propagation.
+- `ci/call_model.py`: model invocation adapter invoked by Foucault (`model_call_command: "python3 ci/call_model.py"`).
+  - Resolves credentials by checking `MODEL_API_KEY` first, falling back to `OLLAMA_API_KEY`.
+  - Normalizes raw model output (extracts JSON from markdown code fences or unformatted text blocks).
+  - Validates and maps finding categories to valid `FindingCategory` enums in `AUDIT.md`.
+- `ci/model_providers.json`: specifies provider configuration and model profiles.
+- `scripts/check_pr_review_response.py`: validates model output structure against the required reviewer schema.
+
+## Wiring and Lifecycle
 
 - `.github/workflows/security-review-pr.yml` runs the caller workflow.
-- The workflow triggers on completion of `ci`.
-- `ci/build_pr_case.py`, `ci/run_model_command.py`, and `ci/call_model.py` supply the review adapter.
-- `ci/model_providers.json` configures the active provider profile.
-- `scripts/check_pr_review_response.py` validates model output format.
-- Same-repository pull requests map repository secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
-- Same-repository pull requests call `security-review.yml` with default inputs (omitting `fork_review`).
-- Approved fork pull requests (`safe-to-review` label) call `security-review.yml` with `fork_review: true`, running in the protected `fork-review` environment and consuming environment-specific `MODEL_API_KEY`.
-- Unapproved fork pull requests receive a skipped result and no secret.
+- Trigger: fires on completion of `ci` (`workflow_run` event).
+- Concurrency: grouped by `security-review-${{ head_sha }}` with `cancel-in-progress: true`.
+- Permissions: declares `actions: read`, `checks: write`, `contents: read`, and `pull-requests: write`.
+- Resolution (`resolve-pr` job):
+  - Matches `head_sha` against open pull requests.
+  - Base Commit Fallback: queries GitHub API for required adopter review scripts (`ci/build_pr_case.py`, `ci/run_model_command.py`, `scripts/check_pr_review_response.py`) on `base_sha`. If any script returns 404 (e.g. older forks predating reviewer adoption), falls back to `context.sha` on the default branch so the checkout step succeeds.
+  - Re-review Deduplication: checks for existing trusted verdict artifacts (`security-review-verdict-${head_sha}`) and completed checks from default-branch runs, setting `already_reviewed: true` to prevent redundant execution.
+  - Queries PR labels via GitHub API, checking for `safe-to-review`. Fails closed if label queries fail.
+- Same-repository review (`review` job): calls `security-review.yml` with default inputs (omitting `fork_review`), mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}`.
+- Approved fork review (`review-fork` job): calls `security-review.yml` with `fork_review: true` in the protected `fork-review` environment, mapping environment secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
+- Unapproved fork skip (`fork-review-skipped` job): executes when a fork PR lacks `safe-to-review`, publishing a GitHub Check Run with status `completed` and conclusion `skipped`.
+- Comment annotation (`annotate` job): executes upon review completion (success or failure), running `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-security-review.md` on review comments matching marker `<!-- foucault-security-review -->`.
 
-## Trust Boundary
+## Trust Boundary and Gating
 
 The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. Fork pull requests require maintainer label and environment approval before receiving provider credentials.
 
-Environment approvers must verify that the `safe-to-review` label was applied by a trusted repository maintainer before approving execution in `fork-review`. The label check is an initial gate and not cryptographic proof; manual environment approval provides the authoritative security gate. Passing `fork_review: true` to upstream `security-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
+Fork pull requests enforce two-factor gating:
+1. **Maintainer Label Gate**: A repository maintainer must verify the pull request contents and apply the `safe-to-review` label. Removing the label triggers CI cancellation of active review runs.
+2. **Environment Approval Gate**: The `review-fork` job targets the protected `fork-review` GitHub environment, requiring explicit maintainer deployment approval before releasing environment secrets or initiating evaluation containers.
 
-The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and
-restrict deployments to trusted branches or pull request head references. The environment-level `MODEL_API_KEY`
-must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle
-and preventing privilege escalation across review scopes.
+Passing `fork_review: true` to upstream `security-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
 
-Pull request titles and descriptions are sanitized in `resolve` to strip non-printable ASCII control characters.
-Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review
-context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state
-re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
+The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and restrict deployments to trusted branches or pull request head references. The environment-level `OLLAMA_API_KEY` or `MODEL_API_KEY` must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle and preventing privilege escalation across review scopes.
 
-## Policy Provenance
+Pull request titles and descriptions are sanitized in `resolve-pr` to strip non-printable ASCII control characters. Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
 
-This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md).
+## Policy Provenance and Drift Detection
+
+This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md). Upstream policy specification content and SHA-256 digest remain unchanged from `f59866d`.
+
+Run `python scripts/check_policy_drift.py` to verify local policy integrity against the upstream SHA-256 digest (`bd252577fe7f4359f7bd6e3ea3f91c3bddf854dfc8d6c30a696986e91acf89a0`).
 
 ---
 
