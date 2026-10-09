@@ -145,7 +145,7 @@ jobs:
       # Select the upstream reusable workflow's fork-review environment path
       fork_review: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   fork-skip:
     needs: resolve

@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`, canceling obsolete in-progress runs to avoid concurrency overlap.
 - Review workflows fetch current pull request labels, fail closed when label lookup fails, and preserve resolved pull request metadata for diagnostic continuity.
-- Same-repository review jobs support both `OLLAMA_API_KEY` and `MODEL_API_KEY` repository secrets, while fork reviews strictly consume environment-scoped `MODEL_API_KEY`.
+- Both same-repository and fork review jobs support both `OLLAMA_API_KEY` and `MODEL_API_KEY` secrets.
 - Updated Euler pin to `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44` and Foucault pin to `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, routing fork reviews via `fork_review: true` in the protected `fork-review` environment while same-repository reviews omit `fork_review`.
 - Documented that Foucault `AUDIT.md` policy specification and SHA-256 digest remain unchanged from `f59866d`.
 - Updated policy documentation and drift verification for latest upstream Euler `QUALITY.md` and Foucault specifications.
@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Granted actions: read permission to quality review caller jobs for artifact download access.
 - Verified adopter review scripts on security review base revision with fallback to default branch for older forks.
 - Normalized model evaluator output formatting and finding categories in call adapter to satisfy reviewer structural contract.
+- Resolved model API key from `MODEL_API_KEY` or `OLLAMA_API_KEY` in call adapter and forwarded both keys in runner environment.
 
 ## [2.3.0] - 2026-10-08
 

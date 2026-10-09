@@ -21,6 +21,7 @@ FORWARDED_ENVIRONMENT = {
     "AUDIT_PROMPT_FILE",
     "CASE_TEXT_FILE",
     "MODEL_API_KEY",
+    "OLLAMA_API_KEY",
     "PATH",
     "HOME",
     "LANG",
