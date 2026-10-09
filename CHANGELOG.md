@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-09
+
 ### Added
 - Support for Euler quality review and Foucault security review on fork pull requests.
 - Gating for fork reviews requiring maintainer `safe-to-review` label application.
 - Environment protection gate requiring maintainer deployment approval in `fork-review` before model credential access.
+- Comprehensive PR review architecture and lifecycle documentation in `docs/pr-quality-review.md` and `docs/pr-security-review.md`.
+- Automated PR reviews and policy drift check instructions in `README.md`.
 
 ### Changed
 - Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`, canceling obsolete in-progress runs to avoid concurrency overlap.
