@@ -92,10 +92,17 @@ app.get("/api/incentives", (req, res) => {
             }
         };
         const incentiveData = safeReadJSON(incentive_Path, defaultIncentive);
+        const validated = {
+            incentive: {
+                command: typeof incentiveData?.incentive?.command === 'string' ? incentiveData.incentive.command : '!update',
+                amount: typeof incentiveData?.incentive?.amount === 'number' ? incentiveData.incentive.amount : 0,
+                goal: typeof incentiveData?.incentive?.goal === 'number' ? incentiveData.incentive.goal : 0
+            }
+        };
         res.setHeader('Content-Type', 'application/json');
-        res.json(incentiveData);
+        res.json(validated);
     } catch (error) {
-        console.error('Error reading incentive file:', error);
+        console.error('Error reading incentive file:', error.message);
         res.status(500).json({ error: 'Failed to read incentive data' });
     }
 });
@@ -333,7 +340,7 @@ app.get("/chatwidget", (_req, res) => {
 // Centralized error handling middleware
 app.use((err, req, res, next) => {
     void next;
-    console.error('Web Server: Unhandled error:', err);
+    console.error('Web Server: Unhandled error:', err?.message || String(err));
     res.status(500).json({ error: 'Internal Server Error' });
 });
 

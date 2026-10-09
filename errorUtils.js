@@ -1,4 +1,41 @@
 /**
+ * Redact sensitive query parameters from URLs.
+ * Prevents logging tokens, secrets, or auth codes in error dumps.
+ *
+ * @param {string} rawUrl
+ * @returns {string}
+ */
+export function redactSensitiveUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== "string") {
+        return "";
+    }
+    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token", "token"];
+    try {
+        const dummyBase = "https://example.com";
+        const parsed = new URL(rawUrl, dummyBase);
+        let changed = false;
+        for (const key of sensitiveKeys) {
+            if (parsed.searchParams.has(key)) {
+                parsed.searchParams.set(key, "REDACTED");
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return rawUrl;
+        }
+        let result = "";
+        if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+            result = parsed.toString();
+        } else {
+            result = parsed.pathname + parsed.search;
+        }
+        return result.replace(/=REDACTED/g, "=[REDACTED]");
+    } catch {
+        return rawUrl.replace(/(client_secret|refresh_token|code|access_token|token)=([^&]+)/gi, "$1=[REDACTED]");
+    }
+}
+
+/**
  * Format an Axios or generic Error into a concise single-line string.
  * Prevents dumping internal socket buffers, headers, and circular references.
  *
@@ -15,7 +52,8 @@ export function formatAxiosError(error) {
 
     const message = error.message || "Error";
     const method = error.config?.method ? error.config.method.toUpperCase() : "";
-    const url = error.config?.url || "";
+    const rawUrl = error.config?.url || "";
+    const url = redactSensitiveUrl(rawUrl);
     const endpointDesc = (method || url) ? ` (${method ? method + " " : ""}${url})` : "";
 
     if (error.response) {

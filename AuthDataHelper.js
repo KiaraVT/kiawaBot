@@ -7,6 +7,7 @@ export default class AuthDataHelper {
     constructor() {
         this.data = null;
         this.dataPath = './data/auth-data.json';
+        this.legacyPath = './auth-data.json';
         this.defaultData = {
             twitch: {
                 access_token: "",
@@ -37,9 +38,8 @@ export default class AuthDataHelper {
         }
 
         if (!fs.existsSync(this.dataPath)) {
-            const candidateLegacy = this.legacyPath !== undefined ? this.legacyPath : (this.dataPath === './data/auth-data.json' ? './auth-data.json' : null);
-            if (candidateLegacy && fs.existsSync(candidateLegacy)) {
-                fs.copyFileSync(candidateLegacy, this.dataPath);
+            if (this.legacyPath && fs.existsSync(this.legacyPath)) {
+                fs.copyFileSync(this.legacyPath, this.dataPath);
             } else {
                 fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2));
             }
@@ -56,7 +56,7 @@ export default class AuthDataHelper {
                 youtube: { ...this.defaultData.youtube, ...(parsed?.youtube || {}) }
             };
         } catch (err) {
-            console.log('Error parsing Auth Data file: ' + err.message);
+            console.error('Error parsing Auth Data file: ' + err.message);
             this.data = { ...this.defaultData };
         }
 
@@ -73,7 +73,7 @@ export default class AuthDataHelper {
             fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2));
             return true;
         } catch (err) {
-            console.log('Error writing Auth Data file:' + err.message);
+            console.error('Error writing Auth Data file:' + err.message);
             return false;
         }
     }
@@ -122,6 +122,12 @@ export default class AuthDataHelper {
     //update a given field, optionally creating it if it doesn't exist
     update(field, value, create = true, immediate = false) {
         let pathArr = field.split(".");
+        const topLevelKey = pathArr[0];
+        const knownKeys = Object.keys(this.defaultData);
+        if (!knownKeys.includes(topLevelKey)) {
+            console.warn(`[AuthDataHelper] Updating unknown top-level key '${topLevelKey}'. Ensure schema alignment.`);
+        }
+
         let targetField = pathArr.pop();
         let focusObject = this.data;
 
@@ -140,8 +146,7 @@ export default class AuthDataHelper {
 
         focusObject[targetField] = value;
         if (immediate) {
-            clearTimeout(this.autoSaveTimeout);
-            this.saveData();
+            this.saveDataImmediate();
         } else {
             this.touchAutosave();
         }
