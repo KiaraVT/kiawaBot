@@ -1,8 +1,35 @@
 """Tests verifying GitHub Actions workflow structural contracts."""
 
 from pathlib import Path
+import re
 import unittest
-import yaml
+
+
+def extract_workflow_jobs(content: str) -> dict[str, str]:
+    """Extract workflow job text blocks from a YAML workflow file."""
+    jobs: dict[str, str] = {}
+    current_job: str | None = None
+    lines: list[str] = []
+    in_jobs_section = False
+    for line in content.splitlines():
+        if line.startswith("jobs:"):
+            in_jobs_section = True
+            continue
+        if not in_jobs_section:
+            continue
+        if line and not line.startswith(" ") and not line.startswith("#"):
+            break
+        if line.startswith("  ") and not line.startswith("   ") and ":" in line:
+            key = line.strip().split(":")[0].strip()
+            if current_job:
+                jobs[current_job] = "\n".join(lines)
+                lines = []
+            current_job = key
+        elif current_job:
+            lines.append(line)
+    if current_job:
+        jobs[current_job] = "\n".join(lines)
+    return jobs
 
 
 class WorkflowContractsTestCase(unittest.TestCase):
@@ -20,14 +47,16 @@ class WorkflowContractsTestCase(unittest.TestCase):
             self.workflows_dir / "security-review-pr.yml",
         ]
         for workflow_file in workflow_files:
-            with open(workflow_file, "r", encoding="utf-8") as handle:
-                parsed = yaml.safe_load(handle)
-            jobs = parsed.get("jobs", {})
-            for job_name, job_def in jobs.items():
-                if "uses" in job_def:
-                    self.assertNotIn(
-                        "environment",
-                        job_def,
+            content = workflow_file.read_text(encoding="utf-8")
+            jobs = extract_workflow_jobs(content)
+            for job_name, job_body in jobs.items():
+                has_uses = bool(re.search(r"^\s+uses:", job_body, re.MULTILINE))
+                if has_uses:
+                    has_environment = bool(
+                        re.search(r"^\s+environment:", job_body, re.MULTILINE)
+                    )
+                    self.assertFalse(
+                        has_environment,
                         (
                             f"Job '{job_name}' in {workflow_file.name} defines "
                             "'environment' while invoking a reusable workflow. "
