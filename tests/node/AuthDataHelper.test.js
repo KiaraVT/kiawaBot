@@ -131,3 +131,35 @@ test("AuthDataHelper - preserves corrupted auth file and initializes fresh defau
     }
 });
 
+test("AuthDataHelper - preserves nested unknown keys and defaults when loading existing data", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-nested-"));
+    const dataPath = path.join(tempDir, "auth-data.json");
+
+    try {
+        const customData = {
+            twitchBroadcaster: {
+                access_token: "broadcaster_tok",
+                custom_nested: { setting: 42, flag: true }
+            },
+            future_extension: { enabled: true }
+        };
+        fs.writeFileSync(dataPath, JSON.stringify(customData));
+
+        const helper = new AuthDataHelper();
+        helper.dataPath = dataPath;
+        helper.loadData();
+
+        // Preserved existing values
+        assert.equal(helper.read("twitchBroadcaster.access_token"), "broadcaster_tok");
+        assert.equal(helper.read("twitchBroadcaster.custom_nested.setting"), 42);
+        assert.equal(helper.read("future_extension.enabled"), true);
+
+        // Retains default schema values that were not in customData
+        assert.equal(helper.read("twitchBroadcaster.refresh_token"), "");
+        assert.equal(helper.read("twitchBot.access_token"), "");
+        assert.equal(helper.read("youtube.access_token"), "");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+

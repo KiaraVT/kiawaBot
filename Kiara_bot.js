@@ -143,7 +143,7 @@ let authServerInstance = null;
 function ensureAuthListener() {
     if (!authServerInstance) {
         authServerInstance = authListener.listen(oAuthPort, () => {
-            console.log(`[Auth] OAuth callback listener active on port ${oAuthPort}`);
+            console.info(`[Auth] OAuth callback listener active on port ${oAuthPort}`);
         });
     }
 }
@@ -212,37 +212,52 @@ async function notifyAuthRequired(reason, authUrl) {
         }
     }
 
-    console.log("================================================================================");
-    console.log("ACTION REQUIRED: " + reason);
-    console.log("Please visit the following URL to authorize the bot:");
-    console.log(authUrl);
-    console.log("Once authorized, return here and the bot will resume automatically.");
-    console.log("================================================================================");
+    console.info("================================================================================");
+    console.info("ACTION REQUIRED: " + reason);
+    console.info("Please visit the following URL to authorize the bot:");
+    console.info(authUrl);
+    console.info("Once authorized, return here and the bot will resume automatically.");
+    console.info("================================================================================");
 }
 
-function handleAuthExitPolicy() {
+function shouldExitOnAuthFailure() {
     const authAction = (process.env.AUTH_FAILURE_ACTION || (process.env.EXIT_ON_AUTH_FAILURE === 'true' ? 'exit' : 'wait')).toLowerCase();
-    if (authAction === 'exit') {
-        console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
-        try {
-            authData.saveDataImmediate();
-            if (authServerInstance && typeof authServerInstance.close === 'function') {
-                authServerInstance.close();
-            }
-        } catch (cleanupErr) {
-            console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
-        }
-        process.exit(1);
-    }
+    return authAction === 'exit';
 }
+
+function performGracefulExit() {
+    console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
+    try {
+        authData.saveDataImmediate();
+        if (authServerInstance && typeof authServerInstance.close === 'function') {
+            authServerInstance.close();
+        }
+    } catch (cleanupErr) {
+        console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
+    }
+    process.exit(1);
+}
+
+let isAuthPromptActive = false;
+let authExitPending = false;
 
 //Begin the auth process by opening the user's browser to the consent screen
 async function startAuth(reason = "Twitch Authorization Needed") {
-    ensureAuthListener();
-    currentAuthState = crypto.randomBytes(16).toString('hex');
-    const authUrl = buildAuthUrl(currentAuthState);
-    await notifyAuthRequired(reason, authUrl);
-    handleAuthExitPolicy();
+    if (isAuthPromptActive) {
+        return;
+    }
+    isAuthPromptActive = true;
+    try {
+        ensureAuthListener();
+        currentAuthState = crypto.randomBytes(16).toString('hex');
+        const authUrl = buildAuthUrl(currentAuthState);
+        await notifyAuthRequired(reason, authUrl);
+        if (shouldExitOnAuthFailure()) {
+            authExitPending = true;
+        }
+    } finally {
+        isAuthPromptActive = false;
+    }
 }
 
 //exchange the authorization code we get from Twitch when the user consents to get an Access Token
@@ -265,15 +280,10 @@ function exchangeCodeForAccessToken(code) {
 async function refreshSingleToken(accountKey, accountName) {
     const refreshToken = authData.read(`${accountKey}.refresh_token`);
     if (!refreshToken) {
-        console.warn(`[Auth] No refresh token found for ${accountName}. Requesting new authorization.`);
+        console.warn(`[Auth] No refresh token found for ${accountName}.`);
         if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = false;
         if (accountKey === 'twitchBot') botAuthReady = false;
-        if (validationTicker) {
-            clearInterval(validationTicker);
-            validationTicker = null;
-        }
-        await startAuth(`Missing refresh token for ${accountName}`);
-        return { refreshed: false, reason: 'missing_refresh_token' };
+        return { refreshed: false, reason: 'missing_refresh_token', authRequired: true };
     }
 
     const postData = {
@@ -283,17 +293,17 @@ async function refreshSingleToken(accountKey, accountName) {
         refresh_token: refreshToken
     };
 
-    console.log(`[Auth] Attempting to refresh Access Token for ${accountName}...`);
+    console.info(`[Auth] Attempting to refresh Access Token for ${accountName}...`);
     try {
         return await executeWithBackoff(
             async () => {
                 const response = await axios.post("https://id.twitch.tv/oauth2/token", postData);
-                console.log(`[Auth] Access Token for ${accountName} was successfully refreshed`);
+                console.info(`[Auth] Access Token for ${accountName} was successfully refreshed`);
                 authData.update(`${accountKey}.access_token`, response.data.access_token, true, true);
                 authData.update(`${accountKey}.refresh_token`, response.data.refresh_token, true, true);
                 if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = true;
                 if (accountKey === 'twitchBot') botAuthReady = true;
-                return { refreshed: true, data: response.data };
+                return { refreshed: true, data: response.data, authRequired: false };
             },
             {
                 maxRetries: 3,
@@ -306,18 +316,14 @@ async function refreshSingleToken(accountKey, accountName) {
     } catch (error) {
         const status = error?.response?.status;
         console.error(`[Auth] Unable to refresh Access Token for ${accountName}:`, formatAxiosError(error));
-        if (status === 401 || status === 400) {
-            console.warn(`[Auth] Permanent auth failure for ${accountName}. Retaining existing tokens on disk and requesting new authorization.`);
+        // Treat HTTP 400, 401, and 403 as non-retryable permanent auth failures
+        if (status === 400 || status === 401 || status === 403) {
+            console.warn(`[Auth] Permanent auth failure (HTTP ${status}) for ${accountName}. Retaining existing tokens on disk.`);
             if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = false;
             if (accountKey === 'twitchBot') botAuthReady = false;
-            if (validationTicker) {
-                clearInterval(validationTicker);
-                validationTicker = null;
-            }
-            await startAuth(`Permanent auth failure (HTTP ${status}) for ${accountName}`);
-            return { refreshed: false, reason: 'permanent_failure', status };
+            return { refreshed: false, reason: 'permanent_failure', status, authRequired: true };
         }
-        return { refreshed: false, reason: 'transient_retry_exhausted', error };
+        return { refreshed: false, reason: 'transient_retry_exhausted', error, authRequired: false };
     }
 }
 
@@ -328,10 +334,39 @@ async function refreshAccessToken() {
         singleFlightBot(() => refreshSingleToken('twitchBot', 'Bot'))
     ]);
 
-    return {
-        broadcaster: broadcasterResult.status === 'fulfilled' ? broadcasterResult.value : { refreshed: false, error: broadcasterResult.reason },
-        bot: botResult.status === 'fulfilled' ? botResult.value : { refreshed: false, error: botResult.reason }
-    };
+    const broadcaster = broadcasterResult.status === 'fulfilled'
+        ? broadcasterResult.value
+        : { refreshed: false, error: broadcasterResult.reason, authRequired: false };
+    const bot = botResult.status === 'fulfilled'
+        ? botResult.value
+        : { refreshed: false, error: botResult.reason, authRequired: false };
+
+    // Coordinate auth prompt so only one prompt/cycle runs across both accounts
+    if (broadcaster.authRequired || bot.authRequired) {
+        if (validationTicker) {
+            clearInterval(validationTicker);
+            validationTicker = null;
+        }
+        const reasons = [];
+        if (broadcaster.authRequired) reasons.push(`Broadcaster (${broadcaster.reason})`);
+        if (bot.authRequired) reasons.push(`Bot (${bot.reason})`);
+        await startAuth(`Authorization required for ${reasons.join(', ')}`);
+    }
+
+    return { broadcaster, bot };
+}
+
+let transientRetryTimer = null;
+function scheduleTransientValidationRetry(delayMs = 15000) {
+    if (!transientRetryTimer && (!broadcasterAuthReady || !botAuthReady)) {
+        console.info(`[Auth] Scheduling validation retry in ${delayMs / 1000}s due to transient failure...`);
+        transientRetryTimer = setTimeout(() => {
+            transientRetryTimer = null;
+            lastRefreshBroadcasterAttempt = 0;
+            lastRefreshBotAttempt = 0;
+            validateAccessToken();
+        }, delayMs);
+    }
 }
 
 //attempt to validate the Access Token to be sure it is still valid
@@ -339,13 +374,13 @@ async function validateAccessToken() {
     if (isValidating) return;
     isValidating = true;
 
-    console.log('Attempting to validate Access Token...');
+    console.info('[Auth] Attempting to validate Access Token...');
 
     const validateBroadcaster = axios.get("https://id.twitch.tv/oauth2/validate", {
         headers: { Authorization: 'Bearer ' + authData.read('twitchBroadcaster.access_token') }
     })
         .then(() => {
-            console.log('Access Token for Broadcaster was successfully validated');
+            console.info('[Auth] Access Token for Broadcaster was successfully validated');
             broadcasterAuthReady = true;
         })
         .catch(async error => {
@@ -355,6 +390,8 @@ async function validateAccessToken() {
                 const refreshRes = await refreshAccessToken();
                 if (refreshRes.broadcaster?.refreshed) {
                     broadcasterAuthReady = true;
+                } else if (refreshRes.broadcaster?.reason === 'transient_retry_exhausted') {
+                    scheduleTransientValidationRetry();
                 }
             } catch (err) {
                 console.error('[Auth] Refresh failed during Broadcaster validation:', formatAxiosError(err));
@@ -365,7 +402,7 @@ async function validateAccessToken() {
         headers: { Authorization: 'Bearer ' + authData.read('twitchBot.access_token') }
     })
         .then(() => {
-            console.log('Access Token for Bot was successfully validated');
+            console.info('[Auth] Access Token for Bot was successfully validated');
             botAuthReady = true;
         })
         .catch(async error => {
@@ -375,6 +412,8 @@ async function validateAccessToken() {
                 const refreshRes = await refreshAccessToken();
                 if (refreshRes.bot?.refreshed) {
                     botAuthReady = true;
+                } else if (refreshRes.bot?.reason === 'transient_retry_exhausted') {
+                    scheduleTransientValidationRetry();
                 }
             } catch (err) {
                 console.error('[Auth] Refresh failed during Bot validation:', formatAxiosError(err));
@@ -383,12 +422,21 @@ async function validateAccessToken() {
 
     try {
         await Promise.allSettled([validateBroadcaster, validateBot]);
-        if (broadcasterAuthReady && botAuthReady && !initialValidationHandled) {
-            initialValidationHandled = true;
-            handleInitialAuthValidation();
+        if (broadcasterAuthReady && botAuthReady) {
+            if (transientRetryTimer) {
+                clearTimeout(transientRetryTimer);
+                transientRetryTimer = null;
+            }
+            if (!initialValidationHandled) {
+                initialValidationHandled = true;
+                handleInitialAuthValidation();
+            }
         }
     } finally {
         isValidating = false;
+        if (authExitPending && shouldExitOnAuthFailure()) {
+            performGracefulExit();
+        }
     }
 }
 
@@ -397,7 +445,7 @@ async function ensureBroadcasterAuth() {
     const now = Date.now();
     if (now - lastRefreshBroadcasterAttempt > REFRESH_COOLDOWN_MS) {
         lastRefreshBroadcasterAttempt = now;
-        console.log('[Auth] Broadcaster auth not ready, attempting recovery refresh...');
+        console.info('[Auth] Broadcaster auth not ready, attempting recovery refresh...');
         const refreshRes = await refreshAccessToken();
         if (refreshRes.broadcaster?.refreshed) {
             broadcasterAuthReady = true;
@@ -412,7 +460,7 @@ async function ensureBotAuth() {
     const now = Date.now();
     if (now - lastRefreshBotAttempt > REFRESH_COOLDOWN_MS) {
         lastRefreshBotAttempt = now;
-        console.log('[Auth] Bot auth not ready, attempting recovery refresh...');
+        console.info('[Auth] Bot auth not ready, attempting recovery refresh...');
         const refreshRes = await refreshAccessToken();
         if (refreshRes.bot?.refreshed) {
             botAuthReady = true;
@@ -442,7 +490,7 @@ async function apiGetRequest(method, parameters, isRetry = false) {
         return response.data;
     } catch (error) {
         if (error?.response?.status === 401 && !isRetry) {
-            console.log('Broadcaster token expired (401), refreshing token...');
+            console.info('[Auth] Broadcaster token expired (401), refreshing token...');
             broadcasterAuthReady = false;
             lastRefreshBroadcasterAttempt = Date.now();
             try {
@@ -478,7 +526,7 @@ async function apiPostRequest(method, parameters, data, isRetry = false) {
         return response.data;
     } catch (error) {
         if (error?.response?.status === 401 && !isRetry) {
-            console.log('Broadcaster token expired (401), refreshing token...');
+            console.info('[Auth] Broadcaster token expired (401), refreshing token...');
             broadcasterAuthReady = false;
             lastRefreshBroadcasterAttempt = Date.now();
             try {
@@ -492,7 +540,7 @@ async function apiPostRequest(method, parameters, data, isRetry = false) {
             }
         }
         if (error?.response?.status === 400) {
-            console.log(error.response.data?.message || 'Bad Request');
+            console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
         }
         throw error;
     }
@@ -516,7 +564,7 @@ async function apiPostRequestBot(method, parameters, data, isRetry = false) {
         return response.data;
     } catch (error) {
         if (error?.response?.status === 401 && !isRetry) {
-            console.log('Bot token expired (401), refreshing token...');
+            console.info('[Auth] Bot token expired (401), refreshing token...');
             botAuthReady = false;
             lastRefreshBotAttempt = Date.now();
             try {
@@ -530,7 +578,7 @@ async function apiPostRequestBot(method, parameters, data, isRetry = false) {
             }
         }
         if (error?.response?.status === 400) {
-            console.log(error.response.data?.message || 'Bad Request');
+            console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
         }
         throw error;
     }
@@ -668,7 +716,7 @@ function postMessage(user_id, message) {
 
 //handle changes to the status of the auth-data file
 function handleAuthFileStatusChange(status) {
-    console.log('Auth File status changed: ' + status);
+    console.info('Auth File status changed: ' + status);
     if (status === 'loaded') {
         //data has been loaded at app start.  Proceed with the rest of the bot stuff
         validateAccessToken();
@@ -683,7 +731,7 @@ function InitializeIncentive() {
 }
 
 function handleIncentiveFileStatusChange(status) {
-    console.log('Incentive File status changed: ' + status);
+    console.info('Incentive File status changed: ' + status);
     if (status === 'loaded') {
         //data has been loaded at app start.  Proceed with the rest of the bot stuff
         InitializeIncentive();
@@ -696,10 +744,10 @@ function handleInitialAuthValidation() {
     //as an example, we'll fetch the channel info once we know the token's good to show the API is working
     getChannelInfo(broadcasterID)
         .then(channel_data => {
-            console.log('Got channel data!', channel_data);
+            console.info('Got channel data!', channel_data);
         })
         .catch(error => {
-            console.log(error);
+            console.error('[Auth] Failed to fetch initial channel data:', formatAxiosError(error));
         });
 
 }
@@ -1134,18 +1182,18 @@ function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
         apiGetRequest('streams', { user_id: broadcasterID, type: 'all', first: '1' })
             .then(data => {
                 if (!data?.data || data.data[0] === undefined) {
-                    console.log('stream is offline, will not update streaks');
+                    console.info('[Streaks] Stream is offline, will not update streaks');
                     resolve(null);
                     return;
                 }
 
                 try {
                     if (userId && userName) {
-                        console.log('updating user streak!');
+                        console.info('[Streaks] Updating user streak!');
                         updateStreaks(userId, userName, sayItOutLoud);
                     } else {
                         // could have been something like an anonymous cheer
-                        console.log("No user given when updating a streak?  That's probably okay once in a while.");
+                        console.warn("[Streaks] No user given when updating a streak? That's probably okay once in a while.");
                     }
                     resolve(true);
                 } catch (e) {
@@ -1359,12 +1407,12 @@ let streamInfo = setTimeout(() => {
 }, 2000);
 
 async function getStreamInfo(broadcaster_id, type, first) {
-    console.log('Updating Stream Start Time');
+    console.info('[Stream] Updating Stream Start Time');
     try {
         const data = await apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first });
         const streamList = data?.data;
         if (!Array.isArray(streamList) || streamList.length === 0 || !streamList[0]) {
-            console.log('stream is offline, will not update streaks');
+            console.info('[Stream] Stream is offline, will not update streaks');
             return { online: false, data: [] };
         }
         const startedAt = streamList[0]?.started_at;
@@ -1921,7 +1969,7 @@ async function messageHandler(tags) {
             const currentGoal = Number(incentiveData.read('incentive.goal')) || 0;
             incentiveData.update('incentive.goal', parsed.goal);
             incentiveData.update('incentive.command', parsed.identifier);
-            console.log('Incentive Goal Updated from $' + currentGoal + ' to $' + parsed.goal);
+            console.info('Incentive Goal Updated from $' + currentGoal + ' to $' + parsed.goal);
             postMessage(botID, 'Incentive Goal Updated from $' + currentGoal + ' to $' + parsed.goal);
         }
     }
@@ -1935,7 +1983,6 @@ async function messageHandler(tags) {
         let dueler = `${channel}`;
         let duelerID = `${tags["chatter_user_id"]}`;
         let weapon = (args.slice(1).join(' ') ?? "").trim();
-        console.log(weapon)
         if (!weapon) {
             weapon = 'fists';
         }
@@ -1971,7 +2018,7 @@ async function messageHandler(tags) {
             const currentAmount = Number(incentiveData.read('incentive.amount')) || 0;
             const new_Amount = currentAmount + parsed.amount;
             incentiveData.update('incentive.amount', new_Amount);
-            console.log('Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
+            console.info('Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
             postMessage(botID, 'Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
         }
     }

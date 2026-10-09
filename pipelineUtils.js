@@ -12,17 +12,17 @@
 export function createSingleFlightMutex() {
     let inFlight = null;
     return function execute(fn) {
-        if (!inFlight) {
-            const currentPromise = Promise.resolve().then(() => fn());
-            inFlight = currentPromise.finally(() => {
-                Promise.resolve().then(() => {
-                    if (inFlight === activeFlight) {
-                        inFlight = null;
-                    }
-                });
-            });
-            const activeFlight = inFlight;
+        if (inFlight) {
+            return inFlight;
         }
+        const promise = Promise.resolve()
+            .then(() => fn())
+            .finally(() => {
+                if (inFlight === promise) {
+                    inFlight = null;
+                }
+            });
+        inFlight = promise;
         return inFlight;
     };
 }

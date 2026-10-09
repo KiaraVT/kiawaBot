@@ -347,11 +347,17 @@ app.get("/chatwidget", (_req, res) => {
 });
 
 // Centralized error handling middleware
-app.use((err, req, res, next) => {
+function errorHandler(err, req, res, next) {
     void next;
     console.error('Web Server: Unhandled error:', err?.message || String(err));
-    res.status(500).json({ error: 'Internal Server Error' });
-});
+    if (req.accepts(['html', 'json']) === 'html') {
+        res.status(500).type('text/html').send('<h1>500 Internal Server Error</h1><p>An unexpected error occurred.</p>');
+    } else {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+}
+
+app.use(errorHandler);
 
 const server = app.listen(port, '127.0.0.1', () => {
     console.log(`Kiara Bot Web Server running on port ${port}`);
@@ -359,4 +365,4 @@ const server = app.listen(port, '127.0.0.1', () => {
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
-export { app, server }
+export { app, server, errorHandler }

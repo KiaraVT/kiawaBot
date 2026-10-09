@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 process.env.WEB_PORT = "18081";
-const { server } = await import("../../webserver/server.js");
+const { server, errorHandler } = await import("../../webserver/server.js");
 
 const BASE_URL = "http://127.0.0.1:18081";
 
@@ -56,4 +56,32 @@ test("Webserver - HTML dashboard views return 200 and text/html", async () => {
         const text = await res.text();
         assert.ok(text.length > 0);
     }
+});
+
+test("Webserver - error handling middleware respects Accept header", () => {
+    let htmlStatus = 0, htmlSent = "", htmlType = "";
+    const mockHtmlReq = {
+        accepts: (types) => (Array.isArray(types) && types[0] === "html" ? "html" : "json")
+    };
+    const mockHtmlRes = {
+        status: (s) => { htmlStatus = s; return mockHtmlRes; },
+        type: (t) => { htmlType = t; return mockHtmlRes; },
+        send: (body) => { htmlSent = body; return mockHtmlRes; }
+    };
+    errorHandler(new Error("Test HTML err"), mockHtmlReq, mockHtmlRes, () => {});
+    assert.equal(htmlStatus, 500);
+    assert.equal(htmlType, "text/html");
+    assert.ok(htmlSent.includes("500 Internal Server Error"));
+
+    let jsonStatus = 0, jsonData = null;
+    const mockJsonReq = {
+        accepts: (types) => (Array.isArray(types) && types[0] === "html" ? "json" : "json")
+    };
+    const mockJsonRes = {
+        status: (s) => { jsonStatus = s; return mockJsonRes; },
+        json: (data) => { jsonData = data; return mockJsonRes; }
+    };
+    errorHandler(new Error("Test JSON err"), mockJsonReq, mockJsonRes, () => {});
+    assert.equal(jsonStatus, 500);
+    assert.deepEqual(jsonData, { error: "Internal Server Error" });
 });

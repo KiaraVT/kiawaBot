@@ -1,6 +1,30 @@
 import fs from "fs"
 import path from "path"
 
+function deepMerge(target, source) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) {
+        return source !== undefined ? source : target;
+    }
+    const output = { ...(target && typeof target === "object" && !Array.isArray(target) ? target : {}) };
+    for (const key of Object.keys(source)) {
+        const sourceVal = source[key];
+        const targetVal = output[key];
+        if (
+            sourceVal &&
+            typeof sourceVal === "object" &&
+            !Array.isArray(sourceVal) &&
+            targetVal &&
+            typeof targetVal === "object" &&
+            !Array.isArray(targetVal)
+        ) {
+            output[key] = deepMerge(targetVal, sourceVal);
+        } else {
+            output[key] = sourceVal;
+        }
+    }
+    return output;
+}
+
 export default class AuthDataHelper {
 
     //this runs when we create a new instance of the class
@@ -47,14 +71,7 @@ export default class AuthDataHelper {
 
         try {
             const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
-            this.data = {
-                ...this.defaultData,
-                ...parsed,
-                twitch: { ...this.defaultData.twitch, ...(parsed?.twitch || {}) },
-                twitchBroadcaster: { ...this.defaultData.twitchBroadcaster, ...(parsed?.twitchBroadcaster || {}) },
-                twitchBot: { ...this.defaultData.twitchBot, ...(parsed?.twitchBot || {}) },
-                youtube: { ...this.defaultData.youtube, ...(parsed?.youtube || {}) }
-            };
+            this.data = deepMerge(this.defaultData, parsed);
         } catch (err) {
             const timestamp = Date.now();
             const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
