@@ -318,19 +318,30 @@ export class TwitchAuthPipeline {
     async startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
         this.cleanupExpiredAuthStates();
         while (this.activeAuthStates.size >= this.maxActiveAuthStates) {
-            const oldestKey = this.activeAuthStates.keys().next().value;
+            let oldestKey = null;
+            let oldestCreatedAt = Infinity;
+            for (const [key, session] of this.activeAuthStates.entries()) {
+                if (session.createdAt < oldestCreatedAt) {
+                    oldestCreatedAt = session.createdAt;
+                    oldestKey = key;
+                }
+            }
             if (!oldestKey) break;
             this.activeAuthStates.delete(oldestKey);
         }
-        for (const session of this.activeAuthStates.values()) {
+        for (const [nonce, session] of this.activeAuthStates.entries()) {
             if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
-                return;
+                const pendingAuthUrl = this.buildAuthUrl(nonce);
+                console.warn(`[Auth] Authorization prompt already active for ${accountName}; re-surfacing pending authorization URL.`);
+                await this.notifyAuthRequired(`[${accountName}] ${reason} (pending)`, pendingAuthUrl, accountKey, accountName);
+                return { started: false, pending: true, authUrl: pendingAuthUrl };
             }
         }
         const nonce = crypto.randomBytes(16).toString("hex");
         this.activeAuthStates.set(nonce, { accountKey, accountName, createdAt: Date.now() });
         const authUrl = this.buildAuthUrl(nonce);
         await this.notifyAuthRequired(`[${accountName}] ${reason}`, authUrl, accountKey, accountName);
+        return { started: true, pending: false, authUrl };
     }
 
     /**
@@ -523,7 +534,7 @@ export class TwitchAuthPipeline {
      * @param {string} accountName
      * @returns {Promise<boolean>}
      */
-    async validateSingleAccount(accountKey, accountName) {
+    async validateSingleAccount(accountKey, accountName, autoRefresh = true) {
         const token = this.authData?.read?.(`${accountKey}.access_token`);
         try {
             await this.axios.get(this.validateUrl, {
@@ -536,11 +547,13 @@ export class TwitchAuthPipeline {
             console.warn(`[Auth] Unable to validate ${accountName} token:`, formatAxiosError(error));
             if (accountKey === "twitchBroadcaster") this.broadcasterAuthReady = false;
             if (accountKey === "twitchBot") this.botAuthReady = false;
-            const refreshRes = await this.refreshAccount(accountKey, accountName);
-            if (refreshRes?.refreshed) {
-                if (accountKey === "twitchBroadcaster") this.broadcasterAuthReady = true;
-                if (accountKey === "twitchBot") this.botAuthReady = true;
-                return true;
+            if (autoRefresh) {
+                const refreshRes = await this.refreshAccount(accountKey, accountName);
+                if (refreshRes?.refreshed) {
+                    if (accountKey === "twitchBroadcaster") this.broadcasterAuthReady = true;
+                    if (accountKey === "twitchBot") this.botAuthReady = true;
+                    return true;
+                }
             }
             return false;
         }
@@ -548,6 +561,7 @@ export class TwitchAuthPipeline {
 
     /**
      * Validates both accounts and fires initial validation callback on success.
+     * Validations run in parallel, while any necessary token refreshes run sequentially.
      *
      * @returns {Promise<void>}
      */
@@ -556,10 +570,21 @@ export class TwitchAuthPipeline {
         this.isValidating = true;
 
         try {
-            await Promise.allSettled([
-                this.validateSingleAccount("twitchBroadcaster", "Broadcaster"),
-                this.validateSingleAccount("twitchBot", "Bot")
+            const [broadcasterResult, botResult] = await Promise.allSettled([
+                this.validateSingleAccount("twitchBroadcaster", "Broadcaster", false),
+                this.validateSingleAccount("twitchBot", "Bot", false)
             ]);
+
+            const broadcasterValid = broadcasterResult.status === "fulfilled" && broadcasterResult.value;
+            const botValid = botResult.status === "fulfilled" && botResult.value;
+
+            if (!broadcasterValid) {
+                await this.refreshAccount("twitchBroadcaster", "Broadcaster");
+            }
+            if (!botValid) {
+                await this.refreshAccount("twitchBot", "Bot");
+            }
+
             if (this.broadcasterAuthReady && this.botAuthReady) {
                 if (!this.initialValidationHandled) {
                     this.initialValidationHandled = true;

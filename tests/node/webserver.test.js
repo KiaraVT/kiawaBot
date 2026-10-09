@@ -56,14 +56,12 @@ test("Webserver - /api/incentives handles malformed JSON and file size limits", 
     process.env.INCENTIVE_PATH = tempIncPath;
 
     try {
-        // Test malformed JSON falls back gracefully to default schema
+        // Test malformed JSON returns 500 to surface corrupt on-disk data
         fs.writeFileSync(tempIncPath, "{ malformed: json not valid }");
         const malformedRes = await fetch(`${BASE_URL}/api/incentives`);
-        assert.equal(malformedRes.status, 200);
+        assert.equal(malformedRes.status, 500);
         const malformedData = await malformedRes.json();
-        assert.deepEqual(malformedData, {
-            incentive: { command: "!update", amount: 0, goal: 0 }
-        });
+        assert.ok(malformedData.error.includes("malformed JSON"));
 
         // Test oversized file returns 413
         const largeContent = "x".repeat(1024 * 1024 + 100);

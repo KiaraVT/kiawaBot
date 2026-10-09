@@ -114,8 +114,8 @@ app.get("/api/incentives", async (req, res) => {
             try {
                 incentiveData = JSON.parse(rawContent);
             } catch (parseErr) {
-                console.warn('Incentive file contains malformed JSON, using defaults:', parseErr.message);
-                incentiveData = defaultIncentive;
+                console.error('Incentive file contains malformed JSON:', parseErr.message);
+                return res.status(500).json({ error: 'Incentive file contains malformed JSON', details: parseErr.message });
             }
         }
 

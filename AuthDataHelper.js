@@ -38,8 +38,10 @@ function safeSetPermission(targetPath, mode) {
     try {
         fs.chmodSync(targetPath, mode);
     } catch (err) {
-        // Suppress expected permission error on non-POSIX platforms
-        void err;
+        if (process.platform === "win32" && (err.code === "EPERM" || err.code === "ENOSYS")) {
+            return;
+        }
+        console.warn(`[AuthDataHelper] Unable to set permissions on ${targetPath}:`, err.message);
     }
 }
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import AuthDataHelper, { deepMerge } from "../../AuthDataHelper.js";
+import AuthDataHelper, { deepMerge, safeSetPermission } from "../../AuthDataHelper.js";
 
 test("AuthDataHelper - does not have dead constructorIncentive method", () => {
     const helper = new AuthDataHelper();
@@ -263,6 +263,25 @@ test("AuthDataHelper - corrupted backup filename uses crypto random bytes hex", 
         assert.match(parts[1], /^[a-f0-9]{8}$/, "Random token must be 8-char crypto hex string");
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("safeSetPermission - logs warning on unexpected chmod failure", () => {
+    let warnLogged = null;
+    const origWarn = console.warn;
+    const origChmodSync = fs.chmodSync;
+    console.warn = (...args) => { warnLogged = args.join(" "); };
+    fs.chmodSync = () => {
+        const err = new Error("EACCES: permission denied");
+        err.code = "EACCES";
+        throw err;
+    };
+    try {
+        safeSetPermission("/mock/path", 0o600);
+        assert.ok(warnLogged && warnLogged.includes("Unable to set permissions on /mock/path"));
+    } finally {
+        console.warn = origWarn;
+        fs.chmodSync = origChmodSync;
     }
 });
 

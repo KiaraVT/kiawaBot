@@ -872,4 +872,114 @@ test("TwitchAuthPipeline - caps activeAuthStates to prevent unbounded memory gro
     assert.ok(pipeline.activeAuthStates.size <= 3, "activeAuthStates must not exceed maxActiveAuthStates cap");
 });
 
+test("redactSensitiveUrl - redacts sensitive values containing hash in fallback mode", () => {
+    // Malformed URL that causes new URL() to throw and triggers fallback regex
+    const malformedUrlWithHash = "invalid://[bad-ipv6]/path?state=abc#def&access_token=secretval#frag";
+    const redacted = redactSensitiveUrl(malformedUrlWithHash);
+    assert.equal(redacted.includes("abc"), false);
+    assert.equal(redacted.includes("def"), false);
+    assert.equal(redacted.includes("secretval"), false);
+    assert.ok(redacted.includes("state=[REDACTED]"));
+    assert.ok(redacted.includes("access_token=[REDACTED]"));
+});
+
+test("TwitchAuthPipeline - activeAuthStates cap evicts entry with oldest createdAt", async () => {
+    const pipeline = new TwitchAuthPipeline({
+        maxActiveAuthStates: 3,
+        notifyAuthRequired: async () => {}
+    });
+
+    // Insertion order: state-recent (now), state-oldest (10000ms ago), state-middle (5000ms ago)
+    pipeline.activeAuthStates.set("state-recent", { accountKey: "k", createdAt: Date.now() });
+    pipeline.activeAuthStates.set("state-oldest", { accountKey: "k", createdAt: Date.now() - 10000 });
+    pipeline.activeAuthStates.set("state-middle", { accountKey: "k", createdAt: Date.now() - 5000 });
+
+    assert.equal(pipeline.activeAuthStates.size, 3);
+    await pipeline.startAuth("prompt new", "twitchBroadcaster", "Broadcaster");
+
+    // The oldest by createdAt must have been deleted
+    assert.equal(pipeline.activeAuthStates.has("state-oldest"), false, "Oldest session by createdAt must be evicted");
+    assert.equal(pipeline.activeAuthStates.has("state-recent"), true, "Recent session must not be evicted first");
+});
+
+test("TwitchAuthPipeline - startAuth re-surfaces pending prompt instead of silent drop", async () => {
+    let notifyCount = 0;
+    const notifiedUrls = [];
+    const pipeline = new TwitchAuthPipeline({
+        notifyAuthRequired: async (_msg, url) => {
+            notifyCount += 1;
+            notifiedUrls.push(url);
+        }
+    });
+
+    const res1 = await pipeline.startAuth("First prompt", "twitchBroadcaster", "Broadcaster");
+    assert.equal(notifyCount, 1);
+    assert.equal(res1.started, true);
+
+    // Call startAuth again within 60s window
+    const res2 = await pipeline.startAuth("Second prompt", "twitchBroadcaster", "Broadcaster");
+    assert.equal(notifyCount, 2, "Duplicate prompt must re-notify pending URL, not silently drop");
+    assert.equal(res2.pending, true);
+    assert.equal(res2.authUrl, notifiedUrls[0]);
+});
+
+test("TwitchAuthPipeline - validateAccessToken serializes refreshes sequentially", async () => {
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "exp_broadcaster" },
+            twitchBot: { access_token: "exp_bot" }
+        },
+        read(k) {
+            if (k === "twitchBroadcaster.access_token") return "exp_broadcaster";
+            if (k === "twitchBot.access_token") return "exp_bot";
+            return "";
+        },
+        update() {}
+    };
+
+    const mockAxios = {
+        get: async () => {
+            const err = new Error("Token expired");
+            err.response = { status: 401 };
+            throw err;
+        },
+        post: async () => {
+            return { data: { access_token: "new_tok", refresh_token: "new_ref" } };
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios
+    });
+
+    let activeRefreshes = 0;
+    let maxConcurrentRefreshes = 0;
+    const origRefreshAccount = pipeline.refreshAccount.bind(pipeline);
+    pipeline.refreshAccount = async (accountKey, accountName) => {
+        activeRefreshes += 1;
+        maxConcurrentRefreshes = Math.max(maxConcurrentRefreshes, activeRefreshes);
+        await new Promise(r => setTimeout(r, 20));
+        activeRefreshes -= 1;
+        return origRefreshAccount(accountKey, accountName);
+    };
+
+    await pipeline.validateAccessToken();
+    assert.equal(maxConcurrentRefreshes, 1, "Account refreshes during validateAccessToken must be sequential");
+});
+
+test("AUTH_EXIT_GRACE_PERIOD_MS - parses safely falling back to 120000 on NaN or non-positive value", () => {
+    function parseGracePeriod(val) {
+        const parsedGrace = parseInt(val || "120000", 10);
+        return Number.isFinite(parsedGrace) && parsedGrace > 0 ? parsedGrace : 120000;
+    }
+
+    assert.equal(parseGracePeriod("not_a_number"), 120000);
+    assert.equal(parseGracePeriod("-500"), 120000);
+    assert.equal(parseGracePeriod("0"), 120000);
+    assert.equal(parseGracePeriod("60000"), 60000);
+    assert.equal(parseGracePeriod(""), 120000);
+    assert.equal(parseGracePeriod(undefined), 120000);
+});
+
 

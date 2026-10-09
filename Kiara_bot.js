@@ -11,7 +11,7 @@ import IncentiveHelper from "./IncentiveHelper.js";
 import QuoteHelper, {castIdToNumber} from "./QuoteHelper.js";
 import { WebSocketServer } from "ws";
 import express from "express"
-import { formatAxiosError, redactSensitiveUrl } from "./errorUtils.js";
+import { formatAxiosError, redactSensitiveUrl, redactSensitiveData } from "./errorUtils.js";
 import {
     processStreamStartStreak,
     validateCommandArguments,
@@ -175,9 +175,21 @@ function shouldExitOnAuthFailure() {
 function performGracefulExit() {
     console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
     try {
+        if (validationTicker) {
+            clearInterval(validationTicker);
+            validationTicker = null;
+        }
         authData.saveDataImmediate();
         if (authServerInstance && typeof authServerInstance.close === 'function') {
             authServerInstance.close();
+        }
+        if (typeof socket !== 'undefined' && socket && typeof socket.close === 'function') {
+            if (Array.isArray(websockets)) {
+                for (const ws of websockets) {
+                    try { ws.close(); } catch (wsErr) { void wsErr; }
+                }
+            }
+            socket.close();
         }
     } catch (cleanupErr) {
         console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
@@ -186,7 +198,8 @@ function performGracefulExit() {
 }
 
 let authExitTimer = null;
-const AUTH_EXIT_GRACE_PERIOD_MS = parseInt(process.env.AUTH_EXIT_GRACE_PERIOD_MS || "120000", 10);
+const parsedGrace = parseInt(process.env.AUTH_EXIT_GRACE_PERIOD_MS || "120000", 10);
+const AUTH_EXIT_GRACE_PERIOD_MS = Number.isFinite(parsedGrace) && parsedGrace > 0 ? parsedGrace : 120000;
 
 function scheduleGracefulAuthExit() {
     if (!shouldExitOnAuthFailure()) {
@@ -235,7 +248,8 @@ const authPipeline = new TwitchAuthPipeline({
 
 authListener.get("/", async (req, res) => {
     if (!req.query.code) {
-        console.warn("[Auth] Received authorization callback without code parameter:", req.query);
+        const sanitizedQuery = redactSensitiveData({ ...req.query });
+        console.warn("[Auth] Received authorization callback without code parameter:", sanitizedQuery);
         if (!res.headersSent) {
             res.status(400).send("Authorization failed: missing authorization code or access denied.");
         }
@@ -614,7 +628,7 @@ class TesManager {
             //let's assume any error here is due to a bad access token and re-auth
             const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
             warning();
-            startAuth();
+            startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
             return { queueSubscription: warning }; // calls to queueSubscription won't crash the bot entirely
         }
     }
