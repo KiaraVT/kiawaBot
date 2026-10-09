@@ -7,6 +7,7 @@ import jsonfile from "jsonfile";
 const quote_Path = './data/quotes.json';
 const streak_Path = './data/streaks.json';
 const command_Path = './data/command_List.json';
+const eventMode_Path = './data/eventMode.json';
 import AuthDataHelper from "./AuthDataHelper.js";
 import IncentiveHelper from "./IncentiveHelper.js";
 import QuoteHelper, {castIdToNumber} from "./QuoteHelper.js";
@@ -30,7 +31,8 @@ if (!fs.existsSync(dataDir)) {
 const defaultFiles = [
     { path: quote_Path, content: [] },
     { path: streak_Path, content: {} },
-    { path: command_Path, content: [] }
+    { path: command_Path, content: [] },
+    { path: eventMode_Path, content: { enabled: false } }
 ];
 
 defaultFiles.forEach(({ path, content }) => {
@@ -1397,10 +1399,52 @@ tesManager.queueSubscription("channel.subscription.message", subCondition, event
 });
 
 /***************************************
+ *             EVENT MODE              *
+ ***************************************/
+const commandsAllowedInEventMode = [
+    "!eventon", "!eventoff",
+    "!addcommand", "!editcommand",
+    "!addquote", "!editquote", "!removequote",
+    "!so",
+    "!addincentive", "!updateincentive"
+];
+
+let eventMode = false;
+try {
+    eventMode = jsonfile.readFileSync(eventMode_Path).enabled === true;
+}
+catch (eventModeFileReadError) {
+    console.error("Could not read the event mode file.", eventModeFileReadError);
+}
+console.log("Event mode is now turned " + (eventMode ? "ON" : "OFF"));
+
+async function setEventMode(enabled) {
+    eventMode = enabled;
+    console.log("Event mode is now turned " + (eventMode ? "ON" : "OFF"));
+    try {
+        writeAtomicSync(eventMode_Path, { enabled: eventMode }, { spaces: 2 });
+    }
+    catch (writeError) {
+        console.error("Could not save the event mode to a file.", writeError);
+    }
+    try {
+        await postMessage(botID, "Event mode " + (eventMode ? "ON kiawaCheer" : "OFF kiawaYay"));
+    }
+    catch (chatError) {
+        console.error("Could not tell chat about event mode.", chatError)
+    }
+}
+
+/***************************************
  *         D D D D DUEL!!!!!!          *
  ***************************************/
 let Duelers = [];
 setInterval(() => {
+    // queued duels are dropped so nobody gets timed out during an event
+    if (eventMode) {
+        Duelers = [];
+        return;
+    }
     if (Duelers.length > 1) {
         let dueler1 = Duelers[0];
         let dueler2 = Duelers[1];
@@ -1452,9 +1496,10 @@ function postCommand(command) {
         }
 
         //Search the existing command file and see if the command exists
+        const expectedTag = (command || "").toString().replace(/^!/, "");
         var command_Info = command_List.find(
             (search) => {
-                return search.Tag === command;
+                return search.Tag === expectedTag;
             }
         );
         //format all the bullshit and spit it out in the chat
@@ -1473,6 +1518,10 @@ let commandIndex = 0
 
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
 setInterval(() => {
+    // no advertising during an event
+    if (eventMode) {
+        return;
+    }
     if (activityDetection === true) {
         //send the current command in the rotation to get posted
         postCommand(timedCommands[commandIndex]);
@@ -1485,6 +1534,30 @@ setInterval(() => {
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
 
+
+/**
+ * @param { string } message
+ * @returns {{ command:  string, args: string[]} | {command: undefined, args: []}}
+ */
+function parseCommand(message) {
+    try {
+        //split the message to pull out the command from the first word
+        //creates an array of space delimited entries
+        const args = message.split(/\s+/);
+        
+        //take the first entry and convert to lowercase, this is to check for addquote or quote command
+        const command = args[0].toLowerCase();
+        
+        // gotta start with exclamation and not be JUST an exclamation
+        if (command.startsWith("!") && command.length > 1) {
+            return {command, args};
+        }
+    }
+    catch (error) {
+        console.error(`Could not parse command from ${typeof message} "${message}"`, error);
+    }
+    return {command: undefined, args: []};
+}
 
 //message handler
 async function messageHandler(tags) {
@@ -1539,6 +1612,19 @@ async function messageHandler(tags) {
     // Ignore echoed messages.
     if (channel==="kiawa_bot") return;
 
+    const {command, args} = parseCommand(message);
+    
+    // Event mode is for Colo/charity events and such.  Meme commands like quotes and duels are disabled during events.
+    if (eventMode && command && !commandsAllowedInEventMode.includes(command)) {
+        return;
+    }
+    
+    if (command === "!eventon" || command === "!eventoff") {
+        if (allow_List.includes(channel) || ismod === true) {
+            await setEventMode(command === "!eventon");
+        }
+    }
+    
     if (message.toLowerCase() === '!hello') {
         // "@alca, heya!"
         postMessage(botID, `@${channel}, heya!`);
@@ -1588,12 +1674,6 @@ async function messageHandler(tags) {
             postMessage(botID, `@${channel} is ${pick}% seiso kiawaPray`);
         }
     }
-    //split the message to pull out the command from the first word
-    //creates an array of space delimited entries
-    const args = message.split(/\s+/);
-
-    //take the first entry and convert to lowercase, this is to check for addquote or quote command
-    var command = args[0].toLowerCase();
     ///////////////////////////////////
     //                               //
     //                               //
@@ -1942,10 +2022,7 @@ async function messageHandler(tags) {
     //                               //
     ///////////////////////////////////
 
-    //Check if the message has an "!" in it
-    if (command.charAt(0) === '!') {
-        //remove "!" from the search text
-        command = command.slice(1);
+    if (command) {
         postCommand(command);
     }
 }; //on message top level bracket
