@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved security review pull requests by matching open pull request head revisions.
 - Granted actions: read permission to quality review caller jobs for artifact download access.
 - Verified adopter review scripts on security review base revision with fallback to default branch for older forks.
+- Normalized model evaluator output formatting and finding categories in call adapter to satisfy reviewer structural contract.
 
 ## [2.3.0] - 2026-10-08
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -283,6 +284,132 @@ def call_model(system_prompt: str, mode: str, case_text: str) -> str:
     raise ProviderError("provider request failed after one retry")
 
 
+def _clean_finding(raw_finding: Any) -> dict[str, Any] | None:
+    """Validate and normalize one finding dictionary."""
+    if not isinstance(raw_finding, dict):
+        return None
+    f = dict(raw_finding)
+    sev = str(f.get("severity", "MEDIUM")).upper()
+    if sev not in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+        sev = "MEDIUM"
+
+    cls_str = str(f.get("class", "2.13"))
+    m_cls = re.search(r"2\.\d+", cls_str)
+    class_name = m_cls.group(0) if m_cls else "2.13"
+
+    file_name = str(f.get("file", "unknown")) or "unknown"
+
+    try:
+        line_num = int(f.get("line", 1))
+        if line_num < 1:
+            line_num = 1
+    except (ValueError, TypeError):
+        line_num = 1
+
+    title = str(f.get("title", "Finding")) or "Finding"
+
+    return {
+        "severity": sev,
+        "class": class_name,
+        "file": file_name,
+        "line": line_num,
+        "title": title,
+    }
+
+
+def _clean_verdict_json(line: str, verdict: str) -> tuple[str, str]:
+    """Normalize the VERDICT_JSON payload and return line plus actual verdict."""
+    payload_str = line.strip()[len("VERDICT_JSON:"):].strip()
+    try:
+        data = json.loads(payload_str)
+    except (json.JSONDecodeError, UnicodeError):
+        return line, verdict
+
+    if not isinstance(data, dict):
+        return line, verdict
+
+    raw_findings = data.get("findings")
+    findings = []
+    if isinstance(raw_findings, list):
+        for raw in raw_findings:
+            cleaned = _clean_finding(raw)
+            if cleaned is not None:
+                findings.append(cleaned)
+
+    actual_verdict = verdict
+    if actual_verdict == "APPROVE" and any(
+        f["severity"] in {"HIGH", "CRITICAL"} for f in findings
+    ):
+        actual_verdict = "BLOCK"
+
+    clean_payload = {
+        "mode": "PR",
+        "verdict": actual_verdict,
+        "findings": findings,
+    }
+    normalized_line = "VERDICT_JSON: " + json.dumps(
+        clean_payload, ensure_ascii=True, sort_keys=True
+    )
+    return normalized_line, actual_verdict
+
+
+def normalize_review_response(response: str) -> str:
+    """Normalize model output to conform to the reviewer format contract."""
+    if not isinstance(response, str) or not response.strip():
+        return response
+
+    lines = response.split("\n")
+    verdict: str | None = None
+    verdict_index = -1
+    justification = ""
+
+    for i, line in enumerate(lines):
+        candidate = re.sub(r"^[#\s*_-]+", "", line.strip())
+        candidate = re.sub(r"[*_]+", "", candidate).strip()
+        match = re.match(
+            r"^VERDICT:\s*(APPROVE|BLOCK|NEEDS-HUMAN)(?:\s*[-—:\.]\s*(.*))?$",
+            candidate,
+            re.IGNORECASE,
+        )
+        if match:
+            verdict = match.group(1).upper()
+            justification = (match.group(2) or "").strip()
+            verdict_index = i
+
+    if verdict is None:
+        return response
+
+    out_lines: list[str] = []
+    actual_verdict = verdict
+    for i, line in enumerate(lines):
+        if i == verdict_index:
+            verdict_line = (
+                f"VERDICT: {actual_verdict} - {justification}"
+                if justification
+                else f"VERDICT: {actual_verdict}"
+            )
+            out_lines.append(verdict_line)
+            continue
+
+        if line.strip().startswith("VERDICT_JSON:"):
+            json_line, actual_verdict = _clean_verdict_json(line, actual_verdict)
+            if (
+                verdict == "APPROVE"
+                and actual_verdict == "BLOCK"
+                and out_lines
+                and out_lines[-1].startswith("VERDICT: APPROVE")
+            ):
+                out_lines[-1] = out_lines[-1].replace(
+                    "VERDICT: APPROVE", "VERDICT: BLOCK", 1
+                )
+            out_lines.append(json_line)
+            continue
+
+        out_lines.append(line)
+
+    return "\n".join(out_lines)
+
+
 def main() -> int:
     """Run the adapter command used by the workflow."""
     try:
@@ -291,6 +418,7 @@ def main() -> int:
             "PR",
             _read_text_from_env("CASE_TEXT_FILE"),
         )
+        response = normalize_review_response(response)
     except ProviderError as error:
         print(f"model call failed: {error}", file=sys.stderr)
         return 1

@@ -107,11 +107,27 @@ class WorkflowContractsTestCase(unittest.TestCase):
         """Security review must verify adopter scripts exist on base_sha."""
         workflow_file = self.workflows_dir / "security-review-pr.yml"
         content = workflow_file.read_text(encoding="utf-8")
-        self.assertIn(
+        required_scripts = [
             "ci/build_pr_case.py",
+            "ci/run_model_command.py",
+            "scripts/check_pr_review_response.py",
+        ]
+        for script in required_scripts:
+            self.assertIn(
+                script,
+                content,
+                f"security-review-pr.yml must check {script} existence on "
+                "base_sha before invoking foucault.",
+            )
+        self.assertIn(
+            "status === 404",
             content,
-            "security-review-pr.yml must check ci/build_pr_case.py existence "
-            "on base_sha before calling foucault.",
+            "security-review-pr.yml must narrow fallback to 404 missing status.",
+        )
+        self.assertIn(
+            "baseSha = context.sha",
+            content,
+            "security-review-pr.yml must fallback baseSha to context.sha.",
         )
 
 
