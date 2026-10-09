@@ -146,6 +146,21 @@ jobs:
               headRepository.full_name.toLowerCase() === baseRepository.toLowerCase()
                 ? "true"
                 : "false";
+            let baseSha = pullRequest.base.sha;
+            try {
+              await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: "ci/build_pr_case.py",
+                ref: baseSha,
+              });
+            } catch {
+              // If the pull request base commit predates the adopter review scripts (e.g. older forks),
+              // fall back to the workflow revision on the default branch so foucault's checkout
+              // contains the required review scripts.
+              baseSha = context.sha;
+            }
+
             let safeToReview = false;
             try {
               const { data: prData } = await github.rest.pulls.get({
@@ -163,7 +178,7 @@ jobs:
               core.setOutput("same_repo", sameRepo);
               core.setOutput("safe_to_review", "false");
               core.setOutput("pr_number", String(pullRequest.number));
-              core.setOutput("base_sha", pullRequest.base.sha);
+              core.setOutput("base_sha", baseSha);
               core.setOutput("head_sha", pullRequest.head.sha);
               core.setOutput("head_repo_url", headRepository.clone_url);
               core.setOutput("head_repo_full_name", headRepository.full_name);
@@ -174,7 +189,7 @@ jobs:
             core.setOutput("same_repo", sameRepo);
             core.setOutput("safe_to_review", safeToReview ? "true" : "false");
             core.setOutput("pr_number", String(pullRequest.number));
-            core.setOutput("base_sha", pullRequest.base.sha);
+            core.setOutput("base_sha", baseSha);
             core.setOutput("head_sha", pullRequest.head.sha);
             core.setOutput("head_repo_url", headRepository.clone_url);
             core.setOutput("head_repo_full_name", headRepository.full_name);

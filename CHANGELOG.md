@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sanitized ASCII control characters from pull request descriptions prior to output assignment in review workflows.
 - Removed invalid environment keys from review caller jobs to adhere to reusable workflow syntax.
 - Resolved security review pull requests by matching open pull request head revisions.
+- Granted actions: read permission to quality review caller jobs for artifact download access.
+- Verified adopter review scripts on security review base revision with fallback to default branch for older forks.
 
 ## [2.3.0] - 2026-10-08
 

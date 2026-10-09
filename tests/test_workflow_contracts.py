@@ -83,6 +83,38 @@ class WorkflowContractsTestCase(unittest.TestCase):
             "resolve fork pull requests reliably.",
         )
 
+    def test_quality_review_grants_actions_read_permission(self) -> None:
+        """Quality review must grant actions: read to allow artifact downloads."""
+        workflow_file = self.workflows_dir / "quality-review-pr.yml"
+        content = workflow_file.read_text(encoding="utf-8")
+        jobs = extract_workflow_jobs(content)
+        for job_name in ("review", "review-fork"):
+            self.assertIn(
+                job_name,
+                jobs,
+                f"quality-review-pr.yml missing job '{job_name}'",
+            )
+            self.assertIn(
+                "actions: read",
+                jobs[job_name],
+                (
+                    f"Job '{job_name}' in quality-review-pr.yml must grant "
+                    "'actions: read' so downstream artifact download succeeds."
+                ),
+            )
+
+    def test_security_review_guards_base_sha_for_adopter_scripts(self) -> None:
+        """Security review must verify adopter scripts exist on base_sha."""
+        workflow_file = self.workflows_dir / "security-review-pr.yml"
+        content = workflow_file.read_text(encoding="utf-8")
+        self.assertIn(
+            "ci/build_pr_case.py",
+            content,
+            "security-review-pr.yml must check ci/build_pr_case.py existence "
+            "on base_sha before calling foucault.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+
