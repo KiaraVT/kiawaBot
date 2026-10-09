@@ -189,7 +189,7 @@ jobs:
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   review-fork:
     needs: resolve-pr
@@ -207,7 +207,7 @@ jobs:
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   fork-review-skipped:
     needs: resolve-pr

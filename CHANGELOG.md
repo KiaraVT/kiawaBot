@@ -8,11 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Fork pull request support for Euler quality review and Foucault security review gated by the `safe-to-review` label and `fork-review` GitHub environment approval.
+- Fork pull request support for Euler quality review and Foucault security review gated by the `safe-to-review` label and `fork-review` GitHub environment approval before decrypting `OLLAMA_API_KEY`.
 
 ### Changed
-- Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`.
-- Review workflows fetch current pull request labels and fail closed when the label lookup fails.
+- Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`, preserving in-progress validation runs across label events.
+- Review workflows fetch current pull request labels, fail closed when label lookup fails, and populate all output parameters across exit paths.
+- Review jobs support both `OLLAMA_API_KEY` and `MODEL_API_KEY` environment secret names.
 - Annotation runs only after the review job for the resolved repository type succeeds.
 
 ## [2.3.0] - 2026-10-08

@@ -48,6 +48,11 @@ jobs:
               core.setOutput('found', 'false');
               core.setOutput('same_repo', 'false');
               core.setOutput('safe_to_review', 'false');
+              core.setOutput('number', '');
+              core.setOutput('base_sha', '');
+              core.setOutput('head_sha', '');
+              core.setOutput('title', '');
+              core.setOutput('body', '');
               return;
             }
             const pull = matches[0];
@@ -70,6 +75,11 @@ jobs:
               core.setOutput('found', 'false');
               core.setOutput('same_repo', 'false');
               core.setOutput('safe_to_review', 'false');
+              core.setOutput('number', '');
+              core.setOutput('base_sha', '');
+              core.setOutput('head_sha', '');
+              core.setOutput('title', '');
+              core.setOutput('body', '');
               core.setFailed(`could not fetch current pull request labels: ${message}`);
               return;
             }
@@ -99,7 +109,7 @@ jobs:
       quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
       fail_on_block: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   review-fork:
     needs: resolve
@@ -107,7 +117,7 @@ jobs:
       contents: read
       pull-requests: write
       checks: write
-    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true' && needs.resolve.outputs.safe_to_review == 'true'
+    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'false' && needs.resolve.outputs.safe_to_review == 'true'
     environment: fork-review
     uses: abuzucom/euler/.github/workflows/quality-review.yml@fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
     with:
@@ -119,11 +129,11 @@ jobs:
       quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
       fail_on_block: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   fork-skip:
     needs: resolve
-    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true' && needs.resolve.outputs.safe_to_review != 'true'
+    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'false' && needs.resolve.outputs.safe_to_review != 'true'
     runs-on: ubuntu-latest
     permissions:
       checks: write
