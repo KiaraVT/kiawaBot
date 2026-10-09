@@ -181,7 +181,11 @@ jobs:
 
   review:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    if: |
+      needs.resolve-pr.result == 'success' &&
+      needs.resolve-pr.outputs.found == 'true' &&
+      needs.resolve-pr.outputs.same_repo == 'true' &&
+      needs.resolve-pr.outputs.already_reviewed != 'true'
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
       audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
@@ -198,8 +202,15 @@ jobs:
 
   review-fork:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
-    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval
+    if: |
+      needs.resolve-pr.result == 'success' &&
+      needs.resolve-pr.outputs.found == 'true' &&
+      needs.resolve-pr.outputs.same_repo == 'false' &&
+      needs.resolve-pr.outputs.safe_to_review == 'true' &&
+      needs.resolve-pr.outputs.already_reviewed != 'true'
+    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval.
+    # Approvers must independently verify that safe-to-review was applied by a
+    # trusted maintainer, ensuring two-factor authorization before credential access.
     environment: fork-review
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
@@ -219,7 +230,11 @@ jobs:
 
   fork-review-skipped:
     needs: resolve-pr
-    if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review != 'true'
+    if: |
+      needs.resolve-pr.result == 'success' &&
+      needs.resolve-pr.outputs.found == 'true' &&
+      needs.resolve-pr.outputs.same_repo == 'false' &&
+      needs.resolve-pr.outputs.safe_to_review != 'true'
     runs-on: ubuntu-latest
     permissions:
       checks: write

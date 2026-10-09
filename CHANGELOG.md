@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Annotation runs after the review job for the resolved repository type completes on success or failure.
 - Formatted `annotate` job conditions in review workflows as literal block scalars
   without expression delimiters to prevent parser evaluation errors.
+- Enforced resolution success and found checks across review and skip jobs in
+  review workflows to prevent masked failures.
 
 ## [2.3.0] - 2026-10-08
 

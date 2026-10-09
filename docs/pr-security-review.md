@@ -27,6 +27,11 @@ The workflow-run caller runs default-branch code. Pull request files remain revi
 
 Environment approvers must verify that the `safe-to-review` label was applied by a trusted repository maintainer before approving execution in `fork-review`. The label check is an initial gate and not cryptographic proof; manual environment approval provides the authoritative security gate. Passing `fork_review: true` to upstream `security-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
 
+The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and
+restrict deployments to trusted branches or pull request head references. The environment-level `MODEL_API_KEY`
+must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle
+and preventing privilege escalation across review scopes.
+
 ## Policy Provenance
 
 This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md).
