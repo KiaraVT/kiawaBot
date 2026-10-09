@@ -119,6 +119,7 @@ jobs:
       pull-requests: write
       checks: write
     if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'false' && needs.resolve.outputs.safe_to_review == 'true'
+    environment: fork-review
     uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
@@ -162,8 +163,8 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.resolve.result == 'success' &&
       needs.resolve.outputs.found == 'true' &&
-      ((needs.resolve.outputs.same_repo == 'true' && needs.review.result == 'success') ||
-      (needs.resolve.outputs.same_repo == 'false' && needs.review-fork.result == 'success')) }}
+      ((needs.resolve.outputs.same_repo == 'true' && (needs.review.result == 'success' || needs.review.result == 'failure')) ||
+      (needs.resolve.outputs.same_repo == 'false' && (needs.review-fork.result == 'success' || needs.review-fork.result == 'failure'))) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

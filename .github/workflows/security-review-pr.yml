@@ -195,6 +195,7 @@ jobs:
   review-fork:
     needs: resolve-pr
     if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    environment: fork-review
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
       audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
@@ -240,8 +241,8 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.resolve-pr.result == 'success' &&
       needs.resolve-pr.outputs.found == 'true' &&
-      ((needs.resolve-pr.outputs.same_repo == 'true' && needs.review.result == 'success') ||
-      (needs.resolve-pr.outputs.same_repo == 'false' && needs.review-fork.result == 'success')) }}
+      ((needs.resolve-pr.outputs.same_repo == 'true' && (needs.review.result == 'success' || needs.review.result == 'failure')) ||
+      (needs.resolve-pr.outputs.same_repo == 'false' && (needs.review-fork.result == 'success' || needs.review-fork.result == 'failure'))) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

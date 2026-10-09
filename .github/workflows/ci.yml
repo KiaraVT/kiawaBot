@@ -9,8 +9,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Do not cancel in-progress CI runs when safe-to-review label is applied
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event.action != 'labeled' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
