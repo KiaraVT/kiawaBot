@@ -147,7 +147,11 @@ export default class AuthDataHelper {
                 }
             } catch (backupErr) {
                 if (fs.existsSync(tempPath)) {
-                    try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+                    try {
+                        fs.unlinkSync(tempPath);
+                    } catch (unlinkErr) {
+                        console.warn("[AuthDataHelper] Failed to clean up temp file:", unlinkErr.message);
+                    }
                 }
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
             }

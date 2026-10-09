@@ -193,7 +193,7 @@ function shouldExitOnAuthFailure() {
     return authAction === 'exit';
 }
 
-async function performGracefulExit() {
+async function performGracefulExit(options = {}) {
     console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
     try {
         if (validationTicker) {
@@ -203,26 +203,35 @@ async function performGracefulExit() {
         authData.saveDataImmediate();
 
         const closePromises = [];
-        if (authServerInstance && typeof authServerInstance.close === 'function') {
+        const currentAuthServer = options.authServer !== undefined ? options.authServer : authServerInstance;
+        if (currentAuthServer && typeof currentAuthServer.close === 'function') {
             closePromises.push(new Promise((resolve) => {
                 try {
-                    authServerInstance.close(() => resolve());
-                } catch {
+                    currentAuthServer.close(() => resolve());
+                } catch (closeErr) {
+                    console.warn('[Auth] Error closing auth server during shutdown:', closeErr.message);
                     resolve();
                 }
             }));
         }
 
-        if (typeof socket !== 'undefined' && socket && typeof socket.close === 'function') {
-            if (Array.isArray(websockets)) {
-                for (const ws of websockets) {
-                    try { ws.close(); } catch (wsErr) { void wsErr; }
+        const currentSocket = options.socket !== undefined ? options.socket : (typeof socket !== 'undefined' ? socket : null);
+        const currentWebsockets = options.websockets !== undefined ? options.websockets : (typeof websockets !== 'undefined' ? websockets : []);
+
+        if (currentSocket && typeof currentSocket.close === 'function') {
+            if (Array.isArray(currentWebsockets)) {
+                for (const ws of currentWebsockets) {
+                    try {
+                        ws.close();
+                    } catch (wsErr) {
+                        console.warn("[Auth] Error closing websocket during shutdown:", wsErr.message);
+                    }
                 }
             }
             try {
-                socket.close();
+                currentSocket.close();
             } catch (sockErr) {
-                void sockErr;
+                console.warn("[Auth] Error closing socket during shutdown:", sockErr.message);
             }
         }
 
@@ -235,7 +244,9 @@ async function performGracefulExit() {
     } catch (cleanupErr) {
         console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
     }
-    process.exit(1);
+    if (options.exitProcess !== false) {
+        process.exit(1);
+    }
 }
 
 let authExitTimer = null;

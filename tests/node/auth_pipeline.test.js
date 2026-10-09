@@ -1500,5 +1500,49 @@ test("Kiara_bot - configureAuthRoutes is idempotent and configures routes", asyn
     configureAuthRoutes();
 });
 
+test("Kiara_bot - performGracefulExit logs warnings on websocket and socket closure failures", async () => {
+    const { performGracefulExit } = await import("../../Kiara_bot.js");
+    const origWarn = console.warn;
+    const origError = console.error;
+    const warnings = [];
+
+    console.warn = (...args) => { warnings.push(args.join(" ")); };
+    console.error = () => {};
+
+    const mockWs = {
+        close: () => {
+            throw new Error("Simulated websocket close failure");
+        }
+    };
+    const mockSocket = {
+        close: () => {
+            throw new Error("Simulated socket close failure");
+        }
+    };
+
+    try {
+        await performGracefulExit({
+            socket: mockSocket,
+            websockets: [mockWs],
+            exitProcess: false
+        });
+
+        const hasWsWarn = warnings.some(msg =>
+            msg.includes("[Auth] Error closing websocket during shutdown:") &&
+            msg.includes("Simulated websocket close failure")
+        );
+        const hasSockWarn = warnings.some(msg =>
+            msg.includes("[Auth] Error closing socket during shutdown:") &&
+            msg.includes("Simulated socket close failure")
+        );
+
+        assert.ok(hasWsWarn, "Warning must be logged when websocket close throws");
+        assert.ok(hasSockWarn, "Warning must be logged when socket close throws");
+    } finally {
+        console.warn = origWarn;
+        console.error = origError;
+    }
+});
+
 
 

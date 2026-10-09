@@ -497,4 +497,52 @@ test("loadData - atomically replaces corrupted file without leaving missing data
     }
 });
 
+test("loadData - logs warning when temporary staging file unlink fails during recovery", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-unlink-fail-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    const origRenameSync = fs.renameSync;
+    const origUnlinkSync = fs.unlinkSync;
+    const origWarn = console.warn;
+    const origError = console.error;
+
+    const warnings = [];
+    console.warn = (...args) => { warnings.push(args.join(" ")); };
+    console.error = () => {};
+
+    try {
+        fs.writeFileSync(authPath, "{ corrupted json payload }");
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+
+        fs.renameSync = (oldPath, newPath) => {
+            if (newPath.includes(".corrupted.")) {
+                throw new Error("Simulated rename error during backup");
+            }
+            return origRenameSync(oldPath, newPath);
+        };
+
+        fs.unlinkSync = (targetPath) => {
+            if (targetPath.includes(".tmp.")) {
+                throw new Error("Simulated unlink failure on temp file");
+            }
+            return origUnlinkSync(targetPath);
+        };
+
+        helper.loadData();
+
+        const hasWarning = warnings.some(msg =>
+            msg.includes("[AuthDataHelper] Failed to clean up temp file:") &&
+            msg.includes("Simulated unlink failure on temp file")
+        );
+        assert.ok(hasWarning, "Warning must be logged when temp file unlink fails");
+    } finally {
+        fs.renameSync = origRenameSync;
+        fs.unlinkSync = origUnlinkSync;
+        console.warn = origWarn;
+        console.error = origError;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 
