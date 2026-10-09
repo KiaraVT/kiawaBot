@@ -46,6 +46,27 @@ export function redactSensitiveUrl(rawUrl) {
     }
 }
 
+function recursivelyRedact(item, sensitiveKeys) {
+    if (!item) {
+        return item;
+    }
+    if (Array.isArray(item)) {
+        return item.map(entry => recursivelyRedact(entry, sensitiveKeys));
+    }
+    if (typeof item === "object") {
+        const result = { ...item };
+        for (const [key, value] of Object.entries(result)) {
+            if (sensitiveKeys.includes(key)) {
+                result[key] = "[REDACTED]";
+            } else if (value && typeof value === "object") {
+                result[key] = recursivelyRedact(value, sensitiveKeys);
+            }
+        }
+        return result;
+    }
+    return item;
+}
+
 /**
  * Redacts sensitive authentication tokens and secrets from request body or params.
  *
@@ -62,16 +83,9 @@ export function redactSensitiveData(data) {
     if (typeof data === "string") {
         try {
             const parsed = JSON.parse(data);
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                const cloned = { ...parsed };
-                let mutated = false;
-                for (const key of sensitiveKeys) {
-                    if (Object.prototype.hasOwnProperty.call(cloned, key)) {
-                        cloned[key] = "[REDACTED]";
-                        mutated = true;
-                    }
-                }
-                return mutated ? JSON.stringify(cloned) : data;
+            if (parsed && typeof parsed === "object") {
+                const redacted = recursivelyRedact(parsed, sensitiveKeys);
+                return JSON.stringify(redacted);
             }
         } catch {
             return data.replace(
@@ -92,13 +106,7 @@ export function redactSensitiveData(data) {
             return cloned;
         }
 
-        const cloned = { ...data };
-        for (const key of sensitiveKeys) {
-            if (Object.prototype.hasOwnProperty.call(cloned, key)) {
-                cloned[key] = "[REDACTED]";
-            }
-        }
-        return cloned;
+        return recursivelyRedact(data, sensitiveKeys);
     }
 
     return data;
@@ -116,7 +124,8 @@ export function sanitizeAxiosConfig(config, options = {}) {
     if (!config || typeof config !== "object") {
         return config;
     }
-    const target = options.clone ? { ...config } : config;
+    const { clone = false } = options;
+    const target = clone ? { ...config } : config;
     if (target.url) {
         target.url = redactSensitiveUrl(target.url);
     }

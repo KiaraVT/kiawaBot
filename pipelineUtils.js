@@ -4,7 +4,6 @@
 
 import crypto from "node:crypto";
 import querystring from "node:querystring";
-import { AsyncLocalStorage } from "node:async_hooks";
 import axios from "axios";
 import { formatAxiosError, sanitizeAxiosConfig } from "./errorUtils.js";
 
@@ -12,8 +11,6 @@ export const TWITCH_AUTH_URL = process.env.TWITCH_AUTH_URL || "https://id.twitch
 export const TWITCH_TOKEN_URL = process.env.TWITCH_TOKEN_URL || "https://id.twitch.tv/oauth2/token";
 export const TWITCH_VALIDATE_URL = process.env.TWITCH_VALIDATE_URL || "https://id.twitch.tv/oauth2/validate";
 export const TWITCH_API_BASE_URL = process.env.TWITCH_API_BASE_URL || "https://api.twitch.tv/helix";
-
-const singleFlightStorage = new AsyncLocalStorage();
 
 /**
  * Creates a single-flight mutex runner.
@@ -24,20 +21,12 @@ const singleFlightStorage = new AsyncLocalStorage();
  */
 export function createSingleFlightMutex() {
     let inFlight = null;
-    const mutexKey = Symbol("singleFlight");
     return function execute(fn) {
-        if (singleFlightStorage.getStore()?.has(mutexKey)) {
-            return Promise.resolve().then(() => fn());
-        }
         if (inFlight) {
             return inFlight;
         }
-        const currentStore = singleFlightStorage.getStore() || new Set();
-        const nextStore = new Set(currentStore);
-        nextStore.add(mutexKey);
-
         const promise = Promise.resolve()
-            .then(() => singleFlightStorage.run(nextStore, () => fn()))
+            .then(() => fn())
             .finally(() => {
                 if (inFlight === promise) {
                     inFlight = null;
@@ -55,11 +44,11 @@ export function createSingleFlightMutex() {
  * @returns {<T>(fn: () => Promise<T>|T) => Promise<T>}
  */
 export function createSequentialLock() {
-    let current = Promise.resolve();
+    let tail = Promise.resolve();
     return function acquire(fn) {
-        const next = current.then(fn, fn);
-        current = next.catch(() => {});
-        return next;
+        const result = tail.then(() => fn(), () => fn());
+        tail = result.catch(() => {});
+        return result;
     };
 }
 
@@ -306,6 +295,9 @@ export class TwitchAuthPipeline {
 
         this.singleFlightBroadcaster = createSingleFlightMutex();
         this.singleFlightBot = createSingleFlightMutex();
+        this.ensureBroadcasterSingleFlight = createSingleFlightMutex();
+        this.ensureBotSingleFlight = createSingleFlightMutex();
+        this.validateSingleFlight = createSingleFlightMutex();
 
         this.activeAuthStates = new Map();
         this.maxActiveAuthStates = options.maxActiveAuthStates ?? 100;
@@ -415,7 +407,7 @@ export class TwitchAuthPipeline {
             return response.data;
         } catch (error) {
             if (error?.config) {
-                sanitizeAxiosConfig(error.config);
+                error.config = sanitizeAxiosConfig(error.config, { clone: true });
             }
             throw error;
         }
@@ -518,10 +510,10 @@ export class TwitchAuthPipeline {
             );
         } catch (error) {
             if (error?.config) {
-                sanitizeAxiosConfig(error.config);
+                error.config = sanitizeAxiosConfig(error.config, { clone: true });
             }
             if (error?.response?.config) {
-                sanitizeAxiosConfig(error.response.config);
+                error.response.config = sanitizeAxiosConfig(error.response.config, { clone: true });
             }
             const status = error?.response?.status;
             if (status === 400 || status === 401 || status === 403) {
@@ -618,10 +610,7 @@ export class TwitchAuthPipeline {
      * @returns {Promise<void>}
      */
     async validateAccessToken() {
-        if (this.isValidating) return;
-        this.isValidating = true;
-
-        try {
+        return this.validateSingleFlight(async () => {
             const [broadcasterResult, botResult] = await Promise.allSettled([
                 this.validateSingleAccount("twitchBroadcaster", "Broadcaster", false),
                 this.validateSingleAccount("twitchBot", "Bot", false)
@@ -643,9 +632,7 @@ export class TwitchAuthPipeline {
                     this.onInitialValidation();
                 }
             }
-        } finally {
-            this.isValidating = false;
-        }
+        });
     }
 
     /**
@@ -655,7 +642,7 @@ export class TwitchAuthPipeline {
      */
     async ensureBroadcasterAuth() {
         if (this.broadcasterAuthReady) return true;
-        return this.singleFlightBroadcaster(async () => {
+        return this.ensureBroadcasterSingleFlight(async () => {
             if (this.broadcasterAuthReady) return true;
             const now = Date.now();
             if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
@@ -677,7 +664,7 @@ export class TwitchAuthPipeline {
      */
     async ensureBotAuth() {
         if (this.botAuthReady) return true;
-        return this.singleFlightBot(async () => {
+        return this.ensureBotSingleFlight(async () => {
             if (this.botAuthReady) return true;
             const now = Date.now();
             if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
@@ -749,7 +736,8 @@ export class TwitchAuthPipeline {
             }
             if (error?.request && typeof error.request === "object") {
                 if (typeof error.request._header === "string") {
-                    error.request._header = error.request._header.replace(/(Authorization:\s*Bearer\s+)[^\r\n]+/gi, "$1[REDACTED]");
+                    const redactedHeader = error.request._header.replace(/(Authorization:\s*Bearer\s+)[^\r\n]+/gi, "$1[REDACTED]");
+                    error.request = { ...error.request, _header: redactedHeader };
                 }
             }
             throw error;

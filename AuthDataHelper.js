@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 
 /**
  * Recursively merges source object into target object.
+ * Null source values preserve target safely without wiping target or sibling keys.
  * Note on array semantics: Array properties from source replace target arrays completely
  * (elements are deep cloned) rather than concatenating or merging by index. This prevents
  * stale scopes or duplicate credential entries when configuration arrays are updated.
@@ -107,6 +108,7 @@ export default class AuthDataHelper {
         } catch (err) {
             const timestamp = `${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
             const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
+            const tempPath = `${this.dataPath}.tmp.${timestamp}`;
             try {
                 if (fs.existsSync(this.dataPath)) {
                     let diskValid = false;
@@ -127,12 +129,26 @@ export default class AuthDataHelper {
                         return;
                     }
 
+                    fs.writeFileSync(tempPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
+                    safeSetPermission(tempPath, 0o600);
+
                     fs.renameSync(this.dataPath, corruptedPath);
-                    fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
+
+                    try {
+                        fs.renameSync(tempPath, this.dataPath);
+                    } catch (replaceErr) {
+                        if (fs.existsSync(corruptedPath)) {
+                            fs.renameSync(corruptedPath, this.dataPath);
+                        }
+                        throw replaceErr;
+                    }
                     safeSetPermission(this.dataPath, 0o600);
                     console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
                 }
             } catch (backupErr) {
+                if (fs.existsSync(tempPath)) {
+                    try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+                }
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
             }
             this.data = deepMerge({}, this.defaultData);
@@ -172,7 +188,11 @@ export default class AuthDataHelper {
 
     //check if the data file contains a given field
     has(field) {
+        if (!field || typeof field !== "string") return false;
         let pathArr = field.split(".");
+        if (pathArr.some(key => key === "__proto__" || key === "constructor" || key === "prototype")) {
+            return false;
+        }
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 
@@ -187,7 +207,11 @@ export default class AuthDataHelper {
 
     //read a given field from the data file
     read(field) {
+        if (!field || typeof field !== "string") return undefined;
         let pathArr = field.split(".");
+        if (pathArr.some(key => key === "__proto__" || key === "constructor" || key === "prototype")) {
+            return undefined;
+        }
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 
@@ -202,7 +226,11 @@ export default class AuthDataHelper {
 
     //update a given field, optionally creating it if it doesn't exist
     update(field, value, create = true, immediate = false) {
+        if (!field || typeof field !== "string") return false;
         let pathArr = field.split(".");
+        if (pathArr.some(key => key === "__proto__" || key === "constructor" || key === "prototype")) {
+            return false;
+        }
         const topLevelKey = pathArr[0];
         const knownKeys = Object.keys(this.defaultData);
         if (!knownKeys.includes(topLevelKey)) {
@@ -242,7 +270,11 @@ export default class AuthDataHelper {
 
     //remove a field from the data file
     delete(field) {
+        if (!field || typeof field !== "string") return false;
         let pathArr = field.split(".");
+        if (pathArr.some(key => key === "__proto__" || key === "constructor" || key === "prototype")) {
+            return false;
+        }
         let targetItem = pathArr.pop();
         let focusObject = this.data;
 

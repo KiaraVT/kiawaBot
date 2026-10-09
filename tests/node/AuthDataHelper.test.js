@@ -411,3 +411,90 @@ test("loadData - loads disk content when valid JSON object is available on retry
     }
 });
 
+test("AuthDataHelper - rejects prototype pollution keys in dotted path update, read, has, and delete", () => {
+    const helper = new AuthDataHelper();
+    helper.data = { twitch: { access_token: "valid" } };
+
+    const forbiddenPaths = [
+        "__proto__.polluted",
+        "constructor.prototype.polluted",
+        "twitch.prototype.polluted",
+        "twitch.__proto__.polluted"
+    ];
+
+    for (const p of forbiddenPaths) {
+        assert.equal(helper.update(p, "malicious", true), false, `update must reject forbidden path ${p}`);
+        assert.equal(helper.has(p), false, `has must return false for forbidden path ${p}`);
+        assert.equal(helper.read(p), undefined, `read must return undefined for forbidden path ${p}`);
+        assert.equal(helper.delete(p), false, `delete must return false for forbidden path ${p}`);
+    }
+
+    assert.equal(Object.prototype.polluted, undefined, "Object.prototype must not be polluted");
+    assert.equal({}.polluted, undefined, "Plain object must not have polluted property");
+});
+
+test("loadData - calls statusCallback with loaded when valid disk retry succeeds", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-callback-retry-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    try {
+        const validJson = JSON.stringify({ twitch: { access_token: "retry_token" } });
+        fs.writeFileSync(authPath, validJson);
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+        const statuses = [];
+        helper.statusCallback = (status) => {
+            statuses.push(status);
+        };
+
+        const origParse = JSON.parse;
+        let parseCallCount = 0;
+        JSON.parse = (text, reviver) => {
+            parseCallCount += 1;
+            if (parseCallCount === 1) {
+                throw new Error("Transient parse failure");
+            }
+            return origParse(text, reviver);
+        };
+
+        try {
+            helper.loadData();
+        } finally {
+            JSON.parse = origParse;
+        }
+
+        assert.equal(helper.data.twitch.access_token, "retry_token");
+        assert.ok(statuses.includes("loaded"), "statusCallback('loaded') must be fired on successful disk retry");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("loadData - atomically replaces corrupted file without leaving missing data on write failure", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-atomic-replace-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    try {
+        fs.writeFileSync(authPath, "{ corrupted json payload }");
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+
+        helper.loadData();
+
+        assert.ok(fs.existsSync(authPath), "auth-data.json must exist after replacement");
+        const parsed = JSON.parse(fs.readFileSync(authPath, "utf8"));
+        assert.equal(parsed.twitchBroadcaster.access_token, "");
+
+        const files = fs.readdirSync(tempDir);
+        const corruptedBackup = files.find(f => f.includes(".corrupted."));
+        assert.ok(corruptedBackup, "Corrupted file backup must exist");
+        assert.equal(fs.readFileSync(path.join(tempDir, corruptedBackup), "utf8"), "{ corrupted json payload }");
+
+        const tmpFiles = files.filter(f => f.includes(".tmp."));
+        assert.equal(tmpFiles.length, 0, "Temporary staging files must be cleaned up");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+

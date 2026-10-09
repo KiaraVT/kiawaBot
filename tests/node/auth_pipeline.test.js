@@ -1343,4 +1343,162 @@ test("Kiara_bot - OAuth callback route catches unhandled errors and responds wit
     }
 });
 
+test("redactSensitiveData - recursively redacts sensitive keys in nested objects, arrays, and JSON strings", () => {
+    const nestedObj = {
+        meta: { request_id: "req-1" },
+        credentials: {
+            client_secret: "super_secret_1",
+            inner: {
+                refresh_token: "refresh_secret_2",
+                code_verifier: "verifier_secret_3"
+            }
+        },
+        items: [
+            { id: 1, access_token: "nested_token" },
+            { id: 2, safe: "data" }
+        ]
+    };
+
+    const redacted = redactSensitiveData(nestedObj);
+    assert.equal(redacted.meta.request_id, "req-1");
+    assert.equal(redacted.credentials.client_secret, "[REDACTED]");
+    assert.equal(redacted.credentials.inner.refresh_token, "[REDACTED]");
+    assert.equal(redacted.credentials.inner.code_verifier, "[REDACTED]");
+    assert.equal(redacted.items[0].access_token, "[REDACTED]");
+    assert.equal(redacted.items[1].safe, "data");
+
+    const jsonStr = JSON.stringify(nestedObj);
+    const redactedJsonStr = redactSensitiveData(jsonStr);
+    assert.equal(redactedJsonStr.includes("super_secret_1"), false);
+    assert.equal(redactedJsonStr.includes("refresh_secret_2"), false);
+    assert.equal(redactedJsonStr.includes("nested_token"), false);
+    assert.ok(redactedJsonStr.includes("[REDACTED]"));
+});
+
+test("sanitizeAxiosConfig - supports clone option to prevent mutating input config", () => {
+    const originalConfig = {
+        url: "https://id.twitch.tv/oauth2/token?client_secret=secret_val",
+        data: { client_secret: "secret_data" }
+    };
+    const originalUrl = originalConfig.url;
+    const originalSecret = originalConfig.data.client_secret;
+
+    const sanitized = sanitizeAxiosConfig(originalConfig, { clone: true });
+    assert.notEqual(sanitized, originalConfig, "sanitizeAxiosConfig with clone: true must return cloned config");
+    assert.equal(originalConfig.url, originalUrl, "Original config url must not be mutated when cloned");
+    assert.equal(originalConfig.data.client_secret, originalSecret, "Original config data must not be mutated when cloned");
+    assert.ok(sanitized.url.includes("[REDACTED]"));
+    assert.equal(sanitized.data.client_secret, "[REDACTED]");
+});
+
+test("createSingleFlightMutex - returns existing in-flight promise across callers", async () => {
+    const singleFlight = createSingleFlightMutex();
+    let executionCount = 0;
+
+    const op = () => singleFlight(async () => {
+        executionCount += 1;
+        await new Promise((r) => setTimeout(r, 30));
+        return "result";
+    });
+
+    const [r1, r2, r3] = await Promise.all([op(), op(), op()]);
+    assert.equal(r1, "result");
+    assert.equal(r2, "result");
+    assert.equal(r3, "result");
+    assert.equal(executionCount, 1, "Single-flight mutex must only execute the function once for concurrent callers");
+});
+
+test("createSequentialLock - continues execution of queued operations after previous operation rejects", async () => {
+    const lock = createSequentialLock();
+    const order = [];
+
+    const p1 = lock(async () => {
+        order.push("p1-start");
+        await new Promise((r) => setTimeout(r, 10));
+        throw new Error("p1 failed");
+    });
+
+    const p2 = lock(async () => {
+        order.push("p2-start");
+        return "p2-success";
+    });
+
+    await assert.rejects(p1, { message: "p1 failed" });
+    const res2 = await p2;
+    assert.equal(res2, "p2-success");
+    assert.deepEqual(order, ["p1-start", "p2-start"], "p2 must execute after p1 finishes even when p1 throws");
+});
+
+test("validateAccessToken - deduplicates concurrent validations via single-flight mutex", async () => {
+    const helper = new AuthDataHelper();
+    helper.data = {
+        twitchBroadcaster: { access_token: "b_token" },
+        twitchBot: { access_token: "bot_token" }
+    };
+    let validateCallCount = 0;
+    const mockAxios = {
+        get: async () => {
+            validateCallCount += 1;
+            await new Promise((r) => setTimeout(r, 20));
+            return { data: { client_id: "test" } };
+        }
+    };
+    const pipeline = new TwitchAuthPipeline({
+        authData: helper,
+        axios: mockAxios,
+        clientId: "cid",
+        clientSecret: "csec",
+        redirectUri: "http://127.0.0.1:3000"
+    });
+
+    await Promise.all([
+        pipeline.validateAccessToken(),
+        pipeline.validateAccessToken(),
+        pipeline.validateAccessToken()
+    ]);
+
+    assert.equal(validateCallCount, 2, "Concurrent validateAccessToken calls must be unified by single-flight mutex");
+});
+
+test("withAuthRetry - does not mutate error.request._header directly in place", async () => {
+    const helper = new AuthDataHelper();
+    helper.data = {
+        twitchBroadcaster: { access_token: "tok", refresh_token: "ref" }
+    };
+    const pipeline = new TwitchAuthPipeline({
+        authData: helper,
+        axios: {},
+        clientId: "cid",
+        clientSecret: "csec",
+        redirectUri: "http://127.0.0.1:3000"
+    });
+    pipeline.broadcasterAuthReady = true;
+
+    const mockRequest = {
+        _header: "GET / HTTP/1.1\r\nAuthorization: Bearer secret_bearer_token\r\nHost: api.twitch.tv\r\n"
+    };
+    const mockErr = new Error("Test request error");
+    mockErr.response = { status: 400, data: { message: "Bad" } };
+    mockErr.request = mockRequest;
+
+    await assert.rejects(
+        () => pipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
+            throw mockErr;
+        }),
+        (err) => {
+            assert.ok(err.request._header.includes("[REDACTED]"), "Error request header must be redacted");
+            assert.notEqual(err.request, mockRequest, "error.request must not be mutated in place on caller object");
+            return true;
+        }
+    );
+});
+
+test("Kiara_bot - configureAuthRoutes is idempotent and configures routes", async () => {
+    const { configureAuthRoutes } = await import("../../Kiara_bot.js");
+    assert.equal(typeof configureAuthRoutes, "function");
+    configureAuthRoutes();
+    configureAuthRoutes();
+});
+
+
 

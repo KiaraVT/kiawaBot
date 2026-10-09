@@ -138,7 +138,18 @@ let socket = null;
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
 let authServerInstance = null;
+let authRoutesConfigured = false;
+
+function configureAuthRoutes() {
+    if (authRoutesConfigured) {
+        return;
+    }
+    authListener.get("/", handleOAuthCallbackRoute);
+    authRoutesConfigured = true;
+}
+
 function ensureAuthListener(options = {}) {
+    configureAuthRoutes();
     const autoStart = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
     if (!autoStart) {
         return authServerInstance;
@@ -182,7 +193,7 @@ function shouldExitOnAuthFailure() {
     return authAction === 'exit';
 }
 
-function performGracefulExit() {
+async function performGracefulExit() {
     console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
     try {
         if (validationTicker) {
@@ -190,16 +201,36 @@ function performGracefulExit() {
             validationTicker = null;
         }
         authData.saveDataImmediate();
+
+        const closePromises = [];
         if (authServerInstance && typeof authServerInstance.close === 'function') {
-            authServerInstance.close();
+            closePromises.push(new Promise((resolve) => {
+                try {
+                    authServerInstance.close(() => resolve());
+                } catch {
+                    resolve();
+                }
+            }));
         }
+
         if (typeof socket !== 'undefined' && socket && typeof socket.close === 'function') {
             if (Array.isArray(websockets)) {
                 for (const ws of websockets) {
                     try { ws.close(); } catch (wsErr) { void wsErr; }
                 }
             }
-            socket.close();
+            try {
+                socket.close();
+            } catch (sockErr) {
+                void sockErr;
+            }
+        }
+
+        if (closePromises.length > 0) {
+            await Promise.race([
+                Promise.allSettled(closePromises),
+                new Promise((resolve) => setTimeout(resolve, 2000))
+            ]);
         }
     } catch (cleanupErr) {
         console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
@@ -217,10 +248,10 @@ function scheduleGracefulAuthExit() {
     }
     if (!authExitTimer) {
         console.warn(`[Auth] AUTH_FAILURE_ACTION=exit configured. Bot will shut down in ${AUTH_EXIT_GRACE_PERIOD_MS / 1000}s if authorization is not completed.`);
-        authExitTimer = setTimeout(() => {
+        authExitTimer = setTimeout(async () => {
             authExitTimer = null;
             if (!authPipeline.broadcasterAuthReady || !authPipeline.botAuthReady) {
-                performGracefulExit();
+                await performGracefulExit();
             }
         }, AUTH_EXIT_GRACE_PERIOD_MS);
     }
@@ -288,11 +319,17 @@ async function handleOAuthCallbackRoute(req, res) {
             res.send(result.message);
         }
 
-        authPipeline.validateAccessToken();
+        await authPipeline.validateAccessToken().catch((err) => {
+            console.error("[Auth] Background validation failed following OAuth callback:", formatAxiosError(err));
+        });
         if (validationTicker) {
             clearInterval(validationTicker);
         }
-        validationTicker = setInterval(() => { authPipeline.validateAccessToken(); }, 1000 * 600);
+        validationTicker = setInterval(() => {
+            authPipeline.validateAccessToken().catch((err) => {
+                console.error("[Auth] Scheduled token validation error:", formatAxiosError(err));
+            });
+        }, 1000 * 600);
     } catch (err) {
         console.error("[Auth] Unhandled error during authorization callback:", formatAxiosError(err) || err?.message || String(err));
         if (!res.headersSent) {
@@ -301,7 +338,7 @@ async function handleOAuthCallbackRoute(req, res) {
     }
 }
 
-authListener.get("/", handleOAuthCallbackRoute);
+configureAuthRoutes();
 
 //Begin the auth process by opening the user's browser to the consent screen
 function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster", options = {}) {
@@ -344,6 +381,8 @@ export {
     ensureBroadcasterAuth,
     ensureBotAuth,
     ensureAuthListener,
+    configureAuthRoutes,
+    performGracefulExit,
     startBot,
     tesManager
 };
