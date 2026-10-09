@@ -6,7 +6,7 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 
 ## Pins
 
-- `AUDIT.md`: commit `f59866d6e3ff71affa8404117877b58b8d79eea2`, through `audit_ref`.
+- `AUDIT.md`: commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, through `audit_ref`.
 - `security-review.yml`: the same commit, through the `uses:` pin.
 
 ## Wiring
@@ -16,16 +16,30 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 - `ci/build_pr_case.py`, `ci/run_model_command.py`, and `ci/call_model.py` supply the review adapter.
 - `ci/model_providers.json` configures the active provider profile.
 - `scripts/check_pr_review_response.py` validates model output format.
-- The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`.
-- Fork pull requests receive a skipped result and no secret.
+- Same-repository pull requests map repository secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
+- Same-repository pull requests call `security-review.yml` with default inputs (omitting `fork_review`).
+- Approved fork pull requests (`safe-to-review` label) call `security-review.yml` with `fork_review: true`, running in the protected `fork-review` environment and consuming environment-specific `MODEL_API_KEY`.
+- Unapproved fork pull requests receive a skipped result and no secret.
 
 ## Trust Boundary
 
-The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`.
+The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. Fork pull requests require maintainer label and environment approval before receiving provider credentials.
+
+Environment approvers must verify that the `safe-to-review` label was applied by a trusted repository maintainer before approving execution in `fork-review`. The label check is an initial gate and not cryptographic proof; manual environment approval provides the authoritative security gate. Passing `fork_review: true` to upstream `security-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
+
+The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and
+restrict deployments to trusted branches or pull request head references. The environment-level `MODEL_API_KEY`
+must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle
+and preventing privilege escalation across review scopes.
+
+Pull request titles and descriptions are sanitized in `resolve` to strip non-printable ASCII control characters.
+Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review
+context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state
+re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
 
 ## Policy Provenance
 
-This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f59866d6e3ff71affa8404117877b58b8d79eea2`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f59866d6e3ff71affa8404117877b58b8d79eea2/AUDIT.md).
+This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md).
 
 ---
 

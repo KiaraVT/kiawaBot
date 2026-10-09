@@ -3,7 +3,7 @@ name: quality-review-pr
 
 # Runs the euler quality review on pull requests. The workflow_run trigger runs
 # default-branch code after ci completes. Pull request files stay review data.
-# Fork pull requests receive an explicit skip result and no secret.
+# Fork pull requests require the safe-to-review label and fork-review environment approval.
 
 "on":
   workflow_run:
@@ -27,6 +27,7 @@ jobs:
     outputs:
       found: ${{ steps.pr.outputs.found }}
       same_repo: ${{ steps.pr.outputs.same_repo }}
+      safe_to_review: ${{ steps.pr.outputs.safe_to_review }}
       number: ${{ steps.pr.outputs.number }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
@@ -46,41 +47,110 @@ jobs:
             if (matches.length !== 1) {
               core.setOutput('found', 'false');
               core.setOutput('same_repo', 'false');
+              core.setOutput('safe_to_review', 'false');
+              core.setOutput('number', '');
+              core.setOutput('base_sha', '');
+              core.setOutput('head_sha', '');
+              core.setOutput('title', '');
+              core.setOutput('body', '');
               return;
             }
             const pull = matches[0];
             const isSameRepo = Boolean(pull.head.repo) &&
               pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
+            let safeToReview = false;
+            try {
+              const { data: currentPull } = await github.rest.pulls.get({
+                ...context.repo,
+                pull_number: pull.number,
+              });
+              const labels = (currentPull.labels || []).map((label) =>
+                typeof label === 'string' ? label : label.name
+              );
+              safeToReview = labels.includes('safe-to-review');
+            } catch (error) {
+              const message = String(error?.message || error)
+                .replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+                .slice(0, 500);
+              core.setOutput('found', 'false');
+              core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
+              core.setOutput('safe_to_review', 'false');
+              core.setOutput('number', String(pull.number));
+              core.setOutput('base_sha', pull.base.sha);
+              core.setOutput('head_sha', pull.head.sha);
+              core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
+              core.setOutput('body', (pull.body || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''));
+              core.setFailed(`could not fetch current pull request labels: ${message}`);
+              return;
+            }
             core.setOutput('found', 'true');
             core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
+            core.setOutput('safe_to_review', safeToReview ? 'true' : 'false');
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);
-            core.setOutput('title', pull.title || '');
-            core.setOutput('body', pull.body || '');
+            core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
+            core.setOutput('body', (pull.body || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''));
 
+  # Same-repository review maps repository-level OLLAMA_API_KEY or MODEL_API_KEY.
   review:
     needs: resolve
     permissions:
       contents: read
       pull-requests: write
       checks: write
-    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'true'
-    uses: abuzucom/euler/.github/workflows/quality-review.yml@fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+    if: |
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      needs.resolve.outputs.same_repo == 'true'
+    uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       pr_title: ${{ needs.resolve.outputs.title }}
       pr_body: ${{ needs.resolve.outputs.body }}
-      quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+      quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
       fail_on_block: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  review-fork:
+    needs: resolve
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    if: |
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      needs.resolve.outputs.same_repo == 'false' &&
+      needs.resolve.outputs.safe_to_review == 'true'
+    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval.
+    # Approvers must independently verify that safe-to-review was applied by a
+    # trusted maintainer, ensuring two-factor authorization before credential access.
+    environment: fork-review
+    uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      pr_title: ${{ needs.resolve.outputs.title }}
+      pr_body: ${{ needs.resolve.outputs.body }}
+      quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
+      fail_on_block: true
+      # Select the upstream reusable workflow's fork-review environment path
+      fork_review: true
+    secrets:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 
   fork-skip:
     needs: resolve
-    if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo != 'true'
+    if: |
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      needs.resolve.outputs.same_repo == 'false' &&
+      needs.resolve.outputs.safe_to_review != 'true'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -99,13 +169,20 @@ jobs:
               conclusion: 'skipped',
               output: {
                 title: 'Skipped for fork pull request',
-                summary: 'Fork pull requests receive no provider secret.',
+                summary: 'Fork pull requests require the safe-to-review label and maintainer environment approval.',
               },
             });
 
   annotate:
-    needs: [resolve, review]
-    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'true'
+    needs: [resolve, review, review-fork]
+    if: |
+      !cancelled() &&
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      ((needs.resolve.outputs.same_repo == 'true' &&
+        (needs.review.result == 'success' || needs.review.result == 'failure')) ||
+       (needs.resolve.outputs.same_repo == 'false' &&
+        (needs.review-fork.result == 'success' || needs.review-fork.result == 'failure')))
     runs-on: ubuntu-latest
     permissions:
       contents: read

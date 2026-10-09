@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Support for Euler quality review and Foucault security review on fork pull requests.
+- Gating for fork reviews requiring maintainer `safe-to-review` label application.
+- Environment protection gate requiring maintainer deployment approval in `fork-review` before model credential access.
+
+### Changed
+- Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`, canceling obsolete in-progress runs to avoid concurrency overlap.
+- Review workflows fetch current pull request labels, fail closed when label lookup fails, and preserve resolved pull request metadata for diagnostic continuity.
+- Same-repository review jobs support both `OLLAMA_API_KEY` and `MODEL_API_KEY` repository secrets, while fork reviews strictly consume environment-scoped `MODEL_API_KEY`.
+- Updated Euler pin to `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44` and Foucault pin to `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, routing fork reviews via `fork_review: true` in the protected `fork-review` environment while same-repository reviews omit `fork_review`.
+- Documented that Foucault `AUDIT.md` policy specification and SHA-256 digest remain unchanged from `f59866d`.
+- Updated policy documentation and drift verification for latest upstream Euler `QUALITY.md` and Foucault specifications.
+- Annotation runs after the review job for the resolved repository type completes on success or failure.
+- Formatted `annotate` job conditions in review workflows as literal block scalars
+  without expression delimiters to prevent parser evaluation errors.
+- Enforced resolution success and found checks across review and skip jobs in
+  review workflows to prevent masked failures.
+- Configured CI workflow to handle `pull_request` `unlabeled` events, canceling in-progress runs on label removal.
+- Sanitized ASCII control characters from pull request descriptions prior to output assignment in review workflows.
+
 ## [2.3.0] - 2026-10-08
 
 ### Added
