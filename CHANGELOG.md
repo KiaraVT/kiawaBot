@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`.
+- Review workflows fetch current pull request labels and fail closed when the label lookup fails.
+- Annotation runs only after the review job for the resolved repository type succeeds.
 
 ## [2.3.0] - 2026-10-08
 

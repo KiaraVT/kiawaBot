@@ -53,8 +53,26 @@ jobs:
             const pull = matches[0];
             const isSameRepo = Boolean(pull.head.repo) &&
               pull.head.repo.full_name.toLowerCase() === pull.base.repo.full_name.toLowerCase();
-            const labels = (pull.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
-            const safeToReview = labels.includes('safe-to-review');
+            let safeToReview = false;
+            try {
+              const { data: currentPull } = await github.rest.pulls.get({
+                ...context.repo,
+                pull_number: pull.number,
+              });
+              const labels = (currentPull.labels || []).map((label) =>
+                typeof label === 'string' ? label : label.name
+              );
+              safeToReview = labels.includes('safe-to-review');
+            } catch (error) {
+              const message = String(error?.message || error)
+                .replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+                .slice(0, 500);
+              core.setOutput('found', 'false');
+              core.setOutput('same_repo', 'false');
+              core.setOutput('safe_to_review', 'false');
+              core.setFailed(`could not fetch current pull request labels: ${message}`);
+              return;
+            }
             core.setOutput('found', 'true');
             core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
             core.setOutput('safe_to_review', safeToReview ? 'true' : 'false');
@@ -130,7 +148,11 @@ jobs:
 
   annotate:
     needs: [resolve, review, review-fork]
-    if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.found == 'true' && (needs.review.result == 'success' || needs.review-fork.result == 'success')
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      ((needs.resolve.outputs.same_repo == 'true' && needs.review.result == 'success') ||
+      (needs.resolve.outputs.same_repo == 'false' && needs.review-fork.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

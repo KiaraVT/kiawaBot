@@ -155,9 +155,15 @@ jobs:
               });
               const labels = (prData.labels || []).map((l) => (typeof l === "string" ? l : l.name));
               safeToReview = labels.includes("safe-to-review");
-            } catch (err) {
-              const labels = (pullRequest.labels || []).map((l) => (typeof l === "string" ? l : l.name));
-              safeToReview = labels.includes("safe-to-review");
+            } catch (error) {
+              const message = String(error?.message || error)
+                .replace(/[\r\n\x00-\x1f\x7f]/g, " ")
+                .slice(0, 500);
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
+              core.setOutput("safe_to_review", "false");
+              core.setFailed(`could not fetch current pull request labels: ${message}`);
+              return;
             }
             core.setOutput("found", "true");
             core.setOutput("same_repo", sameRepo);
@@ -230,7 +236,11 @@ jobs:
 
   annotate:
     needs: [resolve-pr, review, review-fork]
-    if: always() && needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.found == 'true' && (needs.review.result == 'success' || needs.review-fork.result == 'success')
+    if: >-
+      ${{ !cancelled() && needs.resolve-pr.result == 'success' &&
+      needs.resolve-pr.outputs.found == 'true' &&
+      ((needs.resolve-pr.outputs.same_repo == 'true' && needs.review.result == 'success') ||
+      (needs.resolve-pr.outputs.same_repo == 'false' && needs.review-fork.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
