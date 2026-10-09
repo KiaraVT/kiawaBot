@@ -11,7 +11,10 @@ name: quality-review-pr
     types: [completed]
 
 permissions:
+  actions: read
+  checks: write
   contents: read
+  pull-requests: write
 
 concurrency:
   group: quality-review-${{ github.event.workflow_run.head_sha }}
@@ -96,9 +99,10 @@ jobs:
   review:
     needs: resolve
     permissions:
+      actions: read
+      checks: write
       contents: read
       pull-requests: write
-      checks: write
     if: |
       needs.resolve.result == 'success' &&
       needs.resolve.outputs.found == 'true' &&
@@ -118,9 +122,10 @@ jobs:
   review-fork:
     needs: resolve
     permissions:
+      actions: read
+      checks: write
       contents: read
       pull-requests: write
-      checks: write
     if: |
       needs.resolve.result == 'success' &&
       needs.resolve.outputs.found == 'true' &&
