@@ -90,9 +90,15 @@ app.get("/api/incentives", async (req, res) => {
             goal: 0
         }
     };
+    const MAX_INCENTIVE_FILE_SIZE = 1024 * 1024;
     try {
         let rawContent = null;
         try {
+            const stat = await fs.promises.stat(incentive_Path);
+            if (stat.size > MAX_INCENTIVE_FILE_SIZE) {
+                console.error(`Incentive file exceeds allowed size limit (${stat.size} > ${MAX_INCENTIVE_FILE_SIZE})`);
+                return res.status(413).json({ error: 'Incentive file exceeds allowed size limit' });
+            }
             rawContent = await fs.promises.readFile(incentive_Path, 'utf8');
         } catch (readErr) {
             if (readErr.code !== 'ENOENT') {
@@ -100,7 +106,16 @@ app.get("/api/incentives", async (req, res) => {
             }
         }
 
-        const incentiveData = rawContent ? JSON.parse(rawContent) : defaultIncentive;
+        let incentiveData = defaultIncentive;
+        if (rawContent) {
+            try {
+                incentiveData = JSON.parse(rawContent);
+            } catch (parseErr) {
+                console.warn('Incentive file contains malformed JSON, using defaults:', parseErr.message);
+                incentiveData = defaultIncentive;
+            }
+        }
+
         const validated = {
             incentive: {
                 command: typeof incentiveData?.incentive?.command === 'string' ? incentiveData.incentive.command : '!update',

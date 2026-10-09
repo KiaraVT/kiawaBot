@@ -9,8 +9,10 @@ import {
     createSingleFlightMutex,
     executeWithBackoff,
     processStreamStartStreak,
-    validateCommandArguments
+    validateCommandArguments,
+    TwitchAuthPipeline
 } from "../../pipelineUtils.js";
+
 
 test("formatAxiosError - formats standard AxiosError with response status and url", () => {
     const mockError = {
@@ -74,14 +76,17 @@ test("redactSensitiveUrl - redacts tokens in hash fragments and fallback strings
     const redactedFrag = redactSensitiveUrl(fragmentUrl);
     assert.ok(redactedFrag.includes("access_token=[REDACTED]"));
     assert.ok(redactedFrag.includes("refresh_token=[REDACTED]"));
-    assert.ok(redactedFrag.includes("state=xyz"));
+    assert.ok(redactedFrag.includes("state=[REDACTED]"));
     assert.equal(redactedFrag.includes("secretFragment"), false);
+    assert.equal(redactedFrag.includes("xyz"), false);
 
-    const fallbackString = "invalid-url?code=secretCode#access_token=hashToken";
+    const fallbackString = "invalid-url?code=secretCode#access_token=hashToken&state=secretState";
     const redactedFallback = redactSensitiveUrl(fallbackString);
     assert.ok(redactedFallback.includes("code=[REDACTED]"));
     assert.ok(redactedFallback.includes("access_token=[REDACTED]"));
+    assert.ok(redactedFallback.includes("state=[REDACTED]"));
 });
+
 
 
 test("formatAxiosError - formats network error where response is undefined", () => {
@@ -375,12 +380,14 @@ test("validateCommandArguments - validates !addcommand and !editcommand", () => 
     assert.equal(validateCommandArguments("!addcommand", []).valid, false);
     assert.equal(validateCommandArguments("!addcommand", ["!addcommand"]).valid, false);
     assert.equal(validateCommandArguments("!addcommand", ["!addcommand", "hello"]).valid, false);
+    assert.equal(validateCommandArguments("!addcommand", ["!addcommand", "hello", "   "]).valid, false);
 
-    const valid = validateCommandArguments("!addcommand", ["!addcommand", "!greet", "Hello", "world"]);
+    const valid = validateCommandArguments("!addcommand", ["!addcommand", "!greet", "  Hello  ", "world  "]);
     assert.equal(valid.valid, true);
     assert.equal(valid.tag, "greet");
-    assert.equal(valid.text, "Hello world");
+    assert.equal(valid.text, "Hello   world");
 });
+
 
 test("validateCommandArguments - validates !updateincentive", () => {
     assert.equal(validateCommandArguments("!updateincentive", ["!updateincentive"]).valid, false);
@@ -401,3 +408,262 @@ test("validateCommandArguments - validates !addincentive", () => {
     assert.equal(valid.valid, true);
     assert.equal(valid.amount, 25.50);
 });
+
+test("TwitchAuthPipeline - validateAccessToken validates both accounts and triggers initial validation", async () => {
+    let initialValidationCalled = false;
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "tok_broadcaster", refresh_token: "ref_broadcaster" },
+            twitchBot: { access_token: "tok_bot", refresh_token: "ref_bot" }
+        },
+        read(k) {
+            const [acc, prop] = k.split(".");
+            return this.data[acc]?.[prop];
+        },
+        update(k, v) {
+            const [acc, prop] = k.split(".");
+            if (this.data[acc]) this.data[acc][prop] = v;
+        }
+    };
+
+    const mockAxios = {
+        get: async (url, config) => {
+            const authHeader = config?.headers?.Authorization || "";
+            if (authHeader.includes("tok_broadcaster") || authHeader.includes("tok_bot")) {
+                return { status: 200, data: { client_id: "test_cid", expires_in: 3600 } };
+            }
+            const err = new Error("Invalid token");
+            err.response = { status: 401 };
+            throw err;
+        },
+        post: async () => ({ data: {} })
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        onInitialValidation: () => { initialValidationCalled = true; }
+    });
+
+    await pipeline.validateAccessToken();
+
+    assert.equal(pipeline.broadcasterAuthReady, true);
+    assert.equal(pipeline.botAuthReady, true);
+    assert.equal(initialValidationCalled, true);
+});
+
+test("TwitchAuthPipeline - validateAccessToken refreshes expired tokens on 401", async () => {
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "expired_broadcaster", refresh_token: "ref_broadcaster" },
+            twitchBot: { access_token: "valid_bot", refresh_token: "ref_bot" }
+        },
+        read(k) {
+            const [acc, prop] = k.split(".");
+            return this.data[acc]?.[prop];
+        },
+        update(k, v) {
+            const [acc, prop] = k.split(".");
+            if (this.data[acc]) this.data[acc][prop] = v;
+        }
+    };
+
+    const mockAxios = {
+        get: async (url, config) => {
+            const authHeader = config?.headers?.Authorization || "";
+            if (authHeader.includes("refreshed_broadcaster") || authHeader.includes("valid_bot")) {
+                return { status: 200, data: { client_id: "test_cid" } };
+            }
+            const err = new Error("Unauthorized");
+            err.response = { status: 401 };
+            throw err;
+        },
+        post: async (url, data) => {
+            if (data?.refresh_token === "ref_broadcaster") {
+                return { data: { access_token: "refreshed_broadcaster", refresh_token: "new_ref_broadcaster" } };
+            }
+            throw new Error("Unexpected post");
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios
+    });
+
+    await pipeline.validateAccessToken();
+
+    assert.equal(pipeline.broadcasterAuthReady, true);
+    assert.equal(pipeline.botAuthReady, true);
+    assert.equal(mockAuthData.data.twitchBroadcaster.access_token, "refreshed_broadcaster");
+    assert.equal(mockAuthData.data.twitchBroadcaster.refresh_token, "new_ref_broadcaster");
+});
+
+test("TwitchAuthPipeline - refreshSingleToken classifies HTTP 400/401/403 as permanent auth failures", async () => {
+    let authNotified = false;
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "tok", refresh_token: "revoked_ref" }
+        },
+        read() { return this.data.twitchBroadcaster.refresh_token; },
+        update() {}
+    };
+
+    const mockAxios = {
+        post: async () => {
+            const err = new Error("Invalid refresh token");
+            err.response = { status: 400 };
+            throw err;
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        notifyAuthRequired: () => { authNotified = true; }
+    });
+
+    const result = await pipeline.refreshSingleToken("twitchBroadcaster", "Broadcaster");
+    assert.equal(result.refreshed, false);
+    assert.equal(result.authRequired, true);
+    assert.equal(result.reason, "permanent_failure");
+    assert.equal(result.status, 400);
+    assert.equal(pipeline.broadcasterAuthReady, false);
+    assert.equal(authNotified, false);
+    // Preserves existing refresh token on disk
+    assert.equal(mockAuthData.data.twitchBroadcaster.refresh_token, "revoked_ref");
+});
+
+test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth throttle via cooldown", async () => {
+    let postCount = 0;
+    const mockAuthData = {
+        read: () => "mock_ref",
+        update: () => {}
+    };
+    const mockAxios = {
+        post: async () => {
+            postCount += 1;
+            return { data: { access_token: "new_tok", refresh_token: "new_ref" } };
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        cooldownMs: 5000
+    });
+
+    // First attempt succeeds and recovers readiness
+    const ready1 = await pipeline.ensureBroadcasterAuth();
+    assert.equal(ready1, true);
+    assert.equal(pipeline.broadcasterAuthReady, true);
+    assert.equal(postCount, 1);
+
+    // If marked unready within cooldown, second attempt does not fire post
+    pipeline.broadcasterAuthReady = false;
+    const ready2 = await pipeline.ensureBroadcasterAuth();
+    assert.equal(ready2, false);
+    assert.equal(postCount, 1, "Should not refresh again within cooldown window");
+});
+
+test("TwitchAuthPipeline - withAuthRetry retries on 401 and redacts URL on final error", async () => {
+    let refreshCalled = false;
+    let requestCount = 0;
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "old_tok", refresh_token: "valid_ref" }
+        },
+        read: () => "valid_ref",
+        update: () => {}
+    };
+    const mockAxios = {
+        post: async () => {
+            refreshCalled = true;
+            return { data: { access_token: "refreshed_tok", refresh_token: "new_ref" } };
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios
+    });
+
+    const successfulRetry = await pipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
+        requestCount += 1;
+        if (requestCount === 1) {
+            const err = new Error("Unauthorized");
+            err.response = { status: 401 };
+            throw err;
+        }
+        return { data: "success" };
+    });
+
+    assert.equal(successfulRetry.data, "success");
+    assert.equal(requestCount, 2);
+    assert.equal(refreshCalled, true);
+
+    // Final failure redacts URL before throwing
+    const failingOp = async () => {
+        const err = new Error("Fatal Twitch error");
+        err.config = { url: "https://api.twitch.tv/helix/users?access_token=secretOAuthToken123" };
+        err.response = { status: 500 };
+        throw err;
+    };
+
+    await assert.rejects(
+        () => pipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", failingOp),
+        (err) => {
+            assert.ok(err.config.url.includes("access_token=[REDACTED]"));
+            assert.equal(err.config.url.includes("secretOAuthToken123"), false);
+            return true;
+        }
+    );
+});
+
+test("TwitchAuthPipeline - OAuth flow generates state and callback routes to correct account", async () => {
+    let capturedAuthUrl = "";
+    const updatedTokens = {};
+    const mockAuthData = {
+        update(k, v) { updatedTokens[k] = v; },
+        read: () => ""
+    };
+    const mockAxios = {
+        post: async (url, data) => {
+            if (data?.code === "auth_code_123") {
+                return { data: { access_token: "bot_access_tok", refresh_token: "bot_refresh_tok" } };
+            }
+            throw new Error("Invalid code");
+        },
+        get: async () => ({ status: 200, data: {} })
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        clientId: "cid",
+        clientSecret: "csecret",
+        redirectUri: "http://127.0.0.1:3000",
+        scopes: ["user:bot"],
+        notifyAuthRequired: (_r, url) => { capturedAuthUrl = url; }
+    });
+
+    // Start auth for bot account
+    await pipeline.startAuth("Bot auth expired", "twitchBot", "Bot");
+    assert.ok(capturedAuthUrl.includes("client_id=cid"));
+    const stateMatch = capturedAuthUrl.match(/state=([a-f0-9]+)/);
+    assert.ok(stateMatch, "Must include state nonce in auth URL");
+    const stateNonce = stateMatch[1];
+
+    // Invalid state returns 400
+    const invalidResult = await pipeline.handleOAuthCallback("auth_code_123", "wrong_nonce");
+    assert.equal(invalidResult.status, 400);
+
+    // Valid callback updates bot account tokens
+    const validResult = await pipeline.handleOAuthCallback("auth_code_123", stateNonce);
+    assert.equal(validResult.status, 200);
+    assert.equal(validResult.accountKey, "twitchBot");
+    assert.equal(updatedTokens["twitchBot.access_token"], "bot_access_tok");
+    assert.equal(updatedTokens["twitchBot.refresh_token"], "bot_refresh_tok");
+    assert.equal(pipeline.botAuthReady, true);
+});
+

@@ -194,3 +194,16 @@ test("deepMerge - clones arrays and handles null values safely", () => {
     assert.equal(deepMerge({ a: 1 }, null), null);
 });
 
+test("deepMerge - protects against prototype pollution keys", () => {
+    const maliciousPayload = JSON.parse('{"__proto__": {"polluted": true}, "constructor": {"prototype": {"polluted": true}}}');
+    const target = { safe: true };
+
+    const merged = deepMerge(target, maliciousPayload);
+
+    assert.equal(Object.prototype.polluted, undefined, "Object.prototype must not be polluted");
+    assert.equal({}.polluted, undefined, "Empty object must not have polluted property");
+    assert.equal(merged.__proto__.polluted, undefined, "Merged object prototype must not contain injected keys");
+    assert.equal(merged.safe, true);
+});
+
+

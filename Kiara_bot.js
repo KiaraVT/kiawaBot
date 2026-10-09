@@ -13,11 +13,16 @@ import { WebSocketServer } from "ws";
 import express from "express"
 import { formatAxiosError, redactSensitiveUrl } from "./errorUtils.js";
 import {
-    createSingleFlightMutex,
-    executeWithBackoff,
     processStreamStartStreak,
-    validateCommandArguments
+    validateCommandArguments,
+    TwitchAuthPipeline,
+    TWITCH_AUTH_URL,
+    TWITCH_TOKEN_URL,
+    TWITCH_VALIDATE_URL,
+    TWITCH_API_BASE_URL
 } from "./pipelineUtils.js";
+
+export { TWITCH_AUTH_URL, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL, TWITCH_API_BASE_URL };
 
 import querystring from "qs"
 //Include line reading module
@@ -124,28 +129,6 @@ const redirectUri = 'http://127.0.0.1:' + oAuthPort;
 
 //variables to store auth-related data
 let validationTicker = null;
-let broadcasterAuthReady = false;
-let botAuthReady = false;
-let initialValidationHandled = false;
-let isValidating = false;
-const activeAuthStates = new Map();
-
-function cleanupExpiredAuthStates() {
-    const now = Date.now();
-    const TTL_MS = 15 * 60 * 1000;
-    for (const [nonce, session] of activeAuthStates.entries()) {
-        if (now - session.createdAt > TTL_MS) {
-            activeAuthStates.delete(nonce);
-        }
-    }
-}
-
-let lastRefreshBroadcasterAttempt = 0;
-let lastRefreshBotAttempt = 0;
-const REFRESH_COOLDOWN_MS = 10000;
-
-const singleFlightBroadcaster = createSingleFlightMutex();
-const singleFlightBot = createSingleFlightMutex();
 
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
@@ -158,73 +141,11 @@ function ensureAuthListener() {
     }
 }
 
-authListener.get("/", (req, res) => {
-    if (!req.query.code) {
-        console.warn("[Auth] Received authorization callback without code parameter:", req.query);
-        res.status(400).send("Authorization failed: missing authorization code or access denied.");
-        return;
-    }
-
-    cleanupExpiredAuthStates();
-    const stateNonce = req.query.state;
-    const authSession = stateNonce ? activeAuthStates.get(stateNonce) : null;
-
-    if (!authSession) {
-        console.warn("[Auth] Authorization callback state mismatch or expired nonce:", stateNonce);
-        res.status(400).send("Authorization failed: invalid or expired state parameter.");
-        return;
-    }
-
-    const { accountKey, accountName } = authSession;
-
-    exchangeCodeForAccessToken(req.query.code)
-        .then(tokenData => {
-            activeAuthStates.delete(stateNonce);
-            cancelGracefulAuthExit();
-            res.send(`You're now Authorized for ${accountName}!  You can close this tab and return to the bot`);
-            authData.update(`${accountKey}.access_token`, tokenData.access_token, true, true);
-            authData.update(`${accountKey}.refresh_token`, tokenData.refresh_token, true, true);
-            if (accountKey === 'twitchBroadcaster') {
-                broadcasterAuthReady = true;
-            } else if (accountKey === 'twitchBot') {
-                botAuthReady = true;
-            }
-            validateAccessToken();
-            if (validationTicker) {
-                clearInterval(validationTicker);
-            }
-            validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
-        })
-        .catch(error => {
-            activeAuthStates.delete(stateNonce);
-            res.status(500).send("Authorization error: failed to exchange authorization code for access tokens.");
-            if (accountKey === 'twitchBroadcaster') {
-                broadcasterAuthReady = false;
-            } else if (accountKey === 'twitchBot') {
-                botAuthReady = false;
-            }
-            console.error(`[Auth] Token exchange failed for ${accountName}:`, formatAxiosError(error));
-        });
-});
-
-ensureAuthListener();
-
-function buildAuthUrl(stateNonce) {
-    const authQueryString = querystring.stringify({
-        response_type: 'code',
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        scope: scopes.join(' '),
-        state: stateNonce
-    });
-    return 'https://id.twitch.tv/oauth2/authorize?' + authQueryString;
-}
-
 async function notifyAuthRequired(reason, authUrl) {
     const webhookUrl = process.env.AUTH_WEBHOOK_URL;
     if (webhookUrl) {
         try {
-            const sanitizedWebhookUrl = authUrl.replace(/([?&]state=)[^&]+/i, "$1[REDACTED]");
+            const sanitizedWebhookUrl = redactSensitiveUrl(authUrl);
             await axios.post(webhookUrl, {
                 event: 'auth_required',
                 reason: reason,
@@ -275,7 +196,7 @@ function scheduleGracefulAuthExit() {
         console.warn(`[Auth] AUTH_FAILURE_ACTION=exit configured. Bot will shut down in ${AUTH_EXIT_GRACE_PERIOD_MS / 1000}s if authorization is not completed.`);
         authExitTimer = setTimeout(() => {
             authExitTimer = null;
-            if (!broadcasterAuthReady || !botAuthReady) {
+            if (!authPipeline.broadcasterAuthReady || !authPipeline.botAuthReady) {
                 performGracefulExit();
             }
         }, AUTH_EXIT_GRACE_PERIOD_MS);
@@ -290,342 +211,145 @@ function cancelGracefulAuthExit() {
     }
 }
 
-//Begin the auth process by opening the user's browser to the consent screen
-async function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
-    cleanupExpiredAuthStates();
-    for (const session of activeAuthStates.values()) {
-        if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
-            return;
+const authPipeline = new TwitchAuthPipeline({
+    authData,
+    axios,
+    clientId,
+    clientSecret,
+    redirectUri,
+    scopes,
+    tokenUrl: TWITCH_TOKEN_URL,
+    validateUrl: TWITCH_VALIDATE_URL,
+    authUrl: TWITCH_AUTH_URL,
+    cooldownMs: 10000,
+    onInitialValidation: () => {
+        handleInitialAuthValidation();
+    },
+    notifyAuthRequired: async (reason, authUrl, accountKey, accountName) => {
+        await notifyAuthRequired(`[${accountName}] ${reason}`, authUrl);
+        if (shouldExitOnAuthFailure()) {
+            scheduleGracefulAuthExit();
         }
     }
-    ensureAuthListener();
-    const nonce = crypto.randomBytes(16).toString('hex');
-    activeAuthStates.set(nonce, { accountKey, accountName, createdAt: Date.now() });
-    const authUrl = buildAuthUrl(nonce);
-    await notifyAuthRequired(`[${accountName}] ${reason}`, authUrl);
-    if (shouldExitOnAuthFailure()) {
-        scheduleGracefulAuthExit();
+});
+
+authListener.get("/", async (req, res) => {
+    if (!req.query.code) {
+        console.warn("[Auth] Received authorization callback without code parameter:", req.query);
+        if (!res.headersSent) {
+            res.status(400).send("Authorization failed: missing authorization code or access denied.");
+        }
+        return;
     }
-}
 
+    const stateNonce = req.query.state;
+    const result = await authPipeline.handleOAuthCallback(req.query.code, stateNonce);
 
-//exchange the authorization code we get from Twitch when the user consents to get an Access Token
-function exchangeCodeForAccessToken(code) {
-    return new Promise((resolve, reject) => {
-        const postData = {
-            grant_type: 'authorization_code',
-            client_id: clientId,
-            client_secret: clientSecret,
-            redirect_uri: redirectUri,
-            code: code
-        };
-        axios.post("https://id.twitch.tv/oauth2/token", postData)
-            .then(response => resolve(response.data))
-            .catch(error => reject(error));
-    });
+    if (result.status !== 200) {
+        console.warn("[Auth] Authorization callback error:", result.error);
+        if (!res.headersSent) {
+            res.status(result.status).send(result.error);
+        }
+        return;
+    }
+
+    cancelGracefulAuthExit();
+    if (!res.headersSent) {
+        res.send(result.message);
+    }
+
+    authPipeline.validateAccessToken();
+    if (validationTicker) {
+        clearInterval(validationTicker);
+    }
+    validationTicker = setInterval(() => { authPipeline.validateAccessToken(); }, 1000 * 600);
+});
+
+ensureAuthListener();
+
+//Begin the auth process by opening the user's browser to the consent screen
+function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
+    ensureAuthListener();
+    return authPipeline.startAuth(reason, accountKey, accountName);
 }
 
 //helper to refresh a single account token with exponential backoff for transient errors
-async function refreshSingleToken(accountKey, accountName) {
-    const refreshToken = authData.read(`${accountKey}.refresh_token`);
-    if (!refreshToken) {
-        console.warn(`[Auth] No refresh token found for ${accountName}.`);
-        if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = false;
-        if (accountKey === 'twitchBot') botAuthReady = false;
-        return { refreshed: false, reason: 'missing_refresh_token', authRequired: true };
-    }
-
-    const postData = {
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken
-    };
-
-    console.info(`[Auth] Attempting to refresh Access Token for ${accountName}...`);
-    try {
-        return await executeWithBackoff(
-            async () => {
-                const response = await axios.post("https://id.twitch.tv/oauth2/token", postData);
-                console.info(`[Auth] Access Token for ${accountName} was successfully refreshed`);
-                authData.update(`${accountKey}.access_token`, response.data.access_token, true, true);
-                authData.update(`${accountKey}.refresh_token`, response.data.refresh_token, true, true);
-                if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = true;
-                if (accountKey === 'twitchBot') botAuthReady = true;
-                return { refreshed: true, data: response.data, authRequired: false };
-            },
-            {
-                maxRetries: 3,
-                baseDelayMs: 1000,
-                onRetry: (err, attempt, delayMs) => {
-                    console.warn(`[Auth] Transient error refreshing ${accountName} token (${formatAxiosError(err)}). Retrying in ${delayMs}ms (attempt ${attempt}/3)...`);
-                }
-            }
-        );
-    } catch (error) {
-        const status = error?.response?.status;
-        console.error(`[Auth] Unable to refresh Access Token for ${accountName}:`, formatAxiosError(error));
-        // Treat HTTP 400, 401, and 403 as non-retryable permanent auth failures
-        if (status === 400 || status === 401 || status === 403) {
-            console.warn(`[Auth] Permanent auth failure (HTTP ${status}) for ${accountName}. Retaining existing tokens on disk.`);
-            if (accountKey === 'twitchBroadcaster') broadcasterAuthReady = false;
-            if (accountKey === 'twitchBot') botAuthReady = false;
-            return { refreshed: false, reason: 'permanent_failure', status, authRequired: true };
-        }
-        return { refreshed: false, reason: 'transient_retry_exhausted', error, authRequired: false };
-    }
+function refreshSingleToken(accountKey, accountName) {
+    return authPipeline.refreshSingleToken(accountKey, accountName);
 }
 
 //attempt to refresh the Access Token using the Refresh Token
-async function refreshAccessToken() {
-    // Sequentially execute broadcaster and bot refreshes to avoid parallel token endpoint races
-    const broadcaster = await singleFlightBroadcaster(() => refreshSingleToken('twitchBroadcaster', 'Broadcaster'));
-    const bot = await singleFlightBot(() => refreshSingleToken('twitchBot', 'Bot'));
-
-    let authPrompted = false;
-    if (broadcaster.authRequired || bot.authRequired) {
-        authPrompted = true;
-        if (validationTicker) {
-            clearInterval(validationTicker);
-            validationTicker = null;
-        }
-        if (broadcaster.authRequired) {
-            await startAuth(`Broadcaster (${broadcaster.reason})`, 'twitchBroadcaster', 'Broadcaster');
-        }
-        if (bot.authRequired) {
-            await startAuth(`Bot (${bot.reason})`, 'twitchBot', 'Bot');
-        }
-    }
-
-    return { broadcaster, bot, authPrompted };
-}
-
-let transientRetryTimer = null;
-function scheduleTransientValidationRetry(delayMs = 15000) {
-    if (!transientRetryTimer && (!broadcasterAuthReady || !botAuthReady)) {
-        console.info(`[Auth] Scheduling validation retry in ${delayMs / 1000}s due to transient failure...`);
-        transientRetryTimer = setTimeout(() => {
-            transientRetryTimer = null;
-            const now = Date.now();
-            lastRefreshBroadcasterAttempt = now;
-            lastRefreshBotAttempt = now;
-            validateAccessToken();
-        }, delayMs);
-    }
+function refreshAccessToken() {
+    return authPipeline.refreshAccessToken();
 }
 
 //attempt to validate the Access Token to be sure it is still valid
-async function validateAccessToken() {
-    if (isValidating) return;
-    isValidating = true;
-
-    console.info('[Auth] Attempting to validate Access Token...');
-
-    const validateBroadcaster = axios.get("https://id.twitch.tv/oauth2/validate", {
-        headers: { Authorization: 'Bearer ' + authData.read('twitchBroadcaster.access_token') }
-    })
-        .then(() => {
-            console.info('[Auth] Access Token for Broadcaster was successfully validated');
-            broadcasterAuthReady = true;
-        })
-        .catch(async error => {
-            console.warn('[Auth] Unable to validate Broadcaster Access Token:', formatAxiosError(error));
-            broadcasterAuthReady = false;
-            const refreshRes = await refreshAccessToken();
-            if (refreshRes.broadcaster?.refreshed) {
-                broadcasterAuthReady = true;
-            } else if (refreshRes.broadcaster?.reason === 'transient_retry_exhausted') {
-                scheduleTransientValidationRetry();
-            }
-        });
-
-    const validateBot = axios.get("https://id.twitch.tv/oauth2/validate", {
-        headers: { Authorization: 'Bearer ' + authData.read('twitchBot.access_token') }
-    })
-        .then(() => {
-            console.info('[Auth] Access Token for Bot was successfully validated');
-            botAuthReady = true;
-        })
-        .catch(async error => {
-            console.warn('[Auth] Unable to validate Bot Access Token:', formatAxiosError(error));
-            botAuthReady = false;
-            const refreshRes = await refreshAccessToken();
-            if (refreshRes.bot?.refreshed) {
-                botAuthReady = true;
-            } else if (refreshRes.bot?.reason === 'transient_retry_exhausted') {
-                scheduleTransientValidationRetry();
-            }
-        });
-
-    try {
-        await Promise.allSettled([validateBroadcaster, validateBot]);
-        if (broadcasterAuthReady && botAuthReady) {
-            cancelGracefulAuthExit();
-            if (transientRetryTimer) {
-                clearTimeout(transientRetryTimer);
-                transientRetryTimer = null;
-            }
-            if (!initialValidationHandled) {
-                initialValidationHandled = true;
-                handleInitialAuthValidation();
-            }
-        }
-    } finally {
-        isValidating = false;
-    }
+function validateAccessToken() {
+    return authPipeline.validateAccessToken();
 }
 
-async function ensureBroadcasterAuth() {
-    if (broadcasterAuthReady) return true;
-    const now = Date.now();
-    if (now - lastRefreshBroadcasterAttempt > REFRESH_COOLDOWN_MS) {
-        lastRefreshBroadcasterAttempt = now;
-        console.info('[Auth] Broadcaster auth not ready, attempting recovery refresh...');
-        const refreshRes = await refreshAccessToken();
-        if (refreshRes.broadcaster?.refreshed) {
-            broadcasterAuthReady = true;
-            return true;
-        }
-    }
-    return false;
+function ensureBroadcasterAuth() {
+    return authPipeline.ensureBroadcasterAuth();
 }
 
-async function ensureBotAuth() {
-    if (botAuthReady) return true;
-    const now = Date.now();
-    if (now - lastRefreshBotAttempt > REFRESH_COOLDOWN_MS) {
-        lastRefreshBotAttempt = now;
-        console.info('[Auth] Bot auth not ready, attempting recovery refresh...');
-        const refreshRes = await refreshAccessToken();
-        if (refreshRes.bot?.refreshed) {
-            botAuthReady = true;
-            return true;
-        }
-    }
-    return false;
+function ensureBotAuth() {
+    return authPipeline.ensureBotAuth();
 }
+
+export {
+    authPipeline,
+    startAuth,
+    refreshSingleToken,
+    refreshAccessToken,
+    validateAccessToken,
+    ensureBroadcasterAuth,
+    ensureBotAuth
+};
 
 //send a GET request to the Twitch API
-async function apiGetRequest(method, parameters, isRetry = false) {
-    const isReady = await ensureBroadcasterAuth();
-    if (!isReady) {
-        throw new Error("twitch not yet authorized, wait a bit and try again");
-    }
-
-    const requestQueryString = querystring.stringify(parameters);
-    const axiosConfig = {
-        headers: {
-            "Authorization": "Bearer " + authData.read('twitchBroadcaster.access_token'),
-            "Client-Id": clientId
-        }
-    };
-
-    try {
-        const response = await axios.get("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, axiosConfig);
-        return response.data;
-    } catch (error) {
-        if (error?.response?.status === 401 && !isRetry) {
-            console.info('[Auth] Broadcaster token expired (401), refreshing token...');
-            broadcasterAuthReady = false;
-            lastRefreshBroadcasterAttempt = Date.now();
-            try {
-                const refreshRes = await refreshAccessToken();
-                if (refreshRes.broadcaster?.refreshed) {
-                    broadcasterAuthReady = true;
-                    return await apiGetRequest(method, parameters, true);
-                }
-            } catch (refreshErr) {
-                console.error('[Auth] Refresh failed during apiGetRequest retry:', formatAxiosError(refreshErr));
+async function apiGetRequest(method, parameters) {
+    return authPipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
+        const requestQueryString = querystring.stringify(parameters);
+        const axiosConfig = {
+            headers: {
+                "Authorization": "Bearer " + authData.read("twitchBroadcaster.access_token"),
+                "Client-Id": clientId
             }
-        }
-        if (error?.config?.url) {
-            error.config.url = redactSensitiveUrl(error.config.url);
-        }
-        throw error;
-    }
+        };
+        const response = await axios.get(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, axiosConfig);
+        return response.data;
+    });
 }
 
 //send a POST request to the Twitch API
-async function apiPostRequest(method, parameters, data, isRetry = false) {
-    const isReady = await ensureBroadcasterAuth();
-    if (!isReady) {
-        throw new Error("twitch not yet authorized, wait a bit and try again");
-    }
-    const requestQueryString = querystring.stringify(parameters);
-    const axiosConfig = {
-        headers: {
-            "Authorization": "Bearer " + authData.read('twitchBroadcaster.access_token'),
-            "Client-Id": clientId,
-            "Content-Type": 'application/json'
-        }
-    };
-    try {
-        const response = await axios.post("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, data, axiosConfig);
-        return response.data;
-    } catch (error) {
-        if (error?.response?.status === 401 && !isRetry) {
-            console.info('[Auth] Broadcaster token expired (401), refreshing token...');
-            broadcasterAuthReady = false;
-            lastRefreshBroadcasterAttempt = Date.now();
-            try {
-                const refreshRes = await refreshAccessToken();
-                if (refreshRes.broadcaster?.refreshed) {
-                    broadcasterAuthReady = true;
-                    return await apiPostRequest(method, parameters, data, true);
-                }
-            } catch (refreshErr) {
-                console.error('[Auth] Refresh failed during apiPostRequest retry:', formatAxiosError(refreshErr));
+async function apiPostRequest(method, parameters, data) {
+    return authPipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
+        const requestQueryString = querystring.stringify(parameters);
+        const axiosConfig = {
+            headers: {
+                "Authorization": "Bearer " + authData.read("twitchBroadcaster.access_token"),
+                "Client-Id": clientId,
+                "Content-Type": "application/json"
             }
-        }
-        if (error?.response?.status === 400) {
-            console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
-        }
-        if (error?.config?.url) {
-            error.config.url = redactSensitiveUrl(error.config.url);
-        }
-        throw error;
-    }
+        };
+        const response = await axios.post(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, data, axiosConfig);
+        return response.data;
+    });
 }
 
-async function apiPostRequestBot(method, parameters, data, isRetry = false) {
-    const isReady = await ensureBotAuth();
-    if (!isReady) {
-        throw new Error("twitch not yet authorized, wait a bit and try again");
-    }
-    const requestQueryString = querystring.stringify(parameters);
-    const axiosConfig = {
-        headers: {
-            "Authorization": "Bearer " + authData.read('twitchBot.access_token'),
-            "Client-Id": clientId,
-            "Content-Type": 'application/json'
-        }
-    };
-    try {
-        const response = await axios.post("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, data, axiosConfig);
-        return response.data;
-    } catch (error) {
-        if (error?.response?.status === 401 && !isRetry) {
-            console.info('[Auth] Bot token expired (401), refreshing token...');
-            botAuthReady = false;
-            lastRefreshBotAttempt = Date.now();
-            try {
-                const refreshRes = await refreshAccessToken();
-                if (refreshRes.bot?.refreshed) {
-                    botAuthReady = true;
-                    return await apiPostRequestBot(method, parameters, data, true);
-                }
-            } catch (refreshErr) {
-                console.error('[Auth] Refresh failed during apiPostRequestBot retry:', formatAxiosError(refreshErr));
+async function apiPostRequestBot(method, parameters, data) {
+    return authPipeline.withAuthRetry("twitchBot", "Bot", async () => {
+        const requestQueryString = querystring.stringify(parameters);
+        const axiosConfig = {
+            headers: {
+                "Authorization": "Bearer " + authData.read("twitchBot.access_token"),
+                "Client-Id": clientId,
+                "Content-Type": "application/json"
             }
-        }
-        if (error?.response?.status === 400) {
-            console.warn('[API] Bad Request (400):', error.response.data?.message || 'Bad Request');
-        }
-        if (error?.config?.url) {
-            error.config.url = redactSensitiveUrl(error.config.url);
-        }
-        throw error;
-    }
+        };
+        const response = await axios.post(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, data, axiosConfig);
+        return response.data;
+    });
 }
 //use the API to get Channel Data for a given broadcaster_id
 //use this as a template if you want to make other shorthand functions to make common API stuff easier
@@ -1995,10 +1719,8 @@ async function messageHandler(tags) {
                 }
             }
             catch (err) {
-                console.log(err)
+                console.error("[Command] Failed to execute !so shoutout:", formatAxiosError(err));
             }
-
-            //I don't know how errors work so this just stops it from clogging the window
         }
 
     //update incentive goal and bot command id

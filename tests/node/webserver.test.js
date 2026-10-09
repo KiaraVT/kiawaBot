@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 
 process.env.WEB_PORT = "18081";
 const { server, errorHandler } = await import("../../webserver/server.js");
@@ -45,6 +47,40 @@ test("Webserver - JSON API endpoints return 200 and application/json", async () 
     assert.equal(typeof incData.incentive.amount, "number");
     assert.equal(typeof incData.incentive.goal, "number");
 });
+
+test("Webserver - /api/incentives handles malformed JSON and file size limits", async () => {
+    const incPath = path.join(import.meta.dirname, "..", "..", "data", "incentives.json");
+    let originalContent = null;
+    if (fs.existsSync(incPath)) {
+        originalContent = fs.readFileSync(incPath, "utf8");
+    }
+
+    try {
+        // Test malformed JSON falls back gracefully to default schema
+        fs.writeFileSync(incPath, "{ malformed: json not valid }");
+        const malformedRes = await fetch(`${BASE_URL}/api/incentives`);
+        assert.equal(malformedRes.status, 200);
+        const malformedData = await malformedRes.json();
+        assert.deepEqual(malformedData, {
+            incentive: { command: "!update", amount: 0, goal: 0 }
+        });
+
+        // Test oversized file returns 413
+        const largeContent = "x".repeat(1024 * 1024 + 100);
+        fs.writeFileSync(incPath, largeContent);
+        const largeRes = await fetch(`${BASE_URL}/api/incentives`);
+        assert.equal(largeRes.status, 413);
+        const largeData = await largeRes.json();
+        assert.ok(largeData.error.includes("exceeds"));
+    } finally {
+        if (originalContent !== null) {
+            fs.writeFileSync(incPath, originalContent);
+        } else if (fs.existsSync(incPath)) {
+            fs.unlinkSync(incPath);
+        }
+    }
+});
+
 
 test("Webserver - HTML dashboard views return 200 and text/html", async () => {
     const endpoints = ["/", "/streaks", "/quotes", "/commands", "/incentives"];

@@ -10,6 +10,9 @@ function deepMerge(target, source) {
     }
     const output = { ...(target && typeof target === "object" && !Array.isArray(target) ? target : {}) };
     for (const key of Object.keys(source)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+            continue;
+        }
         const sourceVal = source[key];
         const targetVal = output[key];
         if (
@@ -81,7 +84,7 @@ export default class AuthDataHelper {
             const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
             this.data = deepMerge(this.defaultData, parsed);
         } catch (err) {
-            const timestamp = Date.now();
+            const timestamp = `${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
             const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
             try {
                 if (fs.existsSync(this.dataPath)) {
