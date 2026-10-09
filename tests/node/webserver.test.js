@@ -30,7 +30,7 @@ test("Webserver - chatwidget endpoint returns 200 and text/html", async () => {
 });
 
 test("Webserver - JSON API endpoints return 200 and application/json", async () => {
-    const endpoints = ["/api/streaks", "/api/quotes", "/api/commands"];
+    const endpoints = ["/api/streaks", "/api/quotes", "/api/commands", "/api/incentives"];
     for (const ep of endpoints) {
         const res = await fetch(`${BASE_URL}${ep}`);
         assert.equal(res.status, 200);

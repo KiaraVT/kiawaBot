@@ -81,6 +81,25 @@ app.get("/api/commands", (req, res) => {
     }
 });
 
+// Web endpoint to serve incentives data
+app.get("/api/incentives", (req, res) => {
+    try {
+        const defaultIncentive = {
+            incentive: {
+                command: '!update',
+                amount: 0,
+                goal: 0
+            }
+        };
+        const incentiveData = safeReadJSON(incentive_Path, defaultIncentive);
+        res.setHeader('Content-Type', 'application/json');
+        res.json(incentiveData);
+    } catch (error) {
+        console.error('Error reading incentive file:', error);
+        res.status(500).json({ error: 'Failed to read incentive data' });
+    }
+});
+
 // Simple HTML page to display the data
 app.get("/streaks", (req, res) => {
     try {
@@ -309,6 +328,13 @@ app.get("/health", (_req, res) => {
 
 app.get("/chatwidget", (_req, res) => {
     res.sendFile("chatwidget.html", { root: path.join(import.meta.dirname, "www") });
+});
+
+// Centralized error handling middleware
+app.use((err, req, res, next) => {
+    void next;
+    console.error('Web Server: Unhandled error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
 });
 
 const server = app.listen(port, '127.0.0.1', () => {

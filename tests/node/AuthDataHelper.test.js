@@ -57,3 +57,46 @@ test("AuthDataHelper - loadData, update, read, and file persistence", () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("AuthDataHelper - defaults dataPath to ./data/auth-data.json and includes broadcaster and bot schema", () => {
+    const helper = new AuthDataHelper();
+    assert.equal(helper.dataPath, "./data/auth-data.json");
+    assert.ok(helper.defaultData.twitchBroadcaster, "twitchBroadcaster should be defined in defaultData");
+    assert.ok(helper.defaultData.twitchBot, "twitchBot should be defined in defaultData");
+    assert.equal(helper.defaultData.twitchBroadcaster.access_token, "");
+    assert.equal(helper.defaultData.twitchBot.access_token, "");
+});
+
+test("AuthDataHelper - update defaults create to true and sets nested values", () => {
+    const helper = new AuthDataHelper();
+    helper.data = {};
+    // update without 3rd param should default create=true
+    const result = helper.update("twitchBroadcaster.access_token", "test_broadcaster_token");
+    assert.equal(result, true);
+    assert.equal(helper.read("twitchBroadcaster.access_token"), "test_broadcaster_token");
+});
+
+test("AuthDataHelper - migrates legacy auth-data.json if ./data/auth-data.json does not exist", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-migration-"));
+    const legacyPath = path.join(tempDir, "auth-data.json");
+    const newDir = path.join(tempDir, "data");
+    const newPath = path.join(newDir, "auth-data.json");
+
+    try {
+        const legacyData = {
+            twitchBroadcaster: { access_token: "legacy_tok", refresh_token: "legacy_ref" }
+        };
+        fs.writeFileSync(legacyPath, JSON.stringify(legacyData));
+
+        const helper = new AuthDataHelper();
+        helper.dataPath = newPath;
+        helper.legacyPath = legacyPath;
+        helper.loadData();
+
+        assert.equal(helper.read("twitchBroadcaster.access_token"), "legacy_tok");
+        assert.ok(fs.existsSync(newPath), "new path should exist after migration");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+

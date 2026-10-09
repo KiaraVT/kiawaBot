@@ -1,13 +1,22 @@
 import fs from "fs"
+import path from "path"
 
 export default class AuthDataHelper {
 
     //this runs when we create a new instance of the class
     constructor() {
         this.data = null;
-        this.dataPath = './auth-data.json';
+        this.dataPath = './data/auth-data.json';
         this.defaultData = {
             twitch: {
+                access_token: "",
+                refresh_token: ""
+            },
+            twitchBroadcaster: {
+                access_token: "",
+                refresh_token: ""
+            },
+            twitchBot: {
                 access_token: "",
                 refresh_token: ""
             },
@@ -22,16 +31,46 @@ export default class AuthDataHelper {
 
     //load data from the file, create it if it doesn't exist
     loadData() {
-        if (!fs.existsSync(this.dataPath))
-            fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData));
-        this.data = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
+        const dir = path.dirname(this.dataPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        if (!fs.existsSync(this.dataPath)) {
+            const candidateLegacy = this.legacyPath !== undefined ? this.legacyPath : (this.dataPath === './data/auth-data.json' ? './auth-data.json' : null);
+            if (candidateLegacy && fs.existsSync(candidateLegacy)) {
+                fs.copyFileSync(candidateLegacy, this.dataPath);
+            } else {
+                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2));
+            }
+        }
+
+        try {
+            const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
+            this.data = {
+                ...this.defaultData,
+                ...parsed,
+                twitch: { ...this.defaultData.twitch, ...(parsed?.twitch || {}) },
+                twitchBroadcaster: { ...this.defaultData.twitchBroadcaster, ...(parsed?.twitchBroadcaster || {}) },
+                twitchBot: { ...this.defaultData.twitchBot, ...(parsed?.twitchBot || {}) },
+                youtube: { ...this.defaultData.youtube, ...(parsed?.youtube || {}) }
+            };
+        } catch (err) {
+            console.log('Error parsing Auth Data file: ' + err.message);
+            this.data = { ...this.defaultData };
+        }
+
         if (this.statusCallback) this.statusCallback("loaded");
     }
 
     //save the data back to the file
     saveData() {
         try {
-            fs.writeFileSync(this.dataPath, JSON.stringify(this.data));
+            const dir = path.dirname(this.dataPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2));
             return true;
         } catch (err) {
             console.log('Error writing Auth Data file:' + err.message);
@@ -81,7 +120,7 @@ export default class AuthDataHelper {
     }
 
     //update a given field, optionally creating it if it doesn't exist
-    update(field, value, create = false) {
+    update(field, value, create = true, immediate = false) {
         let pathArr = field.split(".");
         let targetField = pathArr.pop();
         let focusObject = this.data;
@@ -100,8 +139,19 @@ export default class AuthDataHelper {
         }
 
         focusObject[targetField] = value;
-        this.touchAutosave();
+        if (immediate) {
+            clearTimeout(this.autoSaveTimeout);
+            this.saveData();
+        } else {
+            this.touchAutosave();
+        }
         return true;
+    }
+
+    //save data immediately without debounce
+    saveDataImmediate() {
+        clearTimeout(this.autoSaveTimeout);
+        return this.saveData();
     }
 
     //remove a field from the data file
