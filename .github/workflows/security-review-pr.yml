@@ -177,9 +177,9 @@ jobs:
   review:
     needs: resolve-pr
     if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
-    uses: abuzucom/foucault/.github/workflows/security-review.yml@f59866d6e3ff71affa8404117877b58b8d79eea2
+    uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
-      audit_ref: "f59866d6e3ff71affa8404117877b58b8d79eea2"
+      audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
       model_call_command: "python3 ci/call_model.py"
       pr_comment: true
       fail_on_block: true
@@ -188,16 +188,16 @@ jobs:
       head_sha: ${{ needs.resolve-pr.outputs.head_sha }}
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
+      fork_review: false
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   review-fork:
     needs: resolve-pr
     if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
-    environment: fork-review
-    uses: abuzucom/foucault/.github/workflows/security-review.yml@f59866d6e3ff71affa8404117877b58b8d79eea2
+    uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
-      audit_ref: "f59866d6e3ff71affa8404117877b58b8d79eea2"
+      audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
       model_call_command: "python3 ci/call_model.py"
       pr_comment: true
       fail_on_block: true
@@ -206,6 +206,7 @@ jobs:
       head_sha: ${{ needs.resolve-pr.outputs.head_sha }}
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
+      fork_review: true
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 

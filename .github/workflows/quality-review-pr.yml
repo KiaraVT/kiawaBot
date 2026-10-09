@@ -99,15 +99,16 @@ jobs:
       pull-requests: write
       checks: write
     if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'true'
-    uses: abuzucom/euler/.github/workflows/quality-review.yml@fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+    uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       pr_title: ${{ needs.resolve.outputs.title }}
       pr_body: ${{ needs.resolve.outputs.body }}
-      quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+      quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
       fail_on_block: true
+      fork_review: false
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
@@ -118,16 +119,16 @@ jobs:
       pull-requests: write
       checks: write
     if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'false' && needs.resolve.outputs.safe_to_review == 'true'
-    environment: fork-review
-    uses: abuzucom/euler/.github/workflows/quality-review.yml@fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+    uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       pr_title: ${{ needs.resolve.outputs.title }}
       pr_body: ${{ needs.resolve.outputs.body }}
-      quality_ref: fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08
+      quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
       fail_on_block: true
+      fork_review: true
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 

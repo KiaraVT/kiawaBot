@@ -6,7 +6,7 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 
 ## Pins
 
-- `AUDIT.md`: commit `f59866d6e3ff71affa8404117877b58b8d79eea2`, through `audit_ref`.
+- `AUDIT.md`: commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, through `audit_ref`.
 - `security-review.yml`: the same commit, through the `uses:` pin.
 
 ## Wiring
@@ -16,16 +16,18 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 - `ci/build_pr_case.py`, `ci/run_model_command.py`, and `ci/call_model.py` supply the review adapter.
 - `ci/model_providers.json` configures the active provider profile.
 - `scripts/check_pr_review_response.py` validates model output format.
-- The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`.
-- Fork pull requests receive a skipped result and no secret.
+- The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`, supporting `MODEL_API_KEY` environment secret overrides.
+- Same-repository pull requests call `security-review.yml` with `fork_review: false`.
+- Approved fork pull requests (`safe-to-review` label) call `security-review.yml` with `fork_review: true`, running in the protected `fork-review` environment.
+- Unapproved fork pull requests receive a skipped result and no secret.
 
 ## Trust Boundary
 
-The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`.
+The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. Fork pull requests require maintainer label and environment approval before receiving provider credentials.
 
 ## Policy Provenance
 
-This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f59866d6e3ff71affa8404117877b58b8d79eea2`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f59866d6e3ff71affa8404117877b58b8d79eea2/AUDIT.md).
+This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md).
 
 ---
 

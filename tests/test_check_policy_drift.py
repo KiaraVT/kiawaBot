@@ -155,11 +155,11 @@ class TestCheckPolicyDrift(unittest.TestCase):
             euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
             self.assertEqual(
                 euler_url,
-                "https://raw.githubusercontent.com/abuzucom/euler/fcda240de46de3bd85e17cd49bdfa8a7f7cdbf08/QUALITY.md",
+                "https://raw.githubusercontent.com/abuzucom/euler/aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44/QUALITY.md",
             )
             self.assertEqual(
                 foucault_url,
-                "https://raw.githubusercontent.com/abuzucom/foucault/f59866d6e3ff71affa8404117877b58b8d79eea2/AUDIT.md",
+                "https://raw.githubusercontent.com/abuzucom/foucault/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md",
             )
             self.assertEqual(retries, 3)
             self.assertEqual(backoff, 1.0)
