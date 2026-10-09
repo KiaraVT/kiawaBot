@@ -76,6 +76,12 @@ class TestRunModelCommand(unittest.TestCase):
         sanitized = sanitize_diagnostics(long_text)
         self.assertEqual(len(sanitized), MAX_DIAGNOSTIC_CHARS)
 
+    def test_forwarded_environment_contains_api_keys(self) -> None:
+        from ci.run_model_command import FORWARDED_ENVIRONMENT
+
+        self.assertIn("MODEL_API_KEY", FORWARDED_ENVIRONMENT)
+        self.assertIn("OLLAMA_API_KEY", FORWARDED_ENVIRONMENT)
+
 
 if __name__ == "__main__":
     unittest.main()

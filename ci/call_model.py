@@ -265,14 +265,20 @@ def _request_once(request: Request) -> tuple[dict[str, Any], int | None, str | N
         raise ProviderError("provider response could not be read") from error
 
 
+def _get_api_key() -> str:
+    """Return configured model API key from MODEL_API_KEY or OLLAMA_API_KEY."""
+    api_key = os.environ.get("MODEL_API_KEY") or os.environ.get("OLLAMA_API_KEY")
+    if not api_key:
+        raise ProviderError("MODEL_API_KEY or OLLAMA_API_KEY is not configured")
+    return api_key
+
+
 def call_model(system_prompt: str, mode: str, case_text: str) -> str:
     """Return the configured provider response for one evaluator request."""
     del mode
     if len(system_prompt) + len(case_text) > MAX_INPUT_CHARS:
         raise ProviderError("review input exceeds the configured limit")
-    api_key = os.environ.get("MODEL_API_KEY")
-    if not api_key:
-        raise ProviderError("MODEL_API_KEY is not configured")
+    api_key = _get_api_key()
     profile = _load_profile()
     request = _build_request(profile, system_prompt, case_text, api_key)
     for attempt in range(2):

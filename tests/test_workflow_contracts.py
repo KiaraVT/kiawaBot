@@ -130,6 +130,32 @@ class WorkflowContractsTestCase(unittest.TestCase):
             "security-review-pr.yml must fallback baseSha to context.sha.",
         )
 
+    def test_review_jobs_support_ollama_and_model_api_keys(self) -> None:
+        """Both same-repo and fork review jobs must support OLLAMA_API_KEY."""
+        workflow_files = [
+            self.workflows_dir / "quality-review-pr.yml",
+            self.workflows_dir / "security-review-pr.yml",
+        ]
+        for workflow_file in workflow_files:
+            content = workflow_file.read_text(encoding="utf-8")
+            jobs = extract_workflow_jobs(content)
+            for job_name in ("review", "review-fork"):
+                self.assertIn(
+                    job_name,
+                    jobs,
+                    f"{workflow_file.name} missing job '{job_name}'",
+                )
+                job_body = jobs[job_name]
+                self.assertIn(
+                    "secrets.OLLAMA_API_KEY",
+                    job_body,
+                    (
+                        f"Job '{job_name}' in {workflow_file.name} must reference "
+                        "secrets.OLLAMA_API_KEY so environments using OLLAMA_API_KEY "
+                        "are supported."
+                    ),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

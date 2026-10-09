@@ -37,6 +37,39 @@ class TestCallModelResponseNormalization(unittest.TestCase):
         self.assertEqual(verdict, "APPROVE")
         self.assertEqual(payload["findings"], [])
 
+    def test_api_key_resolution_supports_ollama_and_model_keys(self) -> None:
+        import os
+        from ci.call_model import _get_api_key, ProviderError
+
+        orig_model = os.environ.get("MODEL_API_KEY")
+        orig_ollama = os.environ.get("OLLAMA_API_KEY")
+        try:
+            # Case 1: MODEL_API_KEY present
+            os.environ["MODEL_API_KEY"] = "model-secret"
+            os.environ.pop("OLLAMA_API_KEY", None)
+            self.assertEqual(_get_api_key(), "model-secret")
+
+            # Case 2: Only OLLAMA_API_KEY present
+            os.environ.pop("MODEL_API_KEY", None)
+            os.environ["OLLAMA_API_KEY"] = "ollama-secret"
+            self.assertEqual(_get_api_key(), "ollama-secret")
+
+            # Case 3: Neither present
+            os.environ.pop("MODEL_API_KEY", None)
+            os.environ.pop("OLLAMA_API_KEY", None)
+            with self.assertRaises(ProviderError):
+                _get_api_key()
+        finally:
+            if orig_model is not None:
+                os.environ["MODEL_API_KEY"] = orig_model
+            else:
+                os.environ.pop("MODEL_API_KEY", None)
+            if orig_ollama is not None:
+                os.environ["OLLAMA_API_KEY"] = orig_ollama
+            else:
+                os.environ.pop("OLLAMA_API_KEY", None)
+
 
 if __name__ == "__main__":
     unittest.main()
+
