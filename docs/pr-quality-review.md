@@ -14,7 +14,7 @@ The PR quality reviewer applies `QUALITY.md` to pull requests. The reviewer prod
 - `.github/workflows/quality-review-pr.yml` runs the caller workflow.
 - The workflow triggers on completion of `ci`.
 - The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`, supporting `MODEL_API_KEY` environment secret overrides.
-- Same-repository pull requests call `quality-review.yml` with `fork_review: false`.
+- Same-repository pull requests call `quality-review.yml` with default inputs (omitting `fork_review`).
 - Approved fork pull requests (`safe-to-review` label) call `quality-review.yml` with `fork_review: true`, running in the protected `fork-review` environment.
 - Unapproved fork pull requests receive a skipped check run and no secret.
 

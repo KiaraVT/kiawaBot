@@ -17,7 +17,7 @@ The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produ
 - `ci/model_providers.json` configures the active provider profile.
 - `scripts/check_pr_review_response.py` validates model output format.
 - The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`, supporting `MODEL_API_KEY` environment secret overrides.
-- Same-repository pull requests call `security-review.yml` with `fork_review: false`.
+- Same-repository pull requests call `security-review.yml` with default inputs (omitting `fork_review`).
 - Approved fork pull requests (`safe-to-review` label) call `security-review.yml` with `fork_review: true`, running in the protected `fork-review` environment.
 - Unapproved fork pull requests receive a skipped result and no secret.
 

@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configured CI workflow to trigger validation on `pull_request` labeled events when tagged with `safe-to-review`, canceling obsolete in-progress runs to avoid concurrency overlap.
 - Review workflows fetch current pull request labels, fail closed when label lookup fails, and populate all output parameters across exit paths.
 - Review jobs support both `OLLAMA_API_KEY` and `MODEL_API_KEY` environment secret names.
-- Updated Euler pin to `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44` and Foucault pin to `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, routing fork reviews via `fork_review: true` in the protected `fork-review` environment.
+- Updated Euler pin to `aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44` and Foucault pin to `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, routing fork reviews via `fork_review: true` in the protected `fork-review` environment while same-repository reviews omit `fork_review`.
+- Documented that Foucault `AUDIT.md` policy specification and SHA-256 digest remain unchanged from `f59866d`.
 - Updated policy documentation and drift verification for latest upstream Euler `QUALITY.md` and Foucault specifications.
 - Annotation runs after the review job for the resolved repository type completes on success or failure.
 

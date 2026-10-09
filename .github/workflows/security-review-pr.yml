@@ -188,7 +188,6 @@ jobs:
       head_sha: ${{ needs.resolve-pr.outputs.head_sha }}
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
-      fork_review: false
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
@@ -207,6 +206,7 @@ jobs:
       head_sha: ${{ needs.resolve-pr.outputs.head_sha }}
       head_repo_url: ${{ needs.resolve-pr.outputs.head_repo_url }}
       head_repo_full_name: ${{ needs.resolve-pr.outputs.head_repo_full_name }}
+      # Select the upstream reusable workflow's fork-review environment path
       fork_review: true
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}

@@ -108,7 +108,6 @@ jobs:
       pr_body: ${{ needs.resolve.outputs.body }}
       quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
       fail_on_block: true
-      fork_review: false
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
@@ -129,6 +128,7 @@ jobs:
       pr_body: ${{ needs.resolve.outputs.body }}
       quality_ref: aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
       fail_on_block: true
+      # Select the upstream reusable workflow's fork-review environment path
       fork_review: true
     secrets:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
