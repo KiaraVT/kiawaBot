@@ -126,10 +126,8 @@ jobs:
       needs.resolve.outputs.found == 'true' &&
       needs.resolve.outputs.same_repo == 'false' &&
       needs.resolve.outputs.safe_to_review == 'true'
-    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval.
-    # Approvers must independently verify that safe-to-review was applied by a
-    # trusted maintainer, ensuring two-factor authorization before credential access.
-    environment: fork-review
+    # Upstream reusable workflow activates the fork-review environment gate
+    # when fork_review is true. Caller jobs cannot declare environment directly.
     uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
