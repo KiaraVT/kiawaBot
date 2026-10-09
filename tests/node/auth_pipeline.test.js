@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { formatAxiosError, redactSensitiveUrl } from "../../errorUtils.js";
+import { formatAxiosError, redactSensitiveUrl, sanitizeAxiosConfig } from "../../errorUtils.js";
 import AuthDataHelper from "../../AuthDataHelper.js";
 import {
     createSingleFlightMutex,
@@ -301,11 +301,27 @@ test("executeWithBackoff - enforces maxDelayMs cap and applies jitter", async ()
     );
 
     assert.equal(recordedDelays.length, 3);
-    // With maxDelayMs=30, raw delay is capped at 30 before jitter (0.8 - 1.2), so max is around 36
+    // With maxDelayMs=30, raw delay is capped at 30 before jitter (0.8 - 1.2), so bounds are [24, 36]
     for (const delay of recordedDelays) {
-        assert.ok(delay <= 36, `Delay ${delay} should be bounded near maxDelayMs with jitter`);
-        assert.ok(delay >= 10, `Delay ${delay} should be non-zero`);
+        assert.ok(delay <= 36, `Delay ${delay} should be at most 36 (1.2 * 30)`);
+        assert.ok(delay >= 24, `Delay ${delay} should be at least 24 (0.8 * 30)`);
     }
+
+    // Verify jitter: false produces exact deterministic delay
+    const nonJitterDelays = [];
+    await assert.rejects(
+        () => executeWithBackoff(operation, {
+            maxRetries: 2,
+            baseDelayMs: 20,
+            maxDelayMs: 30,
+            jitter: false,
+            onRetry: (_err, _attempt, delayMs) => {
+                nonJitterDelays.push(delayMs);
+            }
+        }),
+        (err) => err?.response?.status === 503
+    );
+    assert.deepEqual(nonJitterDelays, [30, 30], "With jitter disabled, delays must equal exact capped delay");
 });
 
 
@@ -374,6 +390,38 @@ test("processStreamStartStreak - performs standard update and resets streaked us
     assert.equal(streakResetCalled, true, "onStreakReset callback must be called");
     assert.equal(writtenData.Current_Stream.Start, "2026-10-09T18:00:00Z");
     assert.equal(writtenData.Last_Stream.Start, "2026-10-08T08:00:00Z");
+});
+
+test("processStreamStartStreak - handles read errors distinguishing ENOENT from I/O failure", () => {
+    let writeCalled = false;
+    const ioEnoent = {
+        readFn: () => {
+            const err = new Error("File not found");
+            err.code = "ENOENT";
+            throw err;
+        },
+        writeFn: () => { writeCalled = true; }
+    };
+
+    const enoentRes = processStreamStartStreak("path.json", "2026-10-09T10:00:00Z", ioEnoent);
+    assert.equal(enoentRes.updated, true);
+    assert.equal(enoentRes.reason, "initialized_new_file");
+    assert.equal(writeCalled, true);
+
+    let writeCalledOnError = false;
+    const ioPermissionError = {
+        readFn: () => {
+            const err = new Error("Permission denied");
+            err.code = "EACCES";
+            throw err;
+        },
+        writeFn: () => { writeCalledOnError = true; }
+    };
+
+    const errRes = processStreamStartStreak("path.json", "2026-10-09T10:00:00Z", ioPermissionError);
+    assert.equal(errRes.updated, false);
+    assert.equal(errRes.reason, "read_error");
+    assert.equal(writeCalledOnError, false, "Must not write on I/O read failure");
 });
 
 test("validateCommandArguments - validates !addcommand and !editcommand", () => {
@@ -534,6 +582,50 @@ test("TwitchAuthPipeline - refreshSingleToken classifies HTTP 400/401/403 as per
     assert.equal(mockAuthData.data.twitchBroadcaster.refresh_token, "revoked_ref");
 });
 
+test("TwitchAuthPipeline - refreshAccount triggers notifyAuthRequired on permanent auth failure", async () => {
+    let notifiedMessage = null;
+    let notifiedUrl = null;
+    let notifiedAccountKey = null;
+    let notifiedAccountName = null;
+
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "tok", refresh_token: "revoked_ref" }
+        },
+        read() { return this.data.twitchBroadcaster.refresh_token; },
+        update() {}
+    };
+
+    const mockAxios = {
+        post: async () => {
+            const err = new Error("Invalid refresh token");
+            err.response = { status: 400 };
+            throw err;
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        notifyAuthRequired: async (message, url, accountKey, accountName) => {
+            notifiedMessage = message;
+            notifiedUrl = url;
+            notifiedAccountKey = accountKey;
+            notifiedAccountName = accountName;
+        }
+    });
+
+    const result = await pipeline.refreshAccount("twitchBroadcaster", "Broadcaster");
+    assert.equal(result.refreshed, false);
+    assert.equal(result.authRequired, true);
+    assert.equal(result.reason, "permanent_failure");
+    assert.equal(pipeline.broadcasterAuthReady, false);
+    assert.ok(notifiedMessage.includes("Broadcaster"));
+    assert.ok(notifiedUrl.startsWith("https://id.twitch.tv/oauth2/authorize?"));
+    assert.equal(notifiedAccountKey, "twitchBroadcaster");
+    assert.equal(notifiedAccountName, "Broadcaster");
+});
+
 test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth throttle via cooldown", async () => {
     let postCount = 0;
     const mockAuthData = {
@@ -667,61 +759,65 @@ test("TwitchAuthPipeline - OAuth flow generates state and callback routes to cor
     assert.equal(pipeline.botAuthReady, true);
 });
 
-test("formatAxiosError - redacts sensitive secrets in error.config.data and params", () => {
-    const errorWithObjectData = {
+test("sanitizeAxiosConfig - redacts sensitive secrets in config data, params, and url", () => {
+    const configWithObjectData = {
+        method: "post",
+        url: "https://id.twitch.tv/oauth2/token?client_secret=url_secret",
+        data: {
+            client_id: "cid123",
+            client_secret: "secret_xyz",
+            refresh_token: "ref_tok_abc",
+            code: "auth_code_999"
+        },
+        params: {
+            state: "secret_state_nonce",
+            access_token: "bearer_secret"
+        }
+    };
+
+    sanitizeAxiosConfig(configWithObjectData);
+
+    assert.equal(configWithObjectData.url.includes("client_secret=[REDACTED]"), true);
+    assert.equal(configWithObjectData.data.client_secret, "[REDACTED]");
+    assert.equal(configWithObjectData.data.refresh_token, "[REDACTED]");
+    assert.equal(configWithObjectData.data.code, "[REDACTED]");
+    assert.equal(configWithObjectData.data.client_id, "cid123", "Non-secret keys preserved");
+    assert.equal(configWithObjectData.params.state, "[REDACTED]");
+    assert.equal(configWithObjectData.params.access_token, "[REDACTED]");
+
+    const configWithJsonData = {
+        data: JSON.stringify({ client_secret: "json_secret", refresh_token: "json_ref" })
+    };
+    sanitizeAxiosConfig(configWithJsonData);
+    assert.equal(configWithJsonData.data.includes("json_secret"), false);
+    assert.ok(configWithJsonData.data.includes("[REDACTED]"));
+
+    const configWithUrlEncodedData = {
+        data: "client_id=cid&client_secret=form_secret&refresh_token=form_ref"
+    };
+    sanitizeAxiosConfig(configWithUrlEncodedData);
+    assert.equal(configWithUrlEncodedData.data.includes("form_secret"), false);
+    assert.ok(configWithUrlEncodedData.data.includes("client_secret=[REDACTED]"));
+});
+
+test("formatAxiosError - formats error string with endpoint without leaking sensitive data", () => {
+    const error = {
         message: "Token request failed",
         config: {
             method: "post",
-            url: "https://id.twitch.tv/oauth2/token",
-            data: {
-                client_id: "cid123",
-                client_secret: "secret_xyz",
-                refresh_token: "ref_tok_abc",
-                code: "auth_code_999"
-            },
-            params: {
-                state: "secret_state_nonce",
-                access_token: "bearer_secret"
-            }
+            url: "https://id.twitch.tv/oauth2/token?client_secret=raw_secret",
+            data: { client_secret: "raw_secret" }
         },
         response: {
             status: 400,
-            statusText: "Bad Request"
+            statusText: "Bad Request",
+            data: { message: "Invalid client secret" }
         }
     };
 
-    formatAxiosError(errorWithObjectData);
-
-    assert.equal(errorWithObjectData.config.data.client_secret, "[REDACTED]");
-    assert.equal(errorWithObjectData.config.data.refresh_token, "[REDACTED]");
-    assert.equal(errorWithObjectData.config.data.code, "[REDACTED]");
-    assert.equal(errorWithObjectData.config.data.client_id, "cid123", "Non-secret keys preserved");
-    assert.equal(errorWithObjectData.config.params.state, "[REDACTED]");
-    assert.equal(errorWithObjectData.config.params.access_token, "[REDACTED]");
-
-    const errorWithJsonData = {
-        message: "JSON POST failed",
-        config: {
-            method: "post",
-            url: "https://id.twitch.tv/oauth2/token",
-            data: JSON.stringify({ client_secret: "json_secret", refresh_token: "json_ref" })
-        }
-    };
-    formatAxiosError(errorWithJsonData);
-    assert.equal(errorWithJsonData.config.data.includes("json_secret"), false);
-    assert.ok(errorWithJsonData.config.data.includes("[REDACTED]"));
-
-    const errorWithUrlEncodedData = {
-        message: "URL encoded POST failed",
-        config: {
-            method: "post",
-            url: "https://id.twitch.tv/oauth2/token",
-            data: "client_id=cid&client_secret=form_secret&refresh_token=form_ref"
-        }
-    };
-    formatAxiosError(errorWithUrlEncodedData);
-    assert.equal(errorWithUrlEncodedData.config.data.includes("form_secret"), false);
-    assert.ok(errorWithUrlEncodedData.config.data.includes("client_secret=[REDACTED]"));
+    const formatted = formatAxiosError(error);
+    assert.ok(formatted.includes("[Axios] Token request failed (POST https://id.twitch.tv/oauth2/token?client_secret=[REDACTED]) -> 400 Bad Request: Invalid client secret"));
+    assert.equal(formatted.includes("raw_secret"), false);
 });
 
 test("TwitchAuthPipeline - withAuthRetry sanitizes error.config.data before throwing", async () => {
@@ -759,6 +855,21 @@ test("TwitchAuthPipeline - withAuthRetry sanitizes error.config.data before thro
             return true;
         }
     );
+});
+
+test("TwitchAuthPipeline - caps activeAuthStates to prevent unbounded memory growth", async () => {
+    const pipeline = new TwitchAuthPipeline({
+        maxActiveAuthStates: 3,
+        notifyAuthRequired: async () => {}
+    });
+
+    pipeline.activeAuthStates.set("state-a", { accountKey: "k", createdAt: Date.now() - 5000 });
+    pipeline.activeAuthStates.set("state-b", { accountKey: "k", createdAt: Date.now() - 4000 });
+    pipeline.activeAuthStates.set("state-c", { accountKey: "k", createdAt: Date.now() - 3000 });
+
+    assert.equal(pipeline.activeAuthStates.size, 3);
+    await pipeline.startAuth("prompt 3", "twitchBroadcaster", "Broadcaster");
+    assert.ok(pipeline.activeAuthStates.size <= 3, "activeAuthStates must not exceed maxActiveAuthStates cap");
 });
 
 

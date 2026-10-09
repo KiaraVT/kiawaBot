@@ -10,7 +10,9 @@ const port = process.env.WEB_PORT || 8081;
 const quote_Path = path.join(import.meta.dirname, '..', 'data', 'quotes.json');
 const streak_Path = path.join(import.meta.dirname, '..', 'data', 'streaks.json');
 const command_Path = path.join(import.meta.dirname, '..', 'data', 'command_List.json');
-const incentive_Path = path.join(import.meta.dirname, '..', 'data', 'incentives.json');
+function getIncentivePath() {
+    return process.env.INCENTIVE_PATH || path.join(import.meta.dirname, '..', 'data', 'incentives.json');
+}
 
 // Ensure data directory exists
 const dataDir = path.join(import.meta.dirname, '..', 'data');
@@ -93,13 +95,14 @@ app.get("/api/incentives", async (req, res) => {
     const MAX_INCENTIVE_FILE_SIZE = 1024 * 1024;
     try {
         let rawContent = null;
+        const currentIncentivePath = getIncentivePath();
         try {
-            const stat = await fs.promises.stat(incentive_Path);
+            const stat = await fs.promises.stat(currentIncentivePath);
             if (stat.size > MAX_INCENTIVE_FILE_SIZE) {
                 console.error(`Incentive file exceeds allowed size limit (${stat.size} > ${MAX_INCENTIVE_FILE_SIZE})`);
                 return res.status(413).json({ error: 'Incentive file exceeds allowed size limit' });
             }
-            rawContent = await fs.promises.readFile(incentive_Path, 'utf8');
+            rawContent = await fs.promises.readFile(currentIncentivePath, 'utf8');
         } catch (readErr) {
             if (readErr.code !== 'ENOENT') {
                 throw readErr;
@@ -263,7 +266,7 @@ app.get("/incentives", (req, res) => {
                 goal: 0
             }
         };
-        const rawData = safeReadJSON(incentive_Path, defaultIncentive);
+        const rawData = safeReadJSON(getIncentivePath(), defaultIncentive);
         const incentive = (rawData && typeof rawData === 'object' && rawData.incentive) ? rawData.incentive : defaultIncentive.incentive;
         const command = incentive.command || '!update';
         const amount = typeof incentive.amount === 'number' ? incentive.amount : 0;

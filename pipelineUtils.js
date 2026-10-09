@@ -107,8 +107,12 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
         try {
             streakList = io.readFn(streakPath);
         } catch (e) {
-            // Read error handled by initializing new structure
-            void e;
+            if (e?.code === "ENOENT" || e?.name === "NotFoundError") {
+                streakList = null;
+            } else {
+                console.error(`[Streaks] Error reading streak file from ${streakPath}:`, e?.message || String(e));
+                return { updated: false, reason: "read_error" };
+            }
         }
     }
 
@@ -270,6 +274,7 @@ export class TwitchAuthPipeline {
         this.singleFlightBot = createSingleFlightMutex();
 
         this.activeAuthStates = new Map();
+        this.maxActiveAuthStates = options.maxActiveAuthStates ?? 100;
     }
 
     /**
@@ -312,6 +317,11 @@ export class TwitchAuthPipeline {
      */
     async startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
         this.cleanupExpiredAuthStates();
+        while (this.activeAuthStates.size >= this.maxActiveAuthStates) {
+            const oldestKey = this.activeAuthStates.keys().next().value;
+            if (!oldestKey) break;
+            this.activeAuthStates.delete(oldestKey);
+        }
         for (const session of this.activeAuthStates.values()) {
             if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
                 return;

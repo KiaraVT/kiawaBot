@@ -996,7 +996,7 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
     }
 
     if (!streak_List) {
-        console.log('something got messed up in streaks')
+        console.warn("[Streaks] Streak data missing or invalid; initializing.");
     }
     else {
         const say = msg => {
@@ -1134,7 +1134,7 @@ function writeAtomicSync(filePath,data,options, retries=3,delay =100){
     }
 }
 tesManager.queueSubscription('stream.online', subCondition, event => {
-    console.log("stream online detected");
+    console.info("[Streaks] Stream online detected");
     processStreamStartStreak(streak_Path, event?.started_at, {
         readFn: jsonfile.readFileSync,
         writeFn: writeAtomicSync,

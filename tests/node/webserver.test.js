@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 process.env.WEB_PORT = "18081";
 const { server, errorHandler } = await import("../../webserver/server.js");
@@ -49,15 +50,14 @@ test("Webserver - JSON API endpoints return 200 and application/json", async () 
 });
 
 test("Webserver - /api/incentives handles malformed JSON and file size limits", async () => {
-    const incPath = path.join(import.meta.dirname, "..", "..", "data", "incentives.json");
-    let originalContent = null;
-    if (fs.existsSync(incPath)) {
-        originalContent = fs.readFileSync(incPath, "utf8");
-    }
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "incentives-test-"));
+    const tempIncPath = path.join(tempDir, "incentives.json");
+    const prevEnv = process.env.INCENTIVE_PATH;
+    process.env.INCENTIVE_PATH = tempIncPath;
 
     try {
         // Test malformed JSON falls back gracefully to default schema
-        fs.writeFileSync(incPath, "{ malformed: json not valid }");
+        fs.writeFileSync(tempIncPath, "{ malformed: json not valid }");
         const malformedRes = await fetch(`${BASE_URL}/api/incentives`);
         assert.equal(malformedRes.status, 200);
         const malformedData = await malformedRes.json();
@@ -67,17 +67,18 @@ test("Webserver - /api/incentives handles malformed JSON and file size limits", 
 
         // Test oversized file returns 413
         const largeContent = "x".repeat(1024 * 1024 + 100);
-        fs.writeFileSync(incPath, largeContent);
+        fs.writeFileSync(tempIncPath, largeContent);
         const largeRes = await fetch(`${BASE_URL}/api/incentives`);
         assert.equal(largeRes.status, 413);
         const largeData = await largeRes.json();
         assert.ok(largeData.error.includes("exceeds"));
     } finally {
-        if (originalContent !== null) {
-            fs.writeFileSync(incPath, originalContent);
-        } else if (fs.existsSync(incPath)) {
-            fs.unlinkSync(incPath);
+        if (prevEnv !== undefined) {
+            process.env.INCENTIVE_PATH = prevEnv;
+        } else {
+            delete process.env.INCENTIVE_PATH;
         }
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
 
