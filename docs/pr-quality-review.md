@@ -13,14 +13,16 @@ The PR quality reviewer applies `QUALITY.md` to pull requests. The reviewer prod
 
 - `.github/workflows/quality-review-pr.yml` runs the caller workflow.
 - The workflow triggers on completion of `ci`.
-- The caller maps repository secret `OLLAMA_API_KEY` to `MODEL_API_KEY`, supporting `MODEL_API_KEY` environment secret overrides.
+- Same-repository pull requests map repository secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
 - Same-repository pull requests call `quality-review.yml` with default inputs (omitting `fork_review`).
-- Approved fork pull requests (`safe-to-review` label) call `quality-review.yml` with `fork_review: true`, running in the protected `fork-review` environment.
+- Approved fork pull requests (`safe-to-review` label) call `quality-review.yml` with `fork_review: true`, running in the protected `fork-review` environment and consuming environment-specific `MODEL_API_KEY`.
 - Unapproved fork pull requests receive a skipped check run and no secret.
 
 ## Trust Boundary
 
 The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. The read-only preparation job builds review envelopes without model credentials, and fork reviews require maintainer label and environment approval before model evaluation.
+
+Environment approvers must verify that the `safe-to-review` label was applied by a trusted repository maintainer before approving execution in `fork-review`. The label check is an initial gate and not cryptographic proof; manual environment approval provides the authoritative security gate. Passing `fork_review: true` to upstream `quality-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
 
 ## Policy Provenance
 
@@ -366,3 +368,4 @@ exclusion remains unverifiable, keep the finding and mark NEEDS-HUMAN.
 Before reporting zero findings, recheck every applicable class against skimmed code. State the reviewed and unseen
 material. Do not manufacture findings or inflate severity. A clean result stays valid when step 1 excludes most
 classes.
+

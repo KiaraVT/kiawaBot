@@ -23,7 +23,9 @@ DEFAULT_EULER_REF = PINNED_EULER_REF
 DEFAULT_FOUCAULT_REF = PINNED_FOUCAULT_REF
 
 PINNED_EULER_SHA256 = "73782cbc6ae30dab4ba561c77e5341671738e85a91dfd8a6a2ef02b02f44a300"
-# Upstream Foucault AUDIT.md content and SHA-256 are unchanged between f59866d and f58255c
+# Upstream Foucault AUDIT.md policy specification content and SHA-256 digest are
+# unchanged between f59866d and f58255c. This drift check validates policy markdown
+# content only; reusable workflow behavioral updates at new pins are verified separately.
 PINNED_FOUCAULT_SHA256 = "bd252577fe7f4359f7bd6e3ea3f91c3bddf854dfc8d6c30a696986e91acf89a0"
 
 REF_PATTERN = re.compile(r"^(?:[0-9a-fA-F]{40}|main|v[0-9]+(?:\.[0-9]+)*)$")

@@ -16,6 +16,9 @@ permissions:
 
 jobs:
   validate:
+    # Run on pushes and standard PR events; for labeled PR events, run only when the
+    # label added is 'safe-to-review'. Any other label evaluates to false, skipping the
+    # job and consuming zero runner minutes.
     if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'safe-to-review'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -160,8 +160,13 @@ jobs:
                 .replace(/[\r\n\x00-\x1f\x7f]/g, " ")
                 .slice(0, 500);
               core.setOutput("found", "false");
-              core.setOutput("same_repo", "false");
+              core.setOutput("same_repo", sameRepo);
               core.setOutput("safe_to_review", "false");
+              core.setOutput("pr_number", String(pullRequest.number));
+              core.setOutput("base_sha", pullRequest.base.sha);
+              core.setOutput("head_sha", pullRequest.head.sha);
+              core.setOutput("head_repo_url", headRepository.clone_url);
+              core.setOutput("head_repo_full_name", headRepository.full_name);
               core.setFailed(`could not fetch current pull request labels: ${message}`);
               return;
             }
@@ -194,6 +199,7 @@ jobs:
   review-fork:
     needs: resolve-pr
     if: needs.resolve-pr.result == 'success' && needs.resolve-pr.outputs.same_repo == 'false' && needs.resolve-pr.outputs.safe_to_review == 'true' && needs.resolve-pr.outputs.already_reviewed != 'true'
+    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval
     environment: fork-review
     uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
     with:
@@ -209,7 +215,7 @@ jobs:
       # Select the upstream reusable workflow's fork-review environment path
       fork_review: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 
   fork-review-skipped:
     needs: resolve-pr

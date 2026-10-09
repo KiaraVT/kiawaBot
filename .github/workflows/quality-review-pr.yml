@@ -73,13 +73,13 @@ jobs:
                 .replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
                 .slice(0, 500);
               core.setOutput('found', 'false');
-              core.setOutput('same_repo', 'false');
+              core.setOutput('same_repo', isSameRepo ? 'true' : 'false');
               core.setOutput('safe_to_review', 'false');
-              core.setOutput('number', '');
-              core.setOutput('base_sha', '');
-              core.setOutput('head_sha', '');
-              core.setOutput('title', '');
-              core.setOutput('body', '');
+              core.setOutput('number', String(pull.number));
+              core.setOutput('base_sha', pull.base.sha);
+              core.setOutput('head_sha', pull.head.sha);
+              core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
+              core.setOutput('body', pull.body || '');
               core.setFailed(`could not fetch current pull request labels: ${message}`);
               return;
             }
@@ -89,7 +89,7 @@ jobs:
             core.setOutput('number', String(pull.number));
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);
-            core.setOutput('title', pull.title || '');
+            core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
             core.setOutput('body', pull.body || '');
 
   review:
@@ -118,6 +118,7 @@ jobs:
       pull-requests: write
       checks: write
     if: needs.resolve.outputs.found == 'true' && needs.resolve.outputs.same_repo == 'false' && needs.resolve.outputs.safe_to_review == 'true'
+    # Environment gate restricts MODEL_API_KEY decryption to maintainer approval
     environment: fork-review
     uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
@@ -131,7 +132,7 @@ jobs:
       # Select the upstream reusable workflow's fork-review environment path
       fork_review: true
     secrets:
-      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 
   fork-skip:
     needs: resolve
