@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { formatAxiosError, redactSensitiveUrl, sanitizeAxiosConfig } from "../../errorUtils.js";
+import { URLSearchParams } from "node:url";
+import { formatAxiosError, redactSensitiveUrl, sanitizeAxiosConfig, redactSensitiveData } from "../../errorUtils.js";
 import AuthDataHelper from "../../AuthDataHelper.js";
 import {
     createSingleFlightMutex,
@@ -982,4 +983,75 @@ test("AUTH_EXIT_GRACE_PERIOD_MS - parses safely falling back to 120000 on NaN or
     assert.equal(parseGracePeriod(undefined), 120000);
 });
 
+test("redactSensitiveData - does not mutate original data object or URLSearchParams in place", () => {
+    const originalObject = {
+        client_id: "my_client_id",
+        client_secret: "sensitive_secret_val",
+        refresh_token: "sensitive_refresh_val"
+    };
+    const redactedObj = redactSensitiveData(originalObject);
+    assert.equal(redactedObj.client_secret, "[REDACTED]");
+    assert.equal(originalObject.client_secret, "sensitive_secret_val", "Original object must not be mutated");
 
+    const originalParams = new URLSearchParams("client_id=my_id&client_secret=param_secret&code=code_123");
+    const redactedParams = redactSensitiveData(originalParams);
+    assert.equal(redactedParams.get("client_secret"), "[REDACTED]");
+    assert.equal(originalParams.get("client_secret"), "param_secret", "Original URLSearchParams must not be mutated");
+
+    const config = {
+        data: originalObject,
+        params: { access_token: "token_123" }
+    };
+    sanitizeAxiosConfig(config);
+    assert.equal(config.data.client_secret, "[REDACTED]");
+    assert.equal(originalObject.client_secret, "sensitive_secret_val", "Original object must not be mutated by sanitizeAxiosConfig");
+});
+
+test("TwitchAuthPipeline - implements PKCE code_challenge and code_verifier with 32-byte nonce", async () => {
+    let capturedAuthUrl = "";
+    let capturedPostData = null;
+    const mockAxios = {
+        post: async (url, data) => {
+            capturedPostData = data;
+            return { data: { access_token: "pkce_access", refresh_token: "pkce_refresh" } };
+        }
+    };
+    const pipeline = new TwitchAuthPipeline({
+        axios: mockAxios,
+        clientId: "test_client",
+        clientSecret: "test_secret",
+        redirectUri: "http://localhost:3000",
+        notifyAuthRequired: async (reason, url) => {
+            capturedAuthUrl = url;
+        }
+    });
+
+    const startResult = await pipeline.startAuth("PKCE Test", "twitchBroadcaster", "Broadcaster");
+    assert.equal(startResult.started, true);
+
+    const stateMatch = capturedAuthUrl.match(/state=([a-f0-9]+)/);
+    assert.ok(stateMatch, "State nonce must be present in auth URL");
+    assert.equal(stateMatch[1].length, 64, "State nonce must be 64 hex chars (32 bytes)");
+
+    assert.ok(capturedAuthUrl.includes("code_challenge="), "code_challenge must be present");
+    assert.ok(capturedAuthUrl.includes("code_challenge_method=S256"), "code_challenge_method must be S256");
+
+    const callbackResult = await pipeline.handleOAuthCallback("pkce_auth_code", stateMatch[1]);
+    assert.equal(callbackResult.status, 200);
+    assert.ok(capturedPostData, "Token exchange POST data must be captured");
+    assert.equal(capturedPostData.code, "pkce_auth_code");
+    assert.ok(capturedPostData.code_verifier, "code_verifier must be sent to token endpoint");
+    assert.equal(typeof capturedPostData.code_verifier, "string");
+    assert.ok(capturedPostData.code_verifier.length >= 43, "code_verifier must be at least 43 chars");
+});
+
+test("ensureAuthListener - does not start HTTP listener when autoStartListener is false", async () => {
+    process.env.AUTO_START_AUTH_LISTENER = "false";
+    try {
+        const { ensureAuthListener } = await import("../../Kiara_bot.js");
+        const instance = ensureAuthListener({ autoStartListener: false });
+        assert.equal(instance, null, "Server instance must remain null when autoStartListener is false");
+    } finally {
+        delete process.env.AUTO_START_AUTH_LISTENER;
+    }
+});

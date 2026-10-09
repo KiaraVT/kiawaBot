@@ -1,3 +1,5 @@
+import { URL, URLSearchParams } from "node:url";
+
 /**
  * Redact sensitive query parameters from URLs.
  * Prevents logging tokens, secrets, or auth codes in error dumps.
@@ -55,24 +57,25 @@ export function redactSensitiveData(data) {
         return data;
     }
 
-    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token", "state"];
+    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token", "state", "code_verifier"];
 
     if (typeof data === "string") {
         try {
             const parsed = JSON.parse(data);
             if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                const cloned = { ...parsed };
                 let mutated = false;
                 for (const key of sensitiveKeys) {
-                    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
-                        parsed[key] = "[REDACTED]";
+                    if (Object.prototype.hasOwnProperty.call(cloned, key)) {
+                        cloned[key] = "[REDACTED]";
                         mutated = true;
                     }
                 }
-                return mutated ? JSON.stringify(parsed) : data;
+                return mutated ? JSON.stringify(cloned) : data;
             }
         } catch {
             return data.replace(
-                /(^|[&])(client_secret|refresh_token|code|access_token|state)=([^&]*)/gi,
+                /(^|[&])(client_secret|refresh_token|code|access_token|state|code_verifier)=([^&]*)/gi,
                 "$1$2=[REDACTED]"
             );
         }
@@ -80,20 +83,22 @@ export function redactSensitiveData(data) {
 
     if (typeof data === "object") {
         if (typeof data.get === "function" && typeof data.set === "function") {
+            const cloned = new URLSearchParams(data.toString());
             for (const key of sensitiveKeys) {
-                if (data.has(key)) {
-                    data.set(key, "[REDACTED]");
+                if (cloned.has(key)) {
+                    cloned.set(key, "[REDACTED]");
                 }
             }
-            return data;
+            return cloned;
         }
 
+        const cloned = { ...data };
         for (const key of sensitiveKeys) {
-            if (Object.prototype.hasOwnProperty.call(data, key)) {
-                data[key] = "[REDACTED]";
+            if (Object.prototype.hasOwnProperty.call(cloned, key)) {
+                cloned[key] = "[REDACTED]";
             }
         }
-        return data;
+        return cloned;
     }
 
     return data;

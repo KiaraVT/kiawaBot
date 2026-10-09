@@ -5,7 +5,7 @@ import crypto from "node:crypto"
 function deepMerge(target, source) {
     if (!source || typeof source !== "object" || Array.isArray(source)) {
         if (Array.isArray(source)) {
-            return [...source];
+            return source.map(item => (item && typeof item === "object" && !Array.isArray(item)) ? deepMerge({}, item) : Array.isArray(item) ? [...item] : item);
         }
         return source !== undefined ? source : target;
     }
@@ -16,17 +16,11 @@ function deepMerge(target, source) {
         }
         const sourceVal = source[key];
         const targetVal = output[key];
-        if (
-            sourceVal &&
-            typeof sourceVal === "object" &&
-            !Array.isArray(sourceVal) &&
-            targetVal &&
-            typeof targetVal === "object" &&
-            !Array.isArray(targetVal)
-        ) {
-            output[key] = deepMerge(targetVal, sourceVal);
+        if (sourceVal && typeof sourceVal === "object" && !Array.isArray(sourceVal)) {
+            const baseTarget = targetVal && typeof targetVal === "object" && !Array.isArray(targetVal) ? targetVal : {};
+            output[key] = deepMerge(baseTarget, sourceVal);
         } else if (Array.isArray(sourceVal)) {
-            output[key] = [...sourceVal];
+            output[key] = sourceVal.map(item => (item && typeof item === "object" && !Array.isArray(item)) ? deepMerge({}, item) : Array.isArray(item) ? [...item] : item);
         } else if (sourceVal !== undefined) {
             output[key] = sourceVal;
         }
@@ -110,7 +104,7 @@ export default class AuthDataHelper {
             } catch (backupErr) {
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
             }
-            this.data = { ...this.defaultData };
+            this.data = deepMerge({}, this.defaultData);
         }
 
         if (this.statusCallback) this.statusCallback("loaded");

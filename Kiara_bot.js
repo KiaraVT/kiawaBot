@@ -1,11 +1,12 @@
-//load all the required crap
 import TES from "tesjs";
 import axios from "axios";
 import path from 'path';
+import { fileURLToPath } from "url";
 import jsonfile from "jsonfile";
 const quote_Path = './data/quotes.json';
 const streak_Path = './data/streaks.json';
 const command_Path = './data/command_List.json';
+const isMainModule = Boolean(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]));
 import AuthDataHelper from "./AuthDataHelper.js";
 import IncentiveHelper from "./IncentiveHelper.js";
 import QuoteHelper, {castIdToNumber} from "./QuoteHelper.js";
@@ -129,16 +130,22 @@ const redirectUri = 'http://127.0.0.1:' + oAuthPort;
 
 //variables to store auth-related data
 let validationTicker = null;
+const authData = new AuthDataHelper();
 
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
 let authServerInstance = null;
-function ensureAuthListener() {
+function ensureAuthListener(options = {}) {
+    const autoStart = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
+    if (!autoStart) {
+        return authServerInstance;
+    }
     if (!authServerInstance) {
         authServerInstance = authListener.listen(oAuthPort, () => {
             console.info(`[Auth] OAuth callback listener active on port ${oAuthPort}`);
         });
     }
+    return authServerInstance;
 }
 
 async function notifyAuthRequired(reason, authUrl) {
@@ -239,6 +246,9 @@ const authPipeline = new TwitchAuthPipeline({
         handleInitialAuthValidation();
     },
     notifyAuthRequired: async (reason, authUrl, accountKey, accountName) => {
+        if (process.env.AUTO_START_AUTH_LISTENER !== "false") {
+            ensureAuthListener();
+        }
         await notifyAuthRequired(`[${accountName}] ${reason}`, authUrl);
         if (shouldExitOnAuthFailure()) {
             scheduleGracefulAuthExit();
@@ -279,11 +289,9 @@ authListener.get("/", async (req, res) => {
     validationTicker = setInterval(() => { authPipeline.validateAccessToken(); }, 1000 * 600);
 });
 
-ensureAuthListener();
-
 //Begin the auth process by opening the user's browser to the consent screen
-function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
-    ensureAuthListener();
+function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster", options = {}) {
+    ensureAuthListener(options);
     return authPipeline.startAuth(reason, accountKey, accountName);
 }
 
@@ -317,7 +325,9 @@ export {
     refreshAccessToken,
     validateAccessToken,
     ensureBroadcasterAuth,
-    ensureBotAuth
+    ensureBotAuth,
+    ensureAuthListener,
+    startBot
 };
 
 //send a GET request to the Twitch API
@@ -533,18 +543,29 @@ function handleInitialAuthValidation() {
         });
 
 }
-//start up the auth file handler and attach the function that responds to changes
-const authData = new AuthDataHelper();
-
 //start up the incentive handler
 const incentiveData = new IncentiveHelper();
 const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
-authData.statusCallback = handleAuthFileStatusChange;
-authData.loadData();
-validateAccessToken();
-validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
-incentiveData.statusCallback = handleIncentiveFileStatusChange;
-incentiveData.loadData();
+
+function startBot(options = {}) {
+    const autoStartListener = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
+    if (autoStartListener) {
+        ensureAuthListener();
+    }
+    authData.statusCallback = handleAuthFileStatusChange;
+    authData.loadData();
+    validateAccessToken();
+    if (validationTicker) {
+        clearInterval(validationTicker);
+    }
+    validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
+    incentiveData.statusCallback = handleIncentiveFileStatusChange;
+    incentiveData.loadData();
+}
+
+if (isMainModule) {
+    startBot();
+}
 // if (!fs.existsSync(INCENTIVEPATH)) {
 //     const content = incentiveData.read('incentive.command') + ' $' + Number(incentiveData.read('incentive.amount')).toFixed(2) + ' / $' + incentiveData.read('incentive.goal');
 //     //const content = Number(incentiveData.read('incentive.amount')).toFixed(0) + '/' + incentiveData.read('incentive.goal');
@@ -628,7 +649,9 @@ class TesManager {
             //let's assume any error here is due to a bad access token and re-auth
             const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
             warning();
-            startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
+            if (isMainModule && process.env.AUTO_START_AUTH_LISTENER !== "false") {
+                startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
+            }
             return { queueSubscription: warning }; // calls to queueSubscription won't crash the bot entirely
         }
     }
@@ -868,15 +891,24 @@ const subCondition2 = { broadcaster_user_id: broadcasterID, user_id: broadcaster
 const subConditionMod = { broadcaster_user_id: broadcasterID, moderator_user_id: broadcasterID};
 let websockets = [];
 // setup websocket server for chat widget
-const socket = new WebSocketServer({ port: 8080 });
-socket.on('connection', ws => {
-    websockets.push(ws);
-    console.log('Client connected');
-    ws.on('close', () => {
-        console.log('Client disconnected');
-    });
-});
-console.log('WebSocket server started on port 8080');
+let socket = null;
+function ensureWebSocketServer() {
+    if (!socket) {
+        socket = new WebSocketServer({ port: 8080 });
+        socket.on('connection', ws => {
+            websockets.push(ws);
+            console.log('Client connected');
+            ws.on('close', () => {
+                console.log('Client disconnected');
+            });
+        });
+        console.log('WebSocket server started on port 8080');
+    }
+    return socket;
+}
+if (isMainModule) {
+    ensureWebSocketServer();
+}
 
 function sendToAllChatWidgets(data) {
     let serialized = data;
@@ -1183,10 +1215,13 @@ tesManager.queueSubscription('channel.chat.message', subCondition2, tags => {
 
 });
 
-let streamInfo = setTimeout(() => {
-    getStreamInfo(broadcasterID, 'all', '1')
-        .catch(err => console.error('[StreamInfo] Initial check failed:', formatAxiosError(err)));
-}, 2000);
+let streamInfo = null;
+if (isMainModule) {
+    streamInfo = setTimeout(() => {
+        getStreamInfo(broadcasterID, 'all', '1')
+            .catch(err => console.error('[StreamInfo] Initial check failed:', formatAxiosError(err)));
+    }, 2000);
+}
 
 async function getStreamInfo(broadcaster_id, type, first) {
     console.info('[Stream] Updating Stream Start Time');
@@ -1294,7 +1329,9 @@ tesManager.queueSubscription("channel.subscription.message", subCondition, event
  *         D D D D DUEL!!!!!!          *
  ***************************************/
 let Duelers = [];
-setInterval(() => {
+let duelInterval = null;
+if (isMainModule) {
+    duelInterval = setInterval(() => {
     if (Duelers.length > 1) {
         let dueler1 = Duelers[0];
         let dueler2 = Duelers[1];
@@ -1323,7 +1360,8 @@ setInterval(() => {
         }
             , 6000);
     }
-}, 15 * 1000)
+    }, 15 * 1000);
+}
 
 // function updateIncentiveFile() {
 
@@ -1366,16 +1404,19 @@ let activityDetection = false
 let commandIndex = 0
 
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
-setInterval(() => {
-    if (activityDetection === true) {
-        //send the current command in the rotation to get posted
-        postCommand(timedCommands[commandIndex]);
-        //increment the array index, reset to 0 if past max
-        commandIndex = (commandIndex + 1) % timedCommands.length;
-        //reset activity detection so that timed messages do not get spammed without chat activity
-        activityDetection = false;
-    }
-}, 1000*60*20)
+let timedCommandsInterval = null;
+if (isMainModule) {
+    timedCommandsInterval = setInterval(() => {
+        if (activityDetection === true) {
+            //send the current command in the rotation to get posted
+            postCommand(timedCommands[commandIndex]);
+            //increment the array index, reset to 0 if past max
+            commandIndex = (commandIndex + 1) % timedCommands.length;
+            //reset activity detection so that timed messages do not get spammed without chat activity
+            activityDetection = false;
+        }
+    }, 1000*60*20);
+}
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
 

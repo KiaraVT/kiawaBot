@@ -285,5 +285,36 @@ test("safeSetPermission - logs warning on unexpected chmod failure", () => {
     }
 });
 
+test("deepMerge - recursively clones nested objects and arrays without sharing references", () => {
+    const source = {
+        twitch: {
+            custom_nested: {
+                setting: 42
+            }
+        },
+        items: [{ id: 1 }]
+    };
+    const target = {};
+    const merged = deepMerge(target, source);
+    assert.deepEqual(merged.twitch.custom_nested, { setting: 42 });
+    assert.notEqual(merged.twitch.custom_nested, source.twitch.custom_nested, "Nested object must not share reference");
+    assert.notEqual(merged.items[0], source.items[0], "Nested array item must not share reference");
+});
 
+test("loadData - corrupted file recovery creates isolated deep clone of defaultData", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-corrupt-clone-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    try {
+        fs.writeFileSync(authPath, "{ invalid json }");
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+        helper.loadData();
 
+        helper.update("twitch.access_token", "mutated_token", true, true);
+        assert.equal(helper.data.twitch.access_token, "mutated_token");
+        assert.equal(helper.defaultData.twitch.access_token, "", "defaultData must remain pristine and unmutated");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

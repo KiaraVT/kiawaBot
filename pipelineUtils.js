@@ -278,20 +278,26 @@ export class TwitchAuthPipeline {
     }
 
     /**
-     * Generates an authorization URL bound to a state nonce.
+     * Generates an authorization URL bound to a state nonce and optional code_challenge.
      *
      * @param {string} stateNonce
+     * @param {string} [codeChallenge]
      * @returns {string}
      */
-    buildAuthUrl(stateNonce) {
+    buildAuthUrl(stateNonce, codeChallenge = null) {
         const scopeStr = Array.isArray(this.scopes) ? this.scopes.join(" ") : String(this.scopes || "");
-        const authQueryString = querystring.stringify({
+        const queryParams = {
             response_type: "code",
             client_id: this.clientId,
             redirect_uri: this.redirectUri,
             scope: scopeStr,
             state: stateNonce
-        });
+        };
+        if (codeChallenge) {
+            queryParams.code_challenge = codeChallenge;
+            queryParams.code_challenge_method = "S256";
+        }
+        const authQueryString = querystring.stringify(queryParams);
         return `${this.authUrl}?${authQueryString}`;
     }
 
@@ -313,7 +319,7 @@ export class TwitchAuthPipeline {
      * @param {string} [reason]
      * @param {string} [accountKey]
      * @param {string} [accountName]
-     * @returns {Promise<void>}
+     * @returns {Promise<{ started: boolean, pending: boolean, authUrl: string }>}
      */
     async startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
         this.cleanupExpiredAuthStates();
@@ -331,15 +337,23 @@ export class TwitchAuthPipeline {
         }
         for (const [nonce, session] of this.activeAuthStates.entries()) {
             if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
-                const pendingAuthUrl = this.buildAuthUrl(nonce);
+                const pendingAuthUrl = this.buildAuthUrl(nonce, session.codeChallenge);
                 console.warn(`[Auth] Authorization prompt already active for ${accountName}; re-surfacing pending authorization URL.`);
                 await this.notifyAuthRequired(`[${accountName}] ${reason} (pending)`, pendingAuthUrl, accountKey, accountName);
                 return { started: false, pending: true, authUrl: pendingAuthUrl };
             }
         }
-        const nonce = crypto.randomBytes(16).toString("hex");
-        this.activeAuthStates.set(nonce, { accountKey, accountName, createdAt: Date.now() });
-        const authUrl = this.buildAuthUrl(nonce);
+        const nonce = crypto.randomBytes(32).toString("hex");
+        const codeVerifier = crypto.randomBytes(32).toString("base64url");
+        const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+        this.activeAuthStates.set(nonce, {
+            accountKey,
+            accountName,
+            createdAt: Date.now(),
+            codeVerifier,
+            codeChallenge
+        });
+        const authUrl = this.buildAuthUrl(nonce, codeChallenge);
         await this.notifyAuthRequired(`[${accountName}] ${reason}`, authUrl, accountKey, accountName);
         return { started: true, pending: false, authUrl };
     }
@@ -348,9 +362,10 @@ export class TwitchAuthPipeline {
      * Exchanges an authorization code for access and refresh tokens.
      *
      * @param {string} code
+     * @param {string} [codeVerifier]
      * @returns {Promise<any>}
      */
-    async exchangeCodeForAccessToken(code) {
+    async exchangeCodeForAccessToken(code, codeVerifier = null) {
         const postData = {
             grant_type: "authorization_code",
             client_id: this.clientId,
@@ -358,6 +373,9 @@ export class TwitchAuthPipeline {
             redirect_uri: this.redirectUri,
             code
         };
+        if (codeVerifier) {
+            postData.code_verifier = codeVerifier;
+        }
         try {
             const response = await this.axios.post(this.tokenUrl, postData);
             return response.data;
@@ -386,11 +404,11 @@ export class TwitchAuthPipeline {
             };
         }
 
-        const { accountKey, accountName } = authSession;
+        const { accountKey, accountName, codeVerifier } = authSession;
         this.activeAuthStates.delete(state);
 
         try {
-            const tokenData = await this.exchangeCodeForAccessToken(code);
+            const tokenData = await this.exchangeCodeForAccessToken(code, codeVerifier);
             if (this.authData) {
                 this.authData.update(`${accountKey}.access_token`, tokenData.access_token, true, true);
                 this.authData.update(`${accountKey}.refresh_token`, tokenData.refresh_token, true, true);
