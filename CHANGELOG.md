@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented that Foucault `AUDIT.md` policy specification and SHA-256 digest remain unchanged from `f59866d`.
 - Updated policy documentation and drift verification for latest upstream Euler `QUALITY.md` and Foucault specifications.
 - Annotation runs after the review job for the resolved repository type completes on success or failure.
+- Formatted `annotate` job conditions in review workflows as literal block scalars
+  without expression delimiters to prevent parser evaluation errors.
 
 ## [2.3.0] - 2026-10-08
 

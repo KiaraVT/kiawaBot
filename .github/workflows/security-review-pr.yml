@@ -238,11 +238,14 @@ jobs:
 
   annotate:
     needs: [resolve-pr, review, review-fork]
-    if: >-
-      ${{ !cancelled() && needs.resolve-pr.result == 'success' &&
+    if: |
+      !cancelled() &&
+      needs.resolve-pr.result == 'success' &&
       needs.resolve-pr.outputs.found == 'true' &&
-      ((needs.resolve-pr.outputs.same_repo == 'true' && (needs.review.result == 'success' || needs.review.result == 'failure')) ||
-      (needs.resolve-pr.outputs.same_repo == 'false' && (needs.review-fork.result == 'success' || needs.review-fork.result == 'failure'))) }}
+      ((needs.resolve-pr.outputs.same_repo == 'true' &&
+        (needs.review.result == 'success' || needs.review.result == 'failure')) ||
+       (needs.resolve-pr.outputs.same_repo == 'false' &&
+        (needs.review-fork.result == 'success' || needs.review-fork.result == 'failure')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
