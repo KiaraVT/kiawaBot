@@ -9,7 +9,7 @@ export function redactSensitiveUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== "string") {
         return "";
     }
-    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token", "token"];
+    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token"];
     try {
         const dummyBase = "https://example.com";
         const parsed = new URL(rawUrl, dummyBase);
@@ -31,7 +31,7 @@ export function redactSensitiveUrl(rawUrl) {
         }
         return result.replace(/=REDACTED/g, "=[REDACTED]");
     } catch {
-        return rawUrl.replace(/(client_secret|refresh_token|code|access_token|token)=([^&]+)/gi, "$1=[REDACTED]");
+        return rawUrl.replace(/(^|[?&])(client_secret|refresh_token|code|access_token)=([^&#]*)/gi, "$1$2=[REDACTED]");
     }
 }
 

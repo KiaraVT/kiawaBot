@@ -56,7 +56,17 @@ export default class AuthDataHelper {
                 youtube: { ...this.defaultData.youtube, ...(parsed?.youtube || {}) }
             };
         } catch (err) {
-            console.error('Error parsing Auth Data file: ' + err.message);
+            const timestamp = Date.now();
+            const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
+            try {
+                if (fs.existsSync(this.dataPath)) {
+                    fs.renameSync(this.dataPath, corruptedPath);
+                }
+                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2));
+                console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
+            } catch (backupErr) {
+                console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
+            }
             this.data = { ...this.defaultData };
         }
 

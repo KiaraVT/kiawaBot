@@ -61,6 +61,14 @@ test("redactSensitiveUrl - handles relative and absolute urls", () => {
     assert.ok(redacted.includes("foo=bar"));
 });
 
+test("redactSensitiveUrl - preserves non-oauth token parameters", () => {
+    const url = "https://example.com/api?token=genericToken&custom_token=123&access_token=secretOAuth";
+    const redacted = redactSensitiveUrl(url);
+    assert.ok(redacted.includes("token=genericToken"), "Generic token param should not be redacted");
+    assert.ok(redacted.includes("custom_token=123"), "Custom token param should not be redacted");
+    assert.ok(redacted.includes("access_token=[REDACTED]"), "access_token must be redacted");
+});
+
 test("formatAxiosError - formats network error where response is undefined", () => {
     const networkError = {
         message: "connect ECONNREFUSED 127.0.0.1:3000",
@@ -169,6 +177,34 @@ test("createSingleFlightMutex - deduplicates concurrent calls", async () => {
     const subsequent = await singleFlight(worker);
     assert.equal(invocationCount, 2, "New call after settling should execute worker again");
     assert.equal(subsequent, "done");
+});
+
+test("createSingleFlightMutex - handles rejections and resets after microtask queue", async () => {
+    const singleFlight = createSingleFlightMutex();
+    let invocationCount = 0;
+
+    const failingWorker = () => {
+        invocationCount += 1;
+        return Promise.reject(new Error("Worker failure"));
+    };
+
+    // Both concurrent callers receive rejection
+    await assert.rejects(
+        () => Promise.all([singleFlight(failingWorker), singleFlight(failingWorker)]),
+        /Worker failure/
+    );
+    assert.equal(invocationCount, 1, "Failed worker should only run once for concurrent calls");
+
+    // Wait for microtask queue to clear in-flight reference
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const successWorker = () => {
+        invocationCount += 1;
+        return Promise.resolve("recovered");
+    };
+    const result = await singleFlight(successWorker);
+    assert.equal(result, "recovered");
+    assert.equal(invocationCount, 2, "Should allow new attempt after settlement");
 });
 
 test("executeWithBackoff - retries on transient errors and succeeds", async () => {

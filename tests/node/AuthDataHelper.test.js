@@ -100,3 +100,34 @@ test("AuthDataHelper - migrates legacy auth-data.json if ./data/auth-data.json d
     }
 });
 
+test("AuthDataHelper - preserves corrupted auth file and initializes fresh default data", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-corrupt-"));
+    const corruptPath = path.join(tempDir, "auth-data.json");
+    let loggedError = "";
+    const origError = console.error;
+    console.error = (msg) => {
+        loggedError += msg;
+    };
+
+    try {
+        fs.writeFileSync(corruptPath, "{ malformed: json, not_valid }");
+        const helper = new AuthDataHelper();
+        helper.dataPath = corruptPath;
+        helper.loadData();
+
+        assert.equal(helper.read("twitchBroadcaster.access_token"), "");
+        assert.ok(fs.existsSync(corruptPath), "Fresh default file should be written");
+        const freshContent = JSON.parse(fs.readFileSync(corruptPath, "utf8"));
+        assert.equal(freshContent.twitchBroadcaster.access_token, "");
+
+        const files = fs.readdirSync(tempDir);
+        const backupFile = files.find(f => f.startsWith("auth-data.json.corrupted."));
+        assert.ok(backupFile, "Corrupted file backup should exist");
+        assert.equal(fs.readFileSync(path.join(tempDir, backupFile), "utf8"), "{ malformed: json, not_valid }");
+        assert.ok(loggedError.includes("Preserved corrupted file as"), "Should log corrupted file preservation");
+    } finally {
+        console.error = origError;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+

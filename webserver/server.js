@@ -82,16 +82,25 @@ app.get("/api/commands", (req, res) => {
 });
 
 // Web endpoint to serve incentives data
-app.get("/api/incentives", (req, res) => {
+app.get("/api/incentives", async (req, res) => {
+    const defaultIncentive = {
+        incentive: {
+            command: '!update',
+            amount: 0,
+            goal: 0
+        }
+    };
     try {
-        const defaultIncentive = {
-            incentive: {
-                command: '!update',
-                amount: 0,
-                goal: 0
+        let rawContent = null;
+        try {
+            rawContent = await fs.promises.readFile(incentive_Path, 'utf8');
+        } catch (readErr) {
+            if (readErr.code !== 'ENOENT') {
+                throw readErr;
             }
-        };
-        const incentiveData = safeReadJSON(incentive_Path, defaultIncentive);
+        }
+
+        const incentiveData = rawContent ? JSON.parse(rawContent) : defaultIncentive;
         const validated = {
             incentive: {
                 command: typeof incentiveData?.incentive?.command === 'string' ? incentiveData.incentive.command : '!update',

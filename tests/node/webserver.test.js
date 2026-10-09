@@ -37,6 +37,13 @@ test("Webserver - JSON API endpoints return 200 and application/json", async () 
         const contentType = res.headers.get("content-type") || "";
         assert.ok(contentType.includes("application/json"));
     }
+
+    const incRes = await fetch(`${BASE_URL}/api/incentives`);
+    const incData = await incRes.json();
+    assert.ok(incData.incentive, "Must contain incentive root key");
+    assert.equal(typeof incData.incentive.command, "string");
+    assert.equal(typeof incData.incentive.amount, "number");
+    assert.equal(typeof incData.incentive.goal, "number");
 });
 
 test("Webserver - HTML dashboard views return 200 and text/html", async () => {
