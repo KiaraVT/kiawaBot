@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review workflows to prevent masked failures.
 - Configured CI workflow to handle `pull_request` `unlabeled` events, canceling in-progress runs on label removal.
 - Sanitized ASCII control characters from pull request descriptions prior to output assignment in review workflows.
+- Removed invalid environment keys from review caller jobs to adhere to reusable workflow syntax.
+- Resolved security review pull requests by matching open pull request head revisions.
 
 ## [2.3.0] - 2026-10-08
 
