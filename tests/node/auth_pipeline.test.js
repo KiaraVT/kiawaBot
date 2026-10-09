@@ -667,3 +667,98 @@ test("TwitchAuthPipeline - OAuth flow generates state and callback routes to cor
     assert.equal(pipeline.botAuthReady, true);
 });
 
+test("formatAxiosError - redacts sensitive secrets in error.config.data and params", () => {
+    const errorWithObjectData = {
+        message: "Token request failed",
+        config: {
+            method: "post",
+            url: "https://id.twitch.tv/oauth2/token",
+            data: {
+                client_id: "cid123",
+                client_secret: "secret_xyz",
+                refresh_token: "ref_tok_abc",
+                code: "auth_code_999"
+            },
+            params: {
+                state: "secret_state_nonce",
+                access_token: "bearer_secret"
+            }
+        },
+        response: {
+            status: 400,
+            statusText: "Bad Request"
+        }
+    };
+
+    formatAxiosError(errorWithObjectData);
+
+    assert.equal(errorWithObjectData.config.data.client_secret, "[REDACTED]");
+    assert.equal(errorWithObjectData.config.data.refresh_token, "[REDACTED]");
+    assert.equal(errorWithObjectData.config.data.code, "[REDACTED]");
+    assert.equal(errorWithObjectData.config.data.client_id, "cid123", "Non-secret keys preserved");
+    assert.equal(errorWithObjectData.config.params.state, "[REDACTED]");
+    assert.equal(errorWithObjectData.config.params.access_token, "[REDACTED]");
+
+    const errorWithJsonData = {
+        message: "JSON POST failed",
+        config: {
+            method: "post",
+            url: "https://id.twitch.tv/oauth2/token",
+            data: JSON.stringify({ client_secret: "json_secret", refresh_token: "json_ref" })
+        }
+    };
+    formatAxiosError(errorWithJsonData);
+    assert.equal(errorWithJsonData.config.data.includes("json_secret"), false);
+    assert.ok(errorWithJsonData.config.data.includes("[REDACTED]"));
+
+    const errorWithUrlEncodedData = {
+        message: "URL encoded POST failed",
+        config: {
+            method: "post",
+            url: "https://id.twitch.tv/oauth2/token",
+            data: "client_id=cid&client_secret=form_secret&refresh_token=form_ref"
+        }
+    };
+    formatAxiosError(errorWithUrlEncodedData);
+    assert.equal(errorWithUrlEncodedData.config.data.includes("form_secret"), false);
+    assert.ok(errorWithUrlEncodedData.config.data.includes("client_secret=[REDACTED]"));
+});
+
+test("TwitchAuthPipeline - withAuthRetry sanitizes error.config.data before throwing", async () => {
+    const mockAuthData = {
+        data: {
+            twitchBroadcaster: { access_token: "tok", refresh_token: "ref" }
+        },
+        read: () => "valid_ref",
+        update: () => {}
+    };
+    const mockAxios = {
+        post: async () => ({ data: { access_token: "tok", refresh_token: "ref" } })
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios
+    });
+    pipeline.broadcasterAuthReady = true;
+
+    const failingOp = async () => {
+        const err = new Error("Twitch error with payload");
+        err.config = {
+            url: "https://api.twitch.tv/helix/users?access_token=secret123",
+            data: { client_secret: "leak_secret_456" }
+        };
+        err.response = { status: 500 };
+        throw err;
+    };
+
+    await assert.rejects(
+        () => pipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", failingOp),
+        (err) => {
+            assert.equal(err.config.data.client_secret, "[REDACTED]");
+            return true;
+        }
+    );
+});
+
+

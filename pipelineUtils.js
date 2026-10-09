@@ -5,7 +5,7 @@
 import crypto from "node:crypto";
 import querystring from "node:querystring";
 import axios from "axios";
-import { formatAxiosError, redactSensitiveUrl } from "./errorUtils.js";
+import { formatAxiosError, sanitizeAxiosConfig } from "./errorUtils.js";
 
 export const TWITCH_AUTH_URL = process.env.TWITCH_AUTH_URL || "https://id.twitch.tv/oauth2/authorize";
 export const TWITCH_TOKEN_URL = process.env.TWITCH_TOKEN_URL || "https://id.twitch.tv/oauth2/token";
@@ -337,8 +337,15 @@ export class TwitchAuthPipeline {
             redirect_uri: this.redirectUri,
             code
         };
-        const response = await this.axios.post(this.tokenUrl, postData);
-        return response.data;
+        try {
+            const response = await this.axios.post(this.tokenUrl, postData);
+            return response.data;
+        } catch (error) {
+            if (error?.config) {
+                sanitizeAxiosConfig(error.config);
+            }
+            throw error;
+        }
     }
 
     /**
@@ -437,6 +444,12 @@ export class TwitchAuthPipeline {
                 }
             );
         } catch (error) {
+            if (error?.config) {
+                sanitizeAxiosConfig(error.config);
+            }
+            if (error?.response?.config) {
+                sanitizeAxiosConfig(error.response.config);
+            }
             const status = error?.response?.status;
             if (status === 400 || status === 401 || status === 403) {
                 if (accountKey === "twitchBroadcaster") this.broadcasterAuthReady = false;
@@ -631,8 +644,11 @@ export class TwitchAuthPipeline {
             if (error?.response?.status === 400) {
                 console.warn("[API] Bad Request (400):", error.response.data?.message || "Bad Request");
             }
-            if (error?.config?.url) {
-                error.config.url = redactSensitiveUrl(error.config.url);
+            if (error?.config) {
+                sanitizeAxiosConfig(error.config);
+            }
+            if (error?.response?.config) {
+                sanitizeAxiosConfig(error.response.config);
             }
             throw error;
         }

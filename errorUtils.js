@@ -45,6 +45,83 @@ export function redactSensitiveUrl(rawUrl) {
 }
 
 /**
+ * Redacts sensitive authentication tokens and secrets from request body or params.
+ *
+ * @param {any} data
+ * @returns {any}
+ */
+export function redactSensitiveData(data) {
+    if (!data) {
+        return data;
+    }
+
+    const sensitiveKeys = ["client_secret", "refresh_token", "code", "access_token", "state"];
+
+    if (typeof data === "string") {
+        try {
+            const parsed = JSON.parse(data);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                let mutated = false;
+                for (const key of sensitiveKeys) {
+                    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+                        parsed[key] = "[REDACTED]";
+                        mutated = true;
+                    }
+                }
+                return mutated ? JSON.stringify(parsed) : data;
+            }
+        } catch {
+            return data.replace(
+                /(^|[&])(client_secret|refresh_token|code|access_token|state)=([^&]*)/gi,
+                "$1$2=[REDACTED]"
+            );
+        }
+    }
+
+    if (typeof data === "object") {
+        if (typeof data.get === "function" && typeof data.set === "function") {
+            for (const key of sensitiveKeys) {
+                if (data.has(key)) {
+                    data.set(key, "[REDACTED]");
+                }
+            }
+            return data;
+        }
+
+        for (const key of sensitiveKeys) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) {
+                data[key] = "[REDACTED]";
+            }
+        }
+        return data;
+    }
+
+    return data;
+}
+
+/**
+ * Sanitizes an Axios request/response config to prevent leaking credentials in logs or errors.
+ *
+ * @param {any} config
+ * @returns {any}
+ */
+export function sanitizeAxiosConfig(config) {
+    if (!config || typeof config !== "object") {
+        return config;
+    }
+    if (config.url) {
+        config.url = redactSensitiveUrl(config.url);
+    }
+    if (config.data) {
+        config.data = redactSensitiveData(config.data);
+    }
+    if (config.params) {
+        config.params = redactSensitiveData(config.params);
+    }
+    return config;
+}
+
+/**
  * Format an Axios or generic Error into a concise single-line string.
  * Prevents dumping internal socket buffers, headers, and circular references.
  *
@@ -57,6 +134,13 @@ export function formatAxiosError(error) {
     }
     if (typeof error === "string") {
         return error;
+    }
+
+    if (error.config) {
+        sanitizeAxiosConfig(error.config);
+    }
+    if (error.response?.config) {
+        sanitizeAxiosConfig(error.response.config);
     }
 
     const message = error.message || "Error";

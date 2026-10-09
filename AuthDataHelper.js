@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import crypto from "node:crypto"
 
 function deepMerge(target, source) {
     if (!source || typeof source !== "object" || Array.isArray(source)) {
@@ -33,7 +34,16 @@ function deepMerge(target, source) {
     return output;
 }
 
-export { deepMerge };
+function safeSetPermission(targetPath, mode) {
+    try {
+        fs.chmodSync(targetPath, mode);
+    } catch (err) {
+        // Suppress expected permission error on non-POSIX platforms
+        void err;
+    }
+}
+
+export { deepMerge, safeSetPermission };
 
 
 export default class AuthDataHelper {
@@ -69,14 +79,16 @@ export default class AuthDataHelper {
     loadData() {
         const dir = path.dirname(this.dataPath);
         if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+            fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         }
+        safeSetPermission(dir, 0o700);
 
         if (!fs.existsSync(this.dataPath)) {
             if (this.legacyPath && fs.existsSync(this.legacyPath)) {
                 fs.copyFileSync(this.legacyPath, this.dataPath);
+                safeSetPermission(this.dataPath, 0o600);
             } else {
-                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2));
+                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
             }
         }
 
@@ -84,13 +96,14 @@ export default class AuthDataHelper {
             const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
             this.data = deepMerge(this.defaultData, parsed);
         } catch (err) {
-            const timestamp = `${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+            const timestamp = `${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
             const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
             try {
                 if (fs.existsSync(this.dataPath)) {
                     fs.renameSync(this.dataPath, corruptedPath);
                 }
-                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2));
+                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
+                safeSetPermission(this.dataPath, 0o600);
                 console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
             } catch (backupErr) {
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
@@ -106,9 +119,11 @@ export default class AuthDataHelper {
         try {
             const dir = path.dirname(this.dataPath);
             if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
+                fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
             }
-            fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2));
+            safeSetPermission(dir, 0o700);
+            fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2), { mode: 0o600 });
+            safeSetPermission(this.dataPath, 0o600);
             return true;
         } catch (err) {
             console.error('Error writing Auth Data file:' + err.message);

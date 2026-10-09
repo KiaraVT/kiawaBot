@@ -206,4 +206,65 @@ test("deepMerge - protects against prototype pollution keys", () => {
     assert.equal(merged.safe, true);
 });
 
+test("AuthDataHelper - directory and file modes are configured with 0o700 and 0o600", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-perm-"));
+    const dataPath = path.join(tempDir, "sub", "auth-data.json");
+    let mkdirMode = null;
+    let writeFileMode = null;
+    const origMkdirSync = fs.mkdirSync;
+    const origWriteFileSync = fs.writeFileSync;
+
+    fs.mkdirSync = (p, opts) => {
+        if (opts && typeof opts === "object") mkdirMode = opts.mode;
+        return origMkdirSync(p, opts);
+    };
+    fs.writeFileSync = (p, data, opts) => {
+        if (opts && typeof opts === "object") writeFileMode = opts.mode;
+        return origWriteFileSync(p, data, opts);
+    };
+
+    try {
+        const helper = new AuthDataHelper();
+        helper.dataPath = dataPath;
+        helper.loadData();
+        helper.update("twitchBroadcaster.access_token", "secret_tok", true, true);
+
+        assert.equal(mkdirMode, 0o700, "mkdirSync must specify mode 0o700");
+        assert.equal(writeFileMode, 0o600, "writeFileSync must specify mode 0o600");
+
+        if (process.platform !== "win32") {
+            const dirStat = fs.statSync(path.dirname(dataPath));
+            assert.equal(dirStat.mode & 0o777, 0o700, "Auth directory mode must be 0o700");
+            const fileStat = fs.statSync(dataPath);
+            assert.equal(fileStat.mode & 0o777, 0o600, "Auth data file mode must be 0o600");
+        }
+    } finally {
+        fs.mkdirSync = origMkdirSync;
+        fs.writeFileSync = origWriteFileSync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("AuthDataHelper - corrupted backup filename uses crypto random bytes hex", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-rnd-"));
+    const corruptPath = path.join(tempDir, "auth-data.json");
+    try {
+        fs.writeFileSync(corruptPath, "{ invalid json }");
+        const helper = new AuthDataHelper();
+        helper.dataPath = corruptPath;
+        helper.loadData();
+
+        const files = fs.readdirSync(tempDir);
+        const backupFile = files.find(f => f.startsWith("auth-data.json.corrupted."));
+        assert.ok(backupFile, "Corrupted backup should exist");
+        const suffix = backupFile.replace("auth-data.json.corrupted.", "");
+        const parts = suffix.split(".");
+        assert.equal(parts.length, 2, "Backup suffix should have timestamp and hex token");
+        assert.match(parts[1], /^[a-f0-9]{8}$/, "Random token must be 8-char crypto hex string");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+
 
