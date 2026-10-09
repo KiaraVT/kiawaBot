@@ -2,6 +2,16 @@ import fs from "fs"
 import path from "path"
 import crypto from "node:crypto"
 
+/**
+ * Recursively merges source object into target object.
+ * Note on array semantics: Array properties from source replace target arrays completely
+ * (elements are deep cloned) rather than concatenating or merging by index. This prevents
+ * stale scopes or duplicate credential entries when configuration arrays are updated.
+ *
+ * @param {any} target
+ * @param {any} source
+ * @returns {any}
+ */
 function deepMerge(target, source) {
     if (!source || typeof source !== "object" || Array.isArray(source)) {
         if (Array.isArray(source)) {
@@ -96,11 +106,21 @@ export default class AuthDataHelper {
             const corruptedPath = `${this.dataPath}.corrupted.${timestamp}`;
             try {
                 if (fs.existsSync(this.dataPath)) {
-                    fs.renameSync(this.dataPath, corruptedPath);
+                    let diskValid = false;
+                    try {
+                        JSON.parse(fs.readFileSync(this.dataPath, "utf8"));
+                        diskValid = true;
+                    } catch {
+                        diskValid = false;
+                    }
+
+                    if (!diskValid) {
+                        fs.renameSync(this.dataPath, corruptedPath);
+                        fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
+                        safeSetPermission(this.dataPath, 0o600);
+                        console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
+                    }
                 }
-                fs.writeFileSync(this.dataPath, JSON.stringify(this.defaultData, null, 2), { mode: 0o600 });
-                safeSetPermission(this.dataPath, 0o600);
-                console.error(`Error parsing Auth Data file (${err.message}). Preserved corrupted file as ${corruptedPath} and initialized default file.`);
             } catch (backupErr) {
                 console.error(`Error preserving corrupted Auth Data file: ${backupErr.message}`);
             }

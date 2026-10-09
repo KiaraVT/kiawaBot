@@ -75,7 +75,7 @@ export function redactSensitiveData(data) {
             }
         } catch {
             return data.replace(
-                /(^|[&])(client_secret|refresh_token|code|access_token|state|code_verifier)=([^&]*)/gi,
+                /(^|[?&#/])(client_secret|refresh_token|code|access_token|state|code_verifier)=([^&#]*)/gi,
                 "$1$2=[REDACTED]"
             );
         }
@@ -108,22 +108,25 @@ export function redactSensitiveData(data) {
  * Sanitizes an Axios request/response config to prevent leaking credentials in logs or errors.
  *
  * @param {any} config
+ * @param {object} [options]
+ * @param {boolean} [options.clone=false]
  * @returns {any}
  */
-export function sanitizeAxiosConfig(config) {
+export function sanitizeAxiosConfig(config, options = {}) {
     if (!config || typeof config !== "object") {
         return config;
     }
-    if (config.url) {
-        config.url = redactSensitiveUrl(config.url);
+    const target = options.clone ? { ...config } : config;
+    if (target.url) {
+        target.url = redactSensitiveUrl(target.url);
     }
-    if (config.data) {
-        config.data = redactSensitiveData(config.data);
+    if (target.data) {
+        target.data = redactSensitiveData(target.data);
     }
-    if (config.params) {
-        config.params = redactSensitiveData(config.params);
+    if (target.params) {
+        target.params = redactSensitiveData(target.params);
     }
-    return config;
+    return target;
 }
 
 /**
@@ -141,16 +144,11 @@ export function formatAxiosError(error) {
         return error;
     }
 
-    if (error.config) {
-        sanitizeAxiosConfig(error.config);
-    }
-    if (error.response?.config) {
-        sanitizeAxiosConfig(error.response.config);
-    }
+    const config = sanitizeAxiosConfig(error.config, { clone: true });
 
     const message = error.message || "Error";
-    const method = error.config?.method ? error.config.method.toUpperCase() : "";
-    const rawUrl = error.config?.url || "";
+    const method = config?.method ? config.method.toUpperCase() : "";
+    const rawUrl = config?.url || "";
     const url = redactSensitiveUrl(rawUrl);
     const endpointDesc = (method || url) ? ` (${method ? method + " " : ""}${url})` : "";
 

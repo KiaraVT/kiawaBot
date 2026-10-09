@@ -131,6 +131,8 @@ const redirectUri = 'http://127.0.0.1:' + oAuthPort;
 //variables to store auth-related data
 let validationTicker = null;
 const authData = new AuthDataHelper();
+let websockets = [];
+let socket = null;
 
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
@@ -327,7 +329,8 @@ export {
     ensureBroadcasterAuth,
     ensureBotAuth,
     ensureAuthListener,
-    startBot
+    startBot,
+    tesManager
 };
 
 //send a GET request to the Twitch API
@@ -547,24 +550,24 @@ function handleInitialAuthValidation() {
 const incentiveData = new IncentiveHelper();
 const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
 
-function startBot(options = {}) {
+async function startBot(options = {}) {
     const autoStartListener = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
     if (autoStartListener) {
         ensureAuthListener();
     }
     authData.statusCallback = handleAuthFileStatusChange;
     authData.loadData();
-    validateAccessToken();
+    const validationPromise = validateAccessToken();
     if (validationTicker) {
         clearInterval(validationTicker);
     }
     validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
     incentiveData.statusCallback = handleIncentiveFileStatusChange;
     incentiveData.loadData();
-}
-
-if (isMainModule) {
-    startBot();
+    if (typeof tesManager !== "undefined" && tesManager && typeof tesManager.start === "function") {
+        tesManager.start();
+    }
+    return await validationPromise;
 }
 // if (!fs.existsSync(INCENTIVEPATH)) {
 //     const content = incentiveData.read('incentive.command') + ' $' + Number(incentiveData.read('incentive.amount')).toFixed(2) + ' / $' + incentiveData.read('incentive.goal');
@@ -599,12 +602,18 @@ class TesManager {
     #subscriptionByType = {};
 
     constructor() {
-        this.#tes = this.#buildTesInstance();
-        if (this.#tes.on) { // if TES was able to auth properly
-            this.#initializeSubscriptionQueue();
+        this.#tes = null;
+    }
+
+    start() {
+        if (this.#tes) {
+            return;
         }
-        else {
-            console.log("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.")
+        this.#tes = this.#buildTesInstance();
+        if (this.#tes && this.#tes.on) { // if TES was able to auth properly
+            this.#initializeSubscriptionQueue();
+        } else {
+            console.log("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.");
         }
     }
 
@@ -649,7 +658,7 @@ class TesManager {
             //let's assume any error here is due to a bad access token and re-auth
             const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
             warning();
-            if (isMainModule && process.env.AUTO_START_AUTH_LISTENER !== "false") {
+            if (process.env.AUTO_START_AUTH_LISTENER !== "false") {
                 startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
             }
             return { queueSubscription: warning }; // calls to queueSubscription won't crash the bot entirely
@@ -889,25 +898,24 @@ const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: broadcasterID};
 const subCondition2 = { broadcaster_user_id: broadcasterID, user_id: broadcasterID};
 const subConditionMod = { broadcaster_user_id: broadcasterID, moderator_user_id: broadcasterID};
-let websockets = [];
 // setup websocket server for chat widget
-let socket = null;
 function ensureWebSocketServer() {
     if (!socket) {
         socket = new WebSocketServer({ port: 8080 });
         socket.on('connection', ws => {
             websockets.push(ws);
-            console.log('Client connected');
+            console.info('[WebSocket] Client connected');
             ws.on('close', () => {
-                console.log('Client disconnected');
+                console.info('[WebSocket] Client disconnected');
             });
         });
-        console.log('WebSocket server started on port 8080');
+        console.info('[WebSocket] WebSocket server started on port 8080');
     }
     return socket;
 }
 if (isMainModule) {
     ensureWebSocketServer();
+    startBot();
 }
 
 function sendToAllChatWidgets(data) {
@@ -1181,13 +1189,16 @@ function writeAtomicSync(filePath,data,options, retries=3,delay =100){
 }
 tesManager.queueSubscription('stream.online', subCondition, event => {
     console.info("[Streaks] Stream online detected");
-    processStreamStartStreak(streak_Path, event?.started_at, {
+    const streakResult = processStreamStartStreak(streak_Path, event?.started_at, {
         readFn: jsonfile.readFileSync,
         writeFn: writeAtomicSync,
         onStreakReset: () => {
             Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
         }
     });
+    if (!streakResult?.updated) {
+        console.warn(`[Streaks] Stream start streak was not updated: ${streakResult?.reason || 'unknown'}`);
+    }
 });
 
 tesManager.queueSubscription('stream.offline', subCondition, event => {
@@ -1234,13 +1245,16 @@ async function getStreamInfo(broadcaster_id, type, first) {
         }
         const startedAt = streamList[0]?.started_at;
         if (startedAt) {
-            processStreamStartStreak(streak_Path, startedAt, {
+            const streakResult = processStreamStartStreak(streak_Path, startedAt, {
                 readFn: jsonfile.readFileSync,
                 writeFn: writeAtomicSync,
                 onStreakReset: () => {
                     Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
                 }
             });
+            if (!streakResult?.updated) {
+                console.warn(`[Streaks] Stream start streak was not updated: ${streakResult?.reason || 'unknown'}`);
+            }
         }
         return { online: true, data: streamList };
     } catch (error) {

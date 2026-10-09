@@ -318,3 +318,39 @@ test("loadData - corrupted file recovery creates isolated deep clone of defaultD
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("loadData - does not rename or overwrite file if disk content is valid JSON", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-valid-check-"));
+    const authPath = path.join(tempDir, "auth-data.json");
+    try {
+        const validJson = JSON.stringify({ twitch: { access_token: "existing_valid" } });
+        fs.writeFileSync(authPath, validJson);
+        const helper = new AuthDataHelper();
+        helper.dataPath = authPath;
+        helper.legacyPath = null;
+
+        // Simulate an unexpected JSON.parse failure during initial read in loadData
+        const origParse = JSON.parse;
+        let parseCallCount = 0;
+        JSON.parse = (text, reviver) => {
+            parseCallCount += 1;
+            if (parseCallCount === 1) {
+                throw new Error("Simulated parse error on first pass");
+            }
+            return origParse(text, reviver);
+        };
+
+        try {
+            helper.loadData();
+        } finally {
+            JSON.parse = origParse;
+        }
+
+        const files = fs.readdirSync(tempDir);
+        const corruptedFiles = files.filter(f => f.includes(".corrupted."));
+        assert.equal(corruptedFiles.length, 0, "Valid JSON file must not be renamed to corrupted backup");
+        assert.equal(fs.readFileSync(authPath, "utf8"), validJson, "Valid JSON file on disk must be preserved");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

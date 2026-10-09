@@ -623,9 +623,9 @@ export class TwitchAuthPipeline {
         if (this.broadcasterAuthReady) return true;
         const now = Date.now();
         if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
-            this.lastRefreshBroadcasterAttempt = now;
             const refreshRes = await this.refreshAccount("twitchBroadcaster", "Broadcaster");
             if (refreshRes?.refreshed) {
+                this.lastRefreshBroadcasterAttempt = Date.now();
                 this.broadcasterAuthReady = true;
                 return true;
             }
@@ -642,9 +642,9 @@ export class TwitchAuthPipeline {
         if (this.botAuthReady) return true;
         const now = Date.now();
         if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
-            this.lastRefreshBotAttempt = now;
             const refreshRes = await this.refreshAccount("twitchBot", "Bot");
             if (refreshRes?.refreshed) {
+                this.lastRefreshBotAttempt = Date.now();
                 this.botAuthReady = true;
                 return true;
             }
@@ -676,17 +676,21 @@ export class TwitchAuthPipeline {
                 console.info(`[Auth] ${accountName} token expired (401), refreshing token...`);
                 if (accountKey === "twitchBroadcaster") {
                     this.broadcasterAuthReady = false;
-                    this.lastRefreshBroadcasterAttempt = Date.now();
                 } else {
                     this.botAuthReady = false;
-                    this.lastRefreshBotAttempt = Date.now();
                 }
 
                 try {
                     const refreshRes = await this.refreshAccount(accountKey, accountName);
                     if (refreshRes?.refreshed) {
-                        if (accountKey === "twitchBroadcaster") this.broadcasterAuthReady = true;
-                        if (accountKey === "twitchBot") this.botAuthReady = true;
+                        if (accountKey === "twitchBroadcaster") {
+                            this.broadcasterAuthReady = true;
+                            this.lastRefreshBroadcasterAttempt = Date.now();
+                        }
+                        if (accountKey === "twitchBot") {
+                            this.botAuthReady = true;
+                            this.lastRefreshBotAttempt = Date.now();
+                        }
                         return await requestFn(true);
                     }
                 } catch (refreshErr) {
@@ -698,10 +702,15 @@ export class TwitchAuthPipeline {
                 console.warn("[API] Bad Request (400):", error.response.data?.message || "Bad Request");
             }
             if (error?.config) {
-                sanitizeAxiosConfig(error.config);
+                error.config = sanitizeAxiosConfig(error.config);
             }
             if (error?.response?.config) {
-                sanitizeAxiosConfig(error.response.config);
+                error.response.config = sanitizeAxiosConfig(error.response.config);
+            }
+            if (error?.request && typeof error.request === "object") {
+                if (typeof error.request._header === "string") {
+                    error.request._header = error.request._header.replace(/(Authorization:\s*Bearer\s+)[^\r\n]+/gi, "$1[REDACTED]");
+                }
             }
             throw error;
         }

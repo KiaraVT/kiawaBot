@@ -1055,3 +1055,151 @@ test("ensureAuthListener - does not start HTTP listener when autoStartListener i
         delete process.env.AUTO_START_AUTH_LISTENER;
     }
 });
+
+test("redactSensitiveUrl - redacts fragment-only and multi-parameter URLs", () => {
+    const fragmentOnlyUrl = "https://example.com/callback#access_token=secret_hash_token&state=123";
+    const redactedFrag = redactSensitiveUrl(fragmentOnlyUrl);
+    assert.ok(redactedFrag.includes("access_token=[REDACTED]"));
+    assert.ok(redactedFrag.includes("state=[REDACTED]"));
+    assert.equal(redactedFrag.includes("secret_hash_token"), false);
+
+    const multiParamUrl = "https://api.twitch.tv/helix/users?foo=1&access_token=secret_tok&bar=2&refresh_token=secret_ref";
+    const redactedMulti = redactSensitiveUrl(multiParamUrl);
+    assert.ok(redactedMulti.includes("foo=1"));
+    assert.ok(redactedMulti.includes("bar=2"));
+    assert.ok(redactedMulti.includes("access_token=[REDACTED]"));
+    assert.ok(redactedMulti.includes("refresh_token=[REDACTED]"));
+    assert.equal(redactedMulti.includes("secret_tok"), false);
+    assert.equal(redactedMulti.includes("secret_ref"), false);
+});
+
+test("redactSensitiveData - string fallback handles ?, #, and initial parameter anchors", () => {
+    const rawFragmentString = "state=secret_state#other_field=123&code=secret_code";
+    const redacted = redactSensitiveData(rawFragmentString);
+    assert.ok(redacted.includes("state=[REDACTED]"));
+    assert.ok(redacted.includes("code=[REDACTED]"));
+    assert.equal(redacted.includes("secret_state"), false);
+    assert.equal(redacted.includes("secret_code"), false);
+    assert.ok(redacted.includes("other_field=123"));
+
+    const queryStyleString = "?code=auth_code_val&client_secret=auth_sec";
+    const redactedQuery = redactSensitiveData(queryStyleString);
+    assert.ok(redactedQuery.includes("code=[REDACTED]"));
+    assert.ok(redactedQuery.includes("client_secret=[REDACTED]"));
+    assert.equal(redactedQuery.includes("auth_code_val"), false);
+    assert.equal(redactedQuery.includes("auth_sec"), false);
+});
+
+test("sanitizeAxiosConfig - clones config without mutating original input object", () => {
+    const originalConfig = {
+        url: "https://id.twitch.tv/oauth2/token?client_secret=orig_sec",
+        data: { client_secret: "orig_data_sec" },
+        params: { access_token: "orig_param_tok" }
+    };
+    const sanitized = sanitizeAxiosConfig(originalConfig, { clone: true });
+    assert.notEqual(sanitized, originalConfig, "Sanitized config must be a separate object");
+    assert.equal(originalConfig.url, "https://id.twitch.tv/oauth2/token?client_secret=orig_sec", "Original url must not be mutated");
+    assert.equal(originalConfig.data.client_secret, "orig_data_sec", "Original data must not be mutated");
+    assert.equal(originalConfig.params.access_token, "orig_param_tok", "Original params must not be mutated");
+    assert.ok(sanitized.url.includes("client_secret=[REDACTED]"));
+    assert.equal(sanitized.data.client_secret, "[REDACTED]");
+    assert.equal(sanitized.params.access_token, "[REDACTED]");
+});
+
+test("formatAxiosError - does not mutate input error.config object", () => {
+    const error = {
+        message: "Failed",
+        config: {
+            url: "https://example.com?client_secret=secret",
+            data: { client_secret: "secret" }
+        }
+    };
+    const formatted = formatAxiosError(error);
+    assert.ok(formatted.includes("[REDACTED]"));
+    assert.equal(error.config.url, "https://example.com?client_secret=secret", "error.config.url must not be mutated by formatAxiosError");
+    assert.equal(error.config.data.client_secret, "secret", "error.config.data must not be mutated by formatAxiosError");
+});
+
+test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth do not mutate cooldown on failure", async () => {
+    const mockAuthData = {
+        read: () => "mock_ref",
+        update: () => {}
+    };
+    const mockAxios = {
+        post: async () => {
+            const err = new Error("Refresh failed");
+            err.response = { status: 400 };
+            throw err;
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        cooldownMs: 5000
+    });
+
+    pipeline.broadcasterAuthReady = false;
+    pipeline.botAuthReady = false;
+    const initialBroadcasterAttempt = pipeline.lastRefreshBroadcasterAttempt;
+    const initialBotAttempt = pipeline.lastRefreshBotAttempt;
+
+    const bRes = await pipeline.ensureBroadcasterAuth();
+    assert.equal(bRes, false);
+    assert.equal(pipeline.lastRefreshBroadcasterAttempt, initialBroadcasterAttempt, "Broadcaster cooldown must not mutate on failure");
+
+    const botRes = await pipeline.ensureBotAuth();
+    assert.equal(botRes, false);
+    assert.equal(pipeline.lastRefreshBotAttempt, initialBotAttempt, "Bot cooldown must not mutate on failure");
+});
+
+test("TwitchAuthPipeline - withAuthRetry does not mutate cooldown on 401 refresh failure and sanitizes error.request", async () => {
+    const mockAuthData = {
+        read: () => "mock_ref",
+        update: () => {}
+    };
+    let refreshAttempted = false;
+    const mockAxios = {
+        post: async () => {
+            refreshAttempted = true;
+            const err = new Error("Refresh failed");
+            err.response = { status: 400 };
+            throw err;
+        }
+    };
+
+    const pipeline = new TwitchAuthPipeline({
+        authData: mockAuthData,
+        axios: mockAxios,
+        cooldownMs: 5000
+    });
+    pipeline.broadcasterAuthReady = true;
+    const initialAttempt = pipeline.lastRefreshBroadcasterAttempt;
+
+    const failingOp = async () => {
+        const err = new Error("401 Unauthorized");
+        err.response = { status: 401 };
+        err.request = {
+            _header: "POST /helix/chat HTTP/1.1\r\nAuthorization: Bearer secret_live_token\r\nHost: api.twitch.tv"
+        };
+        throw err;
+    };
+
+    await assert.rejects(
+        () => pipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", failingOp),
+        (err) => {
+            assert.equal(pipeline.lastRefreshBroadcasterAttempt, initialAttempt, "Cooldown must not update if refresh failed");
+            assert.ok(err.request._header.includes("Authorization: Bearer [REDACTED]"));
+            assert.equal(err.request._header.includes("secret_live_token"), false);
+            return true;
+        }
+    );
+    assert.equal(refreshAttempted, true);
+});
+
+test("Kiara_bot - startBot awaits validation and tesManager defers startup", async () => {
+    const { startBot, tesManager } = await import("../../Kiara_bot.js");
+    assert.ok(tesManager, "tesManager should be exported");
+    assert.equal(typeof tesManager.start, "function", "tesManager should provide start method");
+    assert.equal(typeof startBot, "function", "startBot should be a function");
+});

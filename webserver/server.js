@@ -21,6 +21,14 @@ if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }
 
+const DEFAULT_INCENTIVE = Object.freeze({
+    incentive: {
+        command: '!update',
+        amount: 0,
+        goal: 0
+    }
+});
+
 // Helper function to safely read JSON files
 function safeReadJSON(filePath, defaultValue = {}) {
     try {
@@ -85,13 +93,7 @@ app.get("/api/commands", (req, res) => {
 
 // Web endpoint to serve incentives data
 app.get("/api/incentives", async (req, res) => {
-    const defaultIncentive = {
-        incentive: {
-            command: '!update',
-            amount: 0,
-            goal: 0
-        }
-    };
+    const defaultIncentive = DEFAULT_INCENTIVE;
     const MAX_INCENTIVE_FILE_SIZE = 1024 * 1024;
     try {
         let rawContent = null;
@@ -259,13 +261,7 @@ app.get("/commands", (req, res) => {
 // Simple HTML page to display incentive
 app.get("/incentives", (req, res) => {
     try {
-        const defaultIncentive = {
-            incentive: {
-                command: '!update',
-                amount: 0,
-                goal: 0
-            }
-        };
+        const defaultIncentive = DEFAULT_INCENTIVE;
         const rawData = safeReadJSON(getIncentivePath(), defaultIncentive);
         const incentive = (rawData && typeof rawData === 'object' && rawData.incentive) ? rawData.incentive : defaultIncentive.incentive;
         const command = incentive.command || '!update';
@@ -366,6 +362,9 @@ app.get("/chatwidget", (_req, res) => {
 
 // Centralized error handling middleware
 function errorHandler(err, req, res, next) {
+    if (res.headersSent) {
+        return next(err);
+    }
     void next;
     console.error('Web Server: Unhandled error:', err?.message || String(err));
     if (req.accepts(['html', 'json']) === 'html') {
@@ -383,4 +382,4 @@ const server = app.listen(port, '127.0.0.1', () => {
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
-export { app, server, errorHandler }
+export { app, server, errorHandler, DEFAULT_INCENTIVE };

@@ -9,9 +9,9 @@ const { server, errorHandler } = await import("../../webserver/server.js");
 
 const BASE_URL = "http://127.0.0.1:18081";
 
-test.after(() => {
+test.after(async () => {
     if (server && typeof server.close === "function") {
-        server.close();
+        await new Promise((resolve) => server.close(resolve));
     }
 });
 
@@ -134,3 +134,30 @@ test("Webserver - error handling middleware respects Accept header", () => {
     assert.deepEqual(fallbackData, { error: "Internal Server Error" });
 });
 
+test("Webserver - error handling middleware delegates to next when headers are already sent", () => {
+    let nextCalledWith = null;
+    let statusCalled = false;
+    const mockReq = { accepts: () => "json" };
+    const mockRes = {
+        headersSent: true,
+        status: () => { statusCalled = true; return mockRes; },
+        json: () => mockRes
+    };
+    const testErr = new Error("Headers already sent error");
+    errorHandler(testErr, mockReq, mockRes, (err) => {
+        nextCalledWith = err;
+    });
+    assert.equal(nextCalledWith, testErr);
+    assert.equal(statusCalled, false);
+});
+
+test("Webserver - exports or reuses consistent default incentive object", async () => {
+    const { DEFAULT_INCENTIVE } = await import("../../webserver/server.js");
+    assert.ok(DEFAULT_INCENTIVE, "DEFAULT_INCENTIVE should be defined");
+    assert.ok(Object.isFrozen(DEFAULT_INCENTIVE), "DEFAULT_INCENTIVE should be frozen");
+    assert.deepEqual(DEFAULT_INCENTIVE.incentive, {
+        command: "!update",
+        amount: 0,
+        goal: 0
+    });
+});
