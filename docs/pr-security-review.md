@@ -32,6 +32,11 @@ restrict deployments to trusted branches or pull request head references. The en
 must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle
 and preventing privilege escalation across review scopes.
 
+Pull request titles and descriptions are sanitized in `resolve` to strip non-printable ASCII control characters.
+Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review
+context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state
+re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
+
 ## Policy Provenance
 
 This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md).

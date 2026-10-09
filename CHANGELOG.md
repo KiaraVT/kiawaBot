@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without expression delimiters to prevent parser evaluation errors.
 - Enforced resolution success and found checks across review and skip jobs in
   review workflows to prevent masked failures.
+- Configured CI workflow to handle `pull_request` `unlabeled` events, canceling in-progress runs on label removal.
+- Sanitized ASCII control characters from pull request descriptions prior to output assignment in review workflows.
 
 ## [2.3.0] - 2026-10-08
 

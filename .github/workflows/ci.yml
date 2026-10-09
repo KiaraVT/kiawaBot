@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,10 +16,14 @@ permissions:
 
 jobs:
   validate:
-    # Run on pushes and standard PR events; for labeled PR events, run only when the
-    # label added is 'safe-to-review'. Any other label evaluates to false, skipping the
-    # job and consuming zero runner minutes.
-    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'safe-to-review'
+    # Run on pushes and standard PR events (opened, synchronize, reopened). For label
+    # mutations (labeled, unlabeled), run validate only when safe-to-review is added;
+    # all other label mutations skip validate with zero runner minutes while still
+    # triggering state re-resolution and canceling obsolete in-progress reviews.
+    if: |
+      github.event_name != 'pull_request' ||
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      (github.event.action == 'labeled' && github.event.label.name == 'safe-to-review')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

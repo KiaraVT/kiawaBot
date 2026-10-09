@@ -79,7 +79,7 @@ jobs:
               core.setOutput('base_sha', pull.base.sha);
               core.setOutput('head_sha', pull.head.sha);
               core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
-              core.setOutput('body', pull.body || '');
+              core.setOutput('body', (pull.body || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''));
               core.setFailed(`could not fetch current pull request labels: ${message}`);
               return;
             }
@@ -90,8 +90,9 @@ jobs:
             core.setOutput('base_sha', pull.base.sha);
             core.setOutput('head_sha', pull.head.sha);
             core.setOutput('title', (pull.title || '').replace(/[\r\n]+/g, ' ').trim());
-            core.setOutput('body', pull.body || '');
+            core.setOutput('body', (pull.body || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''));
 
+  # Same-repository review maps repository-level OLLAMA_API_KEY or MODEL_API_KEY.
   review:
     needs: resolve
     permissions:

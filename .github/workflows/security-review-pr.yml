@@ -179,6 +179,7 @@ jobs:
             core.setOutput("head_repo_url", headRepository.clone_url);
             core.setOutput("head_repo_full_name", headRepository.full_name);
 
+  # Same-repository review maps repository-level OLLAMA_API_KEY or MODEL_API_KEY.
   review:
     needs: resolve-pr
     if: |
