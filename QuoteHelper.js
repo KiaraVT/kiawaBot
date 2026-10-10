@@ -1,4 +1,5 @@
 import jsonfile from "jsonfile";
+import { formatQuoteTimestamp } from "./timeUtils.js";
 
 /**
  * The first element in quotes.json.  Not a quote itself, just metadata.
@@ -35,11 +36,13 @@ export function castIdToNumber(id, logWarning = false) {
             return number;
         }
     }
-    catch (e) {
-        // no-op
+    catch (parseError) {
+        if (logWarning) {
+            console.warn(`[QuoteHelper] Error parsing ID "${id}":`, parseError?.message || parseError);
+        }
     }
     if (logWarning) {
-        console.log(`Could not convert ${id} to a positive integer.`)
+        console.log(`Could not convert ${id} to a positive integer.`);
     }
     return 0;
 }
@@ -110,23 +113,7 @@ export default class QuoteHelper {
         // this.load(); // not harmful, but not needed because this.getMaxIndex() will do it
 
         const newIndex = this.getMaxIndex() + 1;
-
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth() + 1;
-        const date = now.getDate();
-        let hour = now.getHours();
-        let ampm = "AM";
-        if (hour > 12) {
-            hour -= 12;
-            ampm = "PM";
-        }
-        if (hour === 0) {
-            hour = 12;
-        }
-        const minutes = now.getMinutes().toString().padStart(2, "0");
-
-        const formatted = `${year}/${month}/${date} ${hour}:${minutes} ${ampm}`;
+        const formattedQuoteTimestamp = formatQuoteTimestamp();
 
         // Generate JSON format data object to add to the file.
         // All fields are stringified, even if they were probably strings already.
@@ -136,7 +123,7 @@ export default class QuoteHelper {
             Quote_Text: `${text}`,
             Submitter: `${submitter}`,
             Category: `${category}`,
-            Date: `${formatted}`,
+            Date: `${formattedQuoteTimestamp}`,
         };
 
         // Update the quote count in the initial/metadata array element
