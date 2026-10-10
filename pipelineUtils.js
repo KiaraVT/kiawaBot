@@ -6,6 +6,14 @@ import crypto from "node:crypto";
 import querystring from "node:querystring";
 import axios from "axios";
 import { formatAxiosError, sanitizeAxiosConfig } from "./errorUtils.js";
+import {
+    parseIsoDateTime,
+    isWithinRestartWindow,
+    findOldestTimestampKey,
+    getMonotonicMs,
+    FIVE_HOURS_MS,
+    TEN_MINUTES_MS
+} from "./timeUtils.js";
 
 export const TWITCH_AUTH_URL = process.env.TWITCH_AUTH_URL || "https://id.twitch.tv/oauth2/authorize";
 export const TWITCH_TOKEN_URL = process.env.TWITCH_TOKEN_URL || "https://id.twitch.tv/oauth2/token";
@@ -111,9 +119,8 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
     if (!startedAtStr || typeof startedAtStr !== "string") {
         return { updated: false, reason: "missing_started_at" };
     }
-    const currentStartDate = new Date(startedAtStr);
-    const currentStart = currentStartDate.getTime();
-    if (isNaN(currentStart)) {
+    const currentStartDate = parseIsoDateTime(startedAtStr);
+    if (!currentStartDate) {
         return { updated: false, reason: "invalid_started_at_date" };
     }
 
@@ -158,28 +165,28 @@ export function processStreamStartStreak(streakPath, startedAtStr, io = {}) {
     }
 
     if (streakList.Current_Stream.Start) {
-        const currentStreamStart = new Date(streakList.Current_Stream.Start).getTime();
-        if (!isNaN(currentStreamStart) && (currentStart - currentStreamStart) < 5 * 60 * 60 * 1000) {
+        const currentStreamStart = parseIsoDateTime(streakList.Current_Stream.Start);
+        if (currentStreamStart && isWithinRestartWindow(currentStreamStart, currentStartDate, FIVE_HOURS_MS)) {
             return { updated: false, reason: "restarted_within_window" };
         }
     }
 
-    const lastStart = streakList.Last_Stream.Start ? new Date(streakList.Last_Stream.Start).getTime() : NaN;
-    const lastEnd = streakList.Last_Stream.End ? new Date(streakList.Last_Stream.End).getTime() : NaN;
-    const backupEnd = streakList.Last_Stream.Backup_End ? new Date(streakList.Last_Stream.Backup_End).getTime() : NaN;
+    const lastStart = streakList.Last_Stream.Start ? parseIsoDateTime(streakList.Last_Stream.Start) : null;
+    const lastEnd = streakList.Last_Stream.End ? parseIsoDateTime(streakList.Last_Stream.End) : null;
+    const backupEnd = streakList.Last_Stream.Backup_End ? parseIsoDateTime(streakList.Last_Stream.Backup_End) : null;
 
-    if (!lastEnd || isNaN(lastEnd)) {
+    if (!lastEnd) {
         streakList.Last_Stream.Start = streakList.Current_Stream.Start;
         streakList.Current_Stream.Start = startedAtStr;
         writeFn(streakPath, streakList, { spaces: 2, EOL: "\n" });
         return { updated: true, reason: "null_last_end" };
     }
 
-    if (!isNaN(backupEnd) && (currentStart - backupEnd) < 5 * 60 * 60 * 1000) {
+    if (backupEnd && isWithinRestartWindow(backupEnd, currentStartDate, FIVE_HOURS_MS)) {
         return { updated: false, reason: "started_shortly_after_last" };
     }
 
-    if (!isNaN(backupEnd) && !isNaN(lastStart) && backupEnd < lastStart) {
+    if (backupEnd && lastStart && backupEnd < lastStart) {
         streakList.Last_Stream.End = "";
         streakList.Last_Stream.Start = streakList.Current_Stream.Start;
         streakList.Current_Stream.Start = startedAtStr;
@@ -284,6 +291,7 @@ export class TwitchAuthPipeline {
         this.cooldownMs = options.cooldownMs ?? 60000;
         this.onInitialValidation = options.onInitialValidation || (() => {});
         this.notifyAuthRequired = options.notifyAuthRequired || (() => {});
+        this.nowFn = typeof options.nowFn === "function" ? options.nowFn : getMonotonicMs;
 
         this.broadcasterAuthReady = false;
         this.botAuthReady = false;
@@ -331,9 +339,9 @@ export class TwitchAuthPipeline {
      * Purges expired auth states older than 10 minutes.
      */
     cleanupExpiredAuthStates() {
-        const now = Date.now();
+        const now = this.nowFn();
         for (const [nonce, session] of this.activeAuthStates.entries()) {
-            if (now - session.createdAt > 10 * 60 * 1000) {
+            if (now - session.createdAt > TEN_MINUTES_MS) {
                 this.activeAuthStates.delete(nonce);
             }
         }
@@ -350,19 +358,13 @@ export class TwitchAuthPipeline {
     async startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster") {
         this.cleanupExpiredAuthStates();
         while (this.activeAuthStates.size >= this.maxActiveAuthStates) {
-            let oldestKey = null;
-            let oldestCreatedAt = Infinity;
-            for (const [key, session] of this.activeAuthStates.entries()) {
-                if (session.createdAt < oldestCreatedAt) {
-                    oldestCreatedAt = session.createdAt;
-                    oldestKey = key;
-                }
-            }
+            const oldestKey = findOldestTimestampKey(this.activeAuthStates);
             if (!oldestKey) break;
             this.activeAuthStates.delete(oldestKey);
         }
+        const now = this.nowFn();
         for (const [nonce, session] of this.activeAuthStates.entries()) {
-            if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
+            if (session.accountKey === accountKey && (now - session.createdAt < 60000)) {
                 const pendingAuthUrl = this.buildAuthUrl(nonce, session.codeChallenge);
                 console.warn(`[Auth] Authorization prompt already active for ${accountName}; re-surfacing pending authorization URL.`);
                 await this.notifyAuthRequired(`[${accountName}] ${reason} (pending)`, pendingAuthUrl, accountKey, accountName);
@@ -375,7 +377,7 @@ export class TwitchAuthPipeline {
         this.activeAuthStates.set(nonce, {
             accountKey,
             accountName,
-            createdAt: Date.now(),
+            createdAt: now,
             codeVerifier,
             codeChallenge
         });
@@ -644,7 +646,7 @@ export class TwitchAuthPipeline {
         if (this.broadcasterAuthReady) return true;
         return this.ensureBroadcasterSingleFlight(async () => {
             if (this.broadcasterAuthReady) return true;
-            const now = Date.now();
+            const now = this.nowFn();
             if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
                 this.lastRefreshBroadcasterAttempt = now;
                 const refreshRes = await this.refreshAccount("twitchBroadcaster", "Broadcaster");
@@ -666,7 +668,7 @@ export class TwitchAuthPipeline {
         if (this.botAuthReady) return true;
         return this.ensureBotSingleFlight(async () => {
             if (this.botAuthReady) return true;
-            const now = Date.now();
+            const now = this.nowFn();
             if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
                 this.lastRefreshBotAttempt = now;
                 const refreshRes = await this.refreshAccount("twitchBot", "Bot");
@@ -712,11 +714,11 @@ export class TwitchAuthPipeline {
                     if (refreshRes?.refreshed) {
                         if (accountKey === "twitchBroadcaster") {
                             this.broadcasterAuthReady = true;
-                            this.lastRefreshBroadcasterAttempt = Date.now();
+                            this.lastRefreshBroadcasterAttempt = this.nowFn();
                         }
                         if (accountKey === "twitchBot") {
                             this.botAuthReady = true;
-                            this.lastRefreshBotAttempt = Date.now();
+                            this.lastRefreshBotAttempt = this.nowFn();
                         }
                         return await requestFn(true);
                     }
