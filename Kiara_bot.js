@@ -24,6 +24,17 @@ import {
     TWITCH_API_BASE_URL
 } from "./pipelineUtils.js";
 
+import {
+    parseIsoDateTime,
+    getUtcNowIsoString,
+    safeRotateIndex,
+    isNewStreamAttendanceSession,
+    calculateUserStreakProgression,
+    StreamAttendanceSessionTracker,
+    getStreamerTimezone,
+    setStreamerTimezone
+} from "./timeUtils.js";
+
 export { TWITCH_AUTH_URL, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL, TWITCH_API_BASE_URL };
 
 import querystring from "qs"
@@ -55,6 +66,19 @@ defaultFiles.forEach(({ path, content }) => {
         }
     }
 });
+
+try {
+    if (fs.existsSync(streak_Path)) {
+        const initialStreakData = jsonfile.readFileSync(streak_Path);
+        if (initialStreakData?.Timezone) {
+            setStreamerTimezone(initialStreakData.Timezone);
+        }
+    }
+} catch (e) {
+    console.warn("[Streaks] Could not load persisted timezone from streak file:", e.message);
+}
+
+const streamAttendanceTracker = new StreamAttendanceSessionTracker();
 
 const t1Value = 3.60;
 const t2Value = 6.00;
@@ -171,7 +195,7 @@ async function notifyAuthRequired(reason, authUrl) {
                 event: 'auth_required',
                 reason: reason,
                 auth_url: sanitizedWebhookUrl,
-                timestamp: new Date().toISOString()
+                timestamp: getUtcNowIsoString()
             }, { timeout: 5000 }).catch(err => {
                 console.error('[Auth] Failed to send auth webhook alert:', formatAxiosError(err));
             });
@@ -395,7 +419,11 @@ export {
     configureAuthRoutes,
     performGracefulExit,
     startBot,
-    tesManager
+    tesManager,
+    updateStreaks,
+    streamAttendanceTracker,
+    handleTimedCommandsInterval,
+    messageHandler
 };
 
 
@@ -1061,9 +1089,6 @@ tesManager.queueSubscription('channel.channel_points_custom_reward_redemption.ad
     }
 });
 
-/** @type {{[userId: string]: boolean}} */
-const userIdsWhoAlreadyStreaked = {}
-
 // Under no circumstances should a streak failure of any kind crash the bot.
 function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
     //first check if stream is online, if not, then exit function.
@@ -1096,19 +1121,12 @@ function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
             });
     });
 }
-//check the current stream start time
-//compare against previous value of current stream time
-//if the same, do nothing (bot was restarted or something)
-//if 5 hours has passed since end of last stream (try first)
-//if the same 24 hour period (set to 6 AM PDT converted to GMT so whatever the hell that is)/ , do not change the existing start time
-//save to json
+
 function updateStreaks(userID, userName, sayItOutLoud = false) {
-    // if the user didn't redeem a channel point reward for it, then there's no need to do all the file manipulation if we've already seen them streak.
-    if (!sayItOutLoud && userIdsWhoAlreadyStreaked[userID]) {
+    if (!sayItOutLoud && streamAttendanceTracker.hasStreaked(userID)) {
         return;
     }
 
-    //read the json file
     let streak_List;
     try {
         streak_List = jsonfile.readFileSync(streak_Path);
@@ -1116,113 +1134,69 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
         console.error(`[Streaks] Failed to read streaks file from ${streak_Path}:`, e.message);
     }
 
-    if (!streak_List) {
+    if (!streak_List || typeof streak_List !== "object") {
         console.warn("[Streaks] Streak data missing or invalid; initializing.");
+        return;
     }
-    else {
-        const say = msg => {
-            if (sayItOutLoud) {
-                postMessage(botID, msg);
-            }
+
+    if (!streak_List.Users) {
+        streak_List.Users = {};
+    }
+
+    const currentStart = parseIsoDateTime(streak_List.Current_Stream?.Start);
+    const lastStart = parseIsoDateTime(streak_List.Last_Stream?.Start);
+    const lastEnd = parseIsoDateTime(streak_List.Last_Stream?.End);
+
+    streamAttendanceTracker.synchronizeSession(streak_List.Current_Stream?.Start);
+
+    if (!sayItOutLoud && streamAttendanceTracker.hasStreaked(userID)) {
+        return;
+    }
+
+    const say = msg => {
+        if (sayItOutLoud) {
+            postMessage(botID, msg);
         }
+    };
 
-        let lastStart = Date.parse(streak_List.Last_Stream.Start);
-        let lastEnd = Date.parse(streak_List.Last_Stream.End);
-        let currentStart = Date.parse(streak_List.Current_Stream.Start)
-        let now = new Date();
-        let userInfo = streak_List.Users[userID];
+    const isNewSession = isNewStreamAttendanceSession(
+        currentStart,
+        lastStart,
+        lastEnd
+    );
 
-        //did not find user, add them to the database
-        if (!userInfo) {
-            streak_List.Users[userID] = { User_Name: `${userName}`, Streak: 1, Best_Streak: 1, Last_Updated: "" };
-            streak_List.Users[userID].Last_Updated = now;
+    const userInfo = streak_List.Users[userID];
+    const progression = calculateUserStreakProgression(
+        userInfo,
+        currentStart,
+        lastStart,
+        isNewSession
+    );
+
+    streak_List.Users[userID] = {
+        User_Name: `${userName}`,
+        Streak: progression.streak,
+        Best_Streak: progression.bestStreak,
+        Last_Updated: progression.lastUpdated
+    };
+
+    switch (progression.status) {
+        case "started":
             say(`@${userName} has just started their watch streak!! this is just the beginning!!`);
-        }
-        //found user, update streak info
-        else {
-
-            //is there an End time specified form last stream? if not, use the backup calculation based on reset time
-            if (!lastEnd) {
-                //get the last reset point
-                let lastReset = new Date();
-                lastReset = Date.parse(lastReset);
-                lastReset = lastReset - (24 * 60 * 60 * 1000);
-                lastReset = new Date(lastReset);
-                lastReset.setHours(13, 0, 0);
-                lastReset = Date.parse(lastReset);
-
-                //check if we are passed the last reset
-                if (((lastStart < lastReset) && (currentStart >= lastReset))) {
-                    const lastUpdated = Date.parse(userInfo.Last_Updated);
-
-                    //streak is still alive!
-                    if ((lastUpdated > lastStart && lastUpdated < currentStart)) {
-                        userInfo.Streak = userInfo.Streak + 1;
-                        if (userInfo.Best_Streak < userInfo.Streak) {
-                            userInfo.Best_Streak = userInfo.Streak
-                        }
-                        userInfo.Last_Updated = now;
-                        say(`@${userName} has watched ${userInfo.Streak} streams in a row!!`);
-                    }
-                    //streak is deadge :(
-                    else if (lastUpdated < lastStart) {
-                        userInfo.Last_Updated = now;
-                        userInfo.Streak = 1
-                        say(`@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
-                    }
-                    else {
-                        say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                        if (userInfo.Best_Streak < userInfo.Streak) {
-                            userInfo.Best_Streak = userInfo.Streak
-                        }
-                    }
-                }
-                else {
-                    say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                    if (userInfo.Best_Streak < userInfo.Streak) {
-                        userInfo.Best_Streak = userInfo.Streak
-                    }
-                }
-            }
-            //check if 5 hours since last stream or for the reset time
-            else {
-                if ((currentStart - lastEnd) > 5 * 60 * 60 * 1000) {
-                    const lastUpdated = Date.parse(userInfo.Last_Updated);
-                    //streak is still alive!
-                    if ((lastUpdated > lastStart && lastUpdated < currentStart)) {
-                        userInfo.Streak = userInfo.Streak + 1;
-                        userInfo.Last_Updated = now;
-                        say(`@${userName} has watched ${userInfo.Streak} streams in a row!!`);
-                        if (userInfo.Best_Streak < userInfo.Streak) {
-                            userInfo.Best_Streak = userInfo.Streak
-                        }
-                    }
-                    //streak is deadge :(
-                    else if (lastUpdated < lastStart) {
-                        userInfo.Last_Updated = now;
-                        userInfo.Streak = 1
-                        say(`@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
-                    }
-                    else {
-                        say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                        if (userInfo.Best_Streak < userInfo.Streak) {
-                            userInfo.Best_Streak = userInfo.Streak
-                        }
-                    }
-                }
-                else {
-                    say(`@${userName} is currently on a ${userInfo.Streak} stream streak!`);
-                    if (userInfo.Best_Streak < userInfo.Streak) {
-                        userInfo.Best_Streak = userInfo.Streak
-                    }
-                }
-            }
-        }
-
-        //write the file
-        writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-        userIdsWhoAlreadyStreaked[userID] = true;
+            break;
+        case "incremented":
+            say(`@${userName} has watched ${progression.streak} streams in a row!!`);
+            break;
+        case "restarted":
+            say(`@${userName} has just re-started their watch streak!! this is just the beginning you can do it this time!!`);
+            break;
+        case "current":
+            say(`@${userName} is currently on a ${progression.streak} stream streak!`);
+            break;
     }
+
+    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
+    streamAttendanceTracker.markStreaked(userID);
 }
 
 function writeAtomicSync(filePath,data,options, retries=3,delay =100){
@@ -1260,7 +1234,7 @@ tesManager.queueSubscription('stream.online', subCondition, event => {
         readFn: jsonfile.readFileSync,
         writeFn: writeAtomicSync,
         onStreakReset: () => {
-            Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
+            streamAttendanceTracker.clear();
         }
     });
     if (!streakResult?.updated) {
@@ -1280,10 +1254,9 @@ tesManager.queueSubscription('stream.offline', subCondition, event => {
         return;
     }
     //update stream times
-    const now = new Date();
-    streak_List.Last_Stream.Backup_End = now;
-    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-    console.log('Stream Ended, logged to streaks')
+    streak_List.Last_Stream.Backup_End = getUtcNowIsoString();
+    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
+    console.log('Stream Ended, logged to streaks');
 });
 
 tesManager.queueSubscription('channel.chat.message', subCondition2, tags => {
@@ -1316,7 +1289,7 @@ async function getStreamInfo(broadcaster_id, type, first) {
                 readFn: jsonfile.readFileSync,
                 writeFn: writeAtomicSync,
                 onStreakReset: () => {
-                    Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
+                    streamAttendanceTracker.clear();
                 }
             });
             if (!streakResult?.updated) {
@@ -1481,22 +1454,25 @@ function postCommand(command) {
     });
 }
 //these two variables track activity and which timed command we are currently at.
-let activityDetection = false
-let commandIndex = 0
+let activityDetection = false;
+let commandIndex = 0;
+
+function handleTimedCommandsInterval() {
+    if (activityDetection === true) {
+        if (timedCommands.length > 0) {
+            postCommand(timedCommands[commandIndex]);
+            commandIndex = safeRotateIndex(commandIndex, timedCommands.length);
+        }
+        activityDetection = false;
+    }
+}
+
+const DURATION_20_MINUTES_MS = 20 * 60 * 1000;
 
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
 let timedCommandsInterval = null;
 if (isMainModule) {
-    timedCommandsInterval = setInterval(() => {
-        if (activityDetection === true) {
-            //send the current command in the rotation to get posted
-            postCommand(timedCommands[commandIndex]);
-            //increment the array index, reset to 0 if past max
-            commandIndex = (commandIndex + 1) % timedCommands.length;
-            //reset activity detection so that timed messages do not get spammed without chat activity
-            activityDetection = false;
-        }
-    }, 1000*60*20);
+    timedCommandsInterval = setInterval(handleTimedCommandsInterval, DURATION_20_MINUTES_MS);
 }
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
@@ -1897,6 +1873,58 @@ async function messageHandler(tags) {
             incentiveData.update('incentive.amount', new_Amount);
             console.info('Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
             postMessage(botID, 'Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
+        }
+    }
+
+    if (command === "!timezone") {
+        if (isbroadcaster === true) {
+            const rawZone = args.slice(1).join(" ").trim();
+            if (!rawZone) {
+                postMessage(botID, `Current streamer timezone is ${getStreamerTimezone()}.`);
+                return;
+            }
+            const success = setStreamerTimezone(rawZone);
+            if (success) {
+                const activeZone = getStreamerTimezone();
+                try {
+                    let streakList = jsonfile.readFileSync(streak_Path);
+                    if (streakList && typeof streakList === "object") {
+                        streakList.Timezone = activeZone;
+                        writeAtomicSync(streak_Path, streakList, { spaces: 2, EOL: "\n" });
+                    }
+                } catch (err) {
+                    console.error("[Streaks] Failed to persist updated timezone to streaks file:", err.message);
+                }
+                postMessage(botID, `Streamer timezone updated to ${activeZone}.`);
+            } else {
+                postMessage(botID, `Invalid timezone or offset "${rawZone}". Please provide a valid IANA zone or UTC offset.`);
+            }
+        }
+    }
+
+    if (command === "!settimezone") {
+        if (isbroadcaster === true) {
+            const rawZone = args.slice(1).join(" ").trim();
+            if (!rawZone) {
+                postMessage(botID, `Usage: !settimezone <timezone or offset> (e.g. America/Chicago, UTC+2, +5, -8)`);
+                return;
+            }
+            const success = setStreamerTimezone(rawZone);
+            if (success) {
+                const activeZone = getStreamerTimezone();
+                try {
+                    let streakList = jsonfile.readFileSync(streak_Path);
+                    if (streakList && typeof streakList === "object") {
+                        streakList.Timezone = activeZone;
+                        writeAtomicSync(streak_Path, streakList, { spaces: 2, EOL: "\n" });
+                    }
+                } catch (err) {
+                    console.error("[Streaks] Failed to persist updated timezone to streaks file:", err.message);
+                }
+                postMessage(botID, `Streamer timezone updated to ${activeZone}.`);
+            } else {
+                postMessage(botID, `Invalid timezone or offset "${rawZone}". Please provide a valid IANA zone or UTC offset.`);
+            }
         }
     }
 

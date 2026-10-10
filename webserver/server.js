@@ -2,6 +2,7 @@ import express from "express"
 import jsonfile from "jsonfile"
 import path from "path"
 import fs from "fs"
+import { getUtcNowIsoString } from "../timeUtils.js"
 
 const app = express();
 const port = process.env.WEB_PORT || 8081;
@@ -357,7 +358,7 @@ app.get("/", (req, res) => {
 
 // Health check endpoint
 app.get("/health", (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', timestamp: getUtcNowIsoString() });
 });
 
 app.get("/chatwidget", (_req, res) => {
