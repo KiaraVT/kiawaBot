@@ -4,11 +4,67 @@ A practical guide for developers, contributors, and maintainers explaining how t
 
 All core time utilities are centralized in [`timeUtils.js`](../timeUtils.js) using [Luxon](https://moment.github.io/luxon/).
 
+> [!NOTE]
+> **Core Principle:** Use **monotonic time** for in-memory timers, intervals, and cooldowns. Use **UTC ISO-8601** for storing data on disk and sending network payloads. Use **streamer local time** for broadcast day cutoffs and attendance streaks.
+
 ---
 
-## 1. Monotonic Time vs. Wall-Clock Time
+## Table of Contents
+
+1. [Quick Start Cheat Sheet](#1-quick-start-cheat-sheet)
+2. [Monotonic Time vs. Wall-Clock Time](#2-monotonic-time-vs-wall-clock-time)
+3. [Choosing the Right Time Representation](#3-choosing-the-right-time-representation)
+4. [Common Pitfalls: Hand-Rolled Time vs. Kiara Bot Utilities](#4-common-pitfalls-hand-rolled-time-vs-kiara-bot-utilities)
+5. [Practical Feature Recipes](#5-practical-feature-recipes)
+   - [Recipe 1: Scheduling Recurring Chat Messages](#recipe-1-scheduling-recurring-chat-messages)
+   - [Recipe 2: Adding a Command Cooldown for Chatters](#recipe-2-adding-a-command-cooldown-for-chatters)
+   - [Recipe 3: Storing and Reading Timestamps in JSON Data Files](#recipe-3-storing-and-reading-timestamps-in-json-data-files)
+   - [Recipe 4: Broadcast Day Sessions & 06:00 AM Cutoff](#recipe-4-broadcast-day-sessions--0600-am-cutoff)
+   - [Recipe 5: Streamer Timezone & Location Privacy](#recipe-5-streamer-timezone--location-privacy)
+6. [Debugging and Testing Time Logic](#6-debugging-and-testing-time-logic)
+7. [Manual Reference: Functions and Constants (`timeUtils.js`)](#7-manual-reference-functions-and-constants-timeutilsjs)
+   - [Constants](#constants)
+   - [Quick Function Index](#quick-function-index)
+   - [Parsing & Formatting](#parsing--formatting)
+   - [Timers & Clocks](#timers--clocks)
+   - [Timezone Management](#timezone-management)
+   - [Streaks & Broadcast Sessions](#streaks--broadcast-sessions)
+   - [Defensive Math](#defensive-math)
+
+---
+
+## 1. Quick Start Cheat Sheet
+
+If you need to quickly look up how to perform a common time task:
+
+| If you want to... | Use this utility | Quick Example |
+|---|---|---|
+| **Add a cooldown between user commands** | `getMonotonicMs()` | `if (getMonotonicMs() - lastUsed < 30000) return;` |
+| **Schedule a recurring message without drift** | `scheduleCompensatedInterval()` | `const timer = scheduleCompensatedInterval(fn, 15 * 60 * 1000);` |
+| **Save a timestamp into a JSON data file** | `getUtcNowIsoString()` | `const nowIso = getUtcNowIsoString();` |
+| **Parse an ISO-8601 string from a file or API** | `parseIsoDateTime()` | `const dt = parseIsoDateTime(record.updatedAt);` |
+| **Format current time for chat or quotes** | `formatQuoteTimestamp()` | `const str = formatQuoteTimestamp(); // "2026-10-10 16:00:00"` |
+| **Display broadcaster timezone in chat** | `getStreamerUtcOffset()` | `const offset = getStreamerUtcOffset(); // "UTC-7"` |
+| **Cycle through an array of announcements** | `safeRotateIndex()` | `index = safeRotateIndex(index, messages.length);` |
+| **Pause execution asynchronously** | `delayMilliseconds()` | `await delayMilliseconds(1000);` |
+| **Calculate the 06:00 AM daily reset cutoff** | `getDailyResetCutoffTime()` | `const cutoff = getDailyResetCutoffTime(streamStart);` |
+
+---
+
+## 2. Monotonic Time vs. Wall-Clock Time
 
 Understanding the difference between **monotonic time** and **wall-clock time** is the foundation for handling time properly in any long-running Node.js application.
+
+```
++--------------------------------------------------------------------------------+
+| Wall-Clock Time (Date.now)         | Monotonic Time (getMonotonicMs)           |
+|------------------------------------|-------------------------------------------|
+| Measures human calendar time       | Measures elapsed time from process start  |
+| Can jump forward or backward (NTP) | Strictly moves forward at a constant rate |
+| Subject to DST and manual shifts   | Immune to system clock adjustments        |
+| Use for: JSON records, APIs, logs  | Use for: Cooldowns, intervals, timeouts   |
++--------------------------------------------------------------------------------+
+```
 
 ### Wall-Clock Time (`Date.now()`, `new Date()`)
 
@@ -35,11 +91,14 @@ Understanding the difference between **monotonic time** and **wall-clock time** 
   - In-memory cache or authentication state expiration.
   - Periodic timers and measuring execution lag.
 
+> [!TIP]
+> **Rule of Thumb:** If you are asking *"How long has passed since X occurred in this process?"*, use monotonic time (`getMonotonicMs()`). If you are asking *"What day and time did X occur in the real world?"*, use UTC wall-clock time (`getUtcNowIsoString()`).
+
 ---
 
-## 2. Choosing the Right Time Representation
+## 3. Choosing the Right Time Representation
 
-Use this quick guide to choose the appropriate time type for your feature:
+Use this decision table to choose the appropriate time type for your feature:
 
 | What your feature is doing | Time Representation | Recommended Utilities | Why this handles time properly |
 |---|---|---|---|
@@ -50,9 +109,9 @@ Use this quick guide to choose the appropriate time type for your feature:
 
 ---
 
-## 3. Hand-Rolled JavaScript vs. Kiara Bot Time Utilities
+## 4. Common Pitfalls: Hand-Rolled Time vs. Kiara Bot Utilities
 
-When writing JavaScript, it is common to reach for native `Date` arithmetic or standard `setInterval`. Below are generic examples comparing common hand-rolled approaches with the specialized utilities provided in `timeUtils.js`.
+When writing JavaScript, it is common to reach for native `Date` arithmetic or standard `setInterval`. Below are generic comparisons showing common hand-rolled pitfalls and how to write them cleanly using `timeUtils.js`.
 
 ### Example 1: Measuring In-Memory Cooldowns and Expiration
 
@@ -244,7 +303,7 @@ When computing a daily reset cutoff (such as 06:00 AM local time):
 
 ---
 
-## 4. Practical Feature Recipes
+## 5. Practical Feature Recipes
 
 ### Recipe 1: Scheduling Recurring Chat Messages
 
@@ -284,6 +343,9 @@ In Node.js, timers do not execute on dedicated hardware threads; they share the 
    - A lagging callback may fire against partially torn-down state, calculating elapsed durations against closed sockets or stale timestamps.
    - Uncleared timer handles keep the Node.js event loop active, preventing the process from exiting cleanly.
    - Clearing the timer handle via `timer.clear()` immediately deregisters the callback from the event loop, ensuring no delayed ticks execute against shutting-down state.
+
+> [!IMPORTANT]
+> Always retain a reference to your interval handles and clear them inside `performGracefulExit()`.
 
 ---
 
@@ -365,8 +427,9 @@ The broadcaster can inspect or update the active timezone via chat commands:
 - `!timezone`: Displays current UTC offset and ISO timestamp without revealing geographic city or region names.
 - `!settimezone <zone>`: Updates the streamer timezone immediately. Accepts IANA names (such as `America/Chicago`, `Asia/Tokyo`), full offsets (`UTC+2`, `+05:00`), bare offsets (`+5`, `-8`), or GMT aliases (`GMT+3`).
 
-#### Location Privacy Principle:
-To protect broadcaster privacy, chat messages should not display geographic city or country names. Output offsets and ISO strings instead:
+> [!NOTE]
+> **Location Privacy Principle:** Chat messages must never display physical city, state, or country names. Output offsets (`UTC-7`) and ISO strings instead:
+
 ```javascript
 import { getStreamerUtcOffset, getStreamerIsoString } from "./timeUtils.js";
 
@@ -381,7 +444,7 @@ postMessage(botID, `Current streamer timezone offset is ${offsetStr} (${isoStr})
 
 ---
 
-## 5. Debugging and Testing Time Logic
+## 6. Debugging and Testing Time Logic
 
 When developing time-based features, you can test edge cases easily without waiting for real time to elapse:
 
@@ -418,16 +481,42 @@ When developing time-based features, you can test edge cases easily without wait
 
 ---
 
-## 6. Manual Reference: Functions and Constants (`timeUtils.js`)
+## 7. Manual Reference: Functions and Constants (`timeUtils.js`)
 
 This section serves as a manual page reference for every exported constant, function, and class in [`timeUtils.js`](../timeUtils.js).
 
 ### Constants
 
-- **`FIVE_HOURS_MS`** (`number` = `18000000`): 5 hours in milliseconds. Used as the primary window to evaluate whether a broadcast is a continuation or a new session.
-- **`TEN_MINUTES_MS`** (`number` = `600000`): 10 minutes in milliseconds. Used for authorization state expiration and short cleanup timeouts.
+- **`FIVE_HOURS_MS`** (`number` = `18000000`): 5 hours in milliseconds. Primary window to evaluate whether a stream reconnection is a continuation.
+- **`TEN_MINUTES_MS`** (`number` = `600000`): 10 minutes in milliseconds. Used for authorization state expiration and short timeouts.
 - **`QUOTE_DATE_FORMAT`** (`string` = `"yyyy-MM-dd HH:mm:ss"`): 24-hour UTC ISO format string with seconds.
 - **`DEFAULT_STREAMER_TIMEZONE`** (`string` = `"America/Los_Angeles"`): Primary fallback IANA timezone for broadcast day calculations.
+
+### Quick Function Index
+
+| Function | Category | Summary |
+|---|---|---|
+| [`parseIsoDateTime`](#parseisodatetimeisostring) | Parsing & Formatting | Parses ISO-8601 string into a UTC Luxon `DateTime` |
+| [`getUtcNowIsoString`](#getutcnowisostringdatetime--null) | Parsing & Formatting | Serializes current or given date to UTC ISO-8601 string |
+| [`formatQuoteTimestamp`](#formatquotetimestampdatetime--null) | Parsing & Formatting | Formats 24-hour UTC timestamp string with seconds |
+| [`getStreamerUtcOffset`](#getstreamerutcoffsetreferencedatetime--datetimenow-zone--null) | Parsing & Formatting | Returns formatted UTC offset (e.g. `"UTC-7"`) |
+| [`getStreamerIsoString`](#getstreamerisostringreferencedatetime--datetimenow-zone--null) | Parsing & Formatting | Returns ISO string with active streamer offset |
+| [`getMonotonicMs`](#getmonotonicms) | Timers & Clocks | High-precision monotonic millisecond clock |
+| [`scheduleCompensatedInterval`](#schedulecompensatedintervalcallback-intervalms-options--) | Timers & Clocks | Drift-compensated periodic interval timer |
+| [`delayMilliseconds`](#delaymillisecondsms) | Timers & Clocks | Asynchronously delays execution (Promise sleep) |
+| [`normalizeTimezone`](#normalizetimezonetimezone) | Timezone Management | Normalizes IANA names and offsets into Luxon zones |
+| [`isValidTimezone`](#isvalidtimezonetimezone) | Timezone Management | Validates whether timezone string is supported |
+| [`getStreamerTimezone`](#getstreamertimezone) | Timezone Management | Gets active streamer IANA timezone identifier |
+| [`setStreamerTimezone`](#setstreamertimezonenewtimezone) | Timezone Management | Sets active streamer timezone at runtime |
+| [`resetStreamerTimezone`](#resetstreamertimezone) | Timezone Management | Resets streamer timezone to default (`America/Los_Angeles`) |
+| [`getDailyResetCutoffTime`](#getdailyresetcutofftimereferencedatetime--datetimenow-zone--null) | Streaks & Sessions | Computes 06:00 AM local reset cutoff converted to UTC |
+| [`isNewStreamAttendanceSession`](#isnewstreamattendancesessionactivestreamstarttime-previousstreamstarttime-previousstreamendtime--null-dailyresetcutoff--null-zone--null) | Streaks & Sessions | Evaluates if stream is a new broadcast day session |
+| [`calculateUserStreakProgression`](#calculateuserstreakprogressionuserinfo-activestreamstarttime-previousstreamstarttime-isnewsession-executiontime--datetimenow) | Streaks & Sessions | Calculates updated streak count and progression status |
+| [`StreamAttendanceSessionTracker`](#streamattendancesessiontracker) | Streaks & Sessions | Session-bound cache of viewers checked in for active stream |
+| [`isWithinRestartWindow`](#iswithinrestartwindowearliertime-latertime-maxdurationms) | Defensive Math | Verifies `0 <= (later - earlier) < maxDurationMs` |
+| [`safeDivideDuration`](#safedividedurationnumerator-divisor-fallback--0) | Defensive Math | Safe division guarding against zero or `NaN` |
+| [`safeRotateIndex`](#saferotateindexcurrentindex-collectionlength) | Defensive Math | Safe modulo index increment protecting empty arrays |
+| [`findOldestTimestampKey`](#findoldesttimestampkeymapwithcreatedat) | Defensive Math | Finds oldest timestamp key in Map for cache eviction |
 
 ---
 
