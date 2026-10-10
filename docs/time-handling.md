@@ -37,16 +37,18 @@ All code across the repository must adhere to the following principles:
 - Restarts within 5 hours: Restarts within 5 hours are treated as continuations of the active session and do not reset attendance counters.
 
 ### 3.4 Dynamic Streamer Timezone
-- The broadcaster may change the active timezone at runtime (e.g. while traveling) using broadcaster-only chat commands:
-  - `!timezone`: Displays current timezone.
-  - `!timezone <zone>` or `!settimezone <zone>`: Updates streamer timezone immediately.
-- Accepted inputs:
+- The broadcaster may view or change the active timezone at runtime using broadcaster-only chat commands:
+  - `!timezone`: Displays the current streamer UTC offset and ISO timestamp without disclosing geographic region (e.g. `UTC-7`). Broadcaster-only (`isbroadcaster === true`).
+  - `!settimezone <zone>`: Updates the streamer timezone immediately and reports the new UTC offset and ISO timestamp. Broadcaster-only (`isbroadcaster === true`).
+- Privacy and location masking: Neither command discloses geographic city or country names; responses provide numeric UTC offsets and ISO timestamps.
+- Accepted inputs for `!settimezone`:
   - IANA timezone identifiers (e.g. `America/Chicago`, `Asia/Tokyo`, `Europe/London`).
   - Full UTC offsets (e.g. `UTC+2`, `UTC-5`, `+05:00`, `-08:00`).
   - Bare offsets (e.g. `+5`, `-8`, `+5:30`).
   - GMT aliases (e.g. `GMT+2`, `GMT-5`).
 - Updated timezones are normalized via `normalizeTimezone()`, applied in memory, and persisted to `Timezone` in `data/streaks.json`.
-- Broadcaster permission: Only users with broadcaster status (`isbroadcaster === true`) can update the timezone.
+- Broadcaster permission: Only users with broadcaster status (`isbroadcaster === true`) can invoke `!timezone` or `!settimezone`.
+- Silent failure for unauthorized users: Non-broadcaster chatters invoking `!timezone` or `!settimezone` fail silently with no chat response emitted.
 
 ### 3.5 Session-Bound Attendance Tracking
 - The `StreamAttendanceSessionTracker` class replaces unmanaged global dictionaries.
@@ -72,6 +74,8 @@ The centralized functions are located in [timeUtils.js](../timeUtils.js):
 - `normalizeTimezone(timezone)`: Canonicalizes IANA zones, bare offsets, and GMT aliases.
 - `isValidTimezone(timezone)`: Validates timezone support.
 - `getStreamerTimezone()`: Returns active streamer timezone.
+- `getStreamerUtcOffset(refTime, zone)`: Returns formatted UTC offset (e.g. "UTC-7") masking geographic location.
+- `getStreamerIsoString(refTime, zone)`: Returns ISO-8601 formatted date/time string with timezone offset.
 - `setStreamerTimezone(newZone)`: Dynamically sets active streamer timezone.
 - `resetStreamerTimezone()`: Resets timezone to default (`America/Los_Angeles`).
 - `getDailyResetCutoffTime(refTime, zone)`: Computes 06:00 local cutoff time converted to UTC.

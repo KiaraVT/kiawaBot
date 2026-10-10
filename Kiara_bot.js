@@ -32,6 +32,8 @@ import {
     calculateUserStreakProgression,
     StreamAttendanceSessionTracker,
     getStreamerTimezone,
+    getStreamerUtcOffset,
+    getStreamerIsoString,
     setStreamerTimezone
 } from "./timeUtils.js";
 
@@ -1878,28 +1880,9 @@ async function messageHandler(tags) {
 
     if (command === "!timezone") {
         if (isbroadcaster === true) {
-            const rawZone = args.slice(1).join(" ").trim();
-            if (!rawZone) {
-                postMessage(botID, `Current streamer timezone is ${getStreamerTimezone()}.`);
-                return;
-            }
-            const success = setStreamerTimezone(rawZone);
-            if (success) {
-                const activeZone = getStreamerTimezone();
-                try {
-                    let streakList = jsonfile.readFileSync(streak_Path);
-                    if (streakList && typeof streakList === "object") {
-                        streakList.Timezone = activeZone;
-                        writeAtomicSync(streak_Path, streakList, { spaces: 2, EOL: "\n" });
-                    }
-                } catch (err) {
-                    console.error("[Streaks] Failed to persist updated timezone to streaks file:", err.message);
-                }
-                postMessage(botID, `Streamer timezone updated to ${activeZone}.`);
-            } else {
-                postMessage(botID, `Invalid timezone or offset "${rawZone}". Please provide a valid IANA zone or UTC offset.`);
-            }
+            postMessage(botID, `Current streamer timezone offset is ${getStreamerUtcOffset()} (${getStreamerIsoString()}).`);
         }
+        return;
     }
 
     if (command === "!settimezone") {
@@ -1921,11 +1904,12 @@ async function messageHandler(tags) {
                 } catch (err) {
                     console.error("[Streaks] Failed to persist updated timezone to streaks file:", err.message);
                 }
-                postMessage(botID, `Streamer timezone updated to ${activeZone}.`);
+                postMessage(botID, `Streamer timezone updated. Current offset: ${getStreamerUtcOffset()} (${getStreamerIsoString()}).`);
             } else {
                 postMessage(botID, `Invalid timezone or offset "${rawZone}". Please provide a valid IANA zone or UTC offset.`);
             }
         }
+        return;
     }
 
     ///////////////////////////////////

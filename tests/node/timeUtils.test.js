@@ -18,6 +18,8 @@ import {
     normalizeTimezone,
     isValidTimezone,
     getStreamerTimezone,
+    getStreamerUtcOffset,
+    getStreamerIsoString,
     setStreamerTimezone,
     resetStreamerTimezone
 } from "../../timeUtils.js";
@@ -309,4 +311,41 @@ test("timeUtils - normalizeTimezone supports bare offsets, full offsets, and GMT
     // Reset back
     resetStreamerTimezone();
     assert.equal(getStreamerTimezone(), initialZone);
+});
+
+test("timeUtils - getStreamerUtcOffset formats UTC offset cleanly and masks location", () => {
+    const octTime = DateTime.fromISO("2026-10-10T12:00:00Z");
+    const janTime = DateTime.fromISO("2026-01-15T12:00:00Z");
+
+    assert.equal(getStreamerUtcOffset(octTime, "America/Los_Angeles"), "UTC-7");
+    assert.equal(getStreamerUtcOffset(janTime, "America/Los_Angeles"), "UTC-8");
+    assert.equal(getStreamerUtcOffset(octTime, "Asia/Tokyo"), "UTC+9");
+    assert.equal(getStreamerUtcOffset(octTime, "Asia/Kolkata"), "UTC+5:30");
+    assert.equal(getStreamerUtcOffset(octTime, "UTC"), "UTC+0");
+
+    resetStreamerTimezone();
+    setStreamerTimezone("+5");
+    assert.equal(getStreamerUtcOffset(), "UTC+5");
+
+    setStreamerTimezone("-4");
+    assert.equal(getStreamerUtcOffset(), "UTC-4");
+
+    resetStreamerTimezone();
+});
+
+test("timeUtils - getStreamerIsoString formats date and time in ISO format for streamer zone", () => {
+    const fixedTime = DateTime.fromISO("2026-10-10T12:00:00.000Z");
+
+    assert.equal(getStreamerIsoString(fixedTime, "America/Los_Angeles"), "2026-10-10T05:00:00.000-07:00");
+    assert.equal(getStreamerIsoString(fixedTime, "Asia/Tokyo"), "2026-10-10T21:00:00.000+09:00");
+    assert.equal(getStreamerIsoString(fixedTime, "UTC"), "2026-10-10T12:00:00.000Z");
+
+    resetStreamerTimezone();
+    setStreamerTimezone("+5");
+    assert.equal(getStreamerIsoString(fixedTime), "2026-10-10T17:00:00.000+05:00");
+
+    resetStreamerTimezone();
+    const currentIso = getStreamerIsoString();
+    assert.ok(typeof currentIso === "string" && currentIso.length > 0);
+    assert.ok(DateTime.fromISO(currentIso).isValid);
 });

@@ -208,6 +208,45 @@ export function getStreamerTimezone() {
 }
 
 /**
+ * Returns the current formatted UTC offset string (e.g. "UTC-7", "UTC+9", "UTC+5:30")
+ * for the active streamer timezone, masking geographic location or region names.
+ *
+ * @param {DateTime} [referenceDateTime] - Reference time. Defaults to now.
+ * @param {string|null} [zone] - Streamer IANA timezone or offset. Defaults to getStreamerTimezone().
+ * @returns {string} Formatted UTC offset string (e.g. "UTC-7").
+ */
+export function getStreamerUtcOffset(referenceDateTime = DateTime.now(), zone = null) {
+    const validDateTime = (referenceDateTime instanceof DateTime && referenceDateTime.isValid)
+        ? referenceDateTime
+        : DateTime.now();
+    const effectiveZone = (typeof zone === "string" && normalizeTimezone(zone))
+        ? normalizeTimezone(zone)
+        : getStreamerTimezone();
+    const localStreamerTime = validDateTime.setZone(effectiveZone);
+    const offsetStr = localStreamerTime.toFormat("Z");
+    return `UTC${offsetStr}`;
+}
+
+/**
+ * Returns the current ISO 8601 formatted date and time string
+ * for the active streamer timezone.
+ *
+ * @param {DateTime} [referenceDateTime] - Reference time. Defaults to now.
+ * @param {string|null} [zone] - Streamer IANA timezone or offset. Defaults to getStreamerTimezone().
+ * @returns {string} ISO 8601 formatted string with timezone offset (e.g. "2026-10-10T12:00:00.000-07:00").
+ */
+export function getStreamerIsoString(referenceDateTime = DateTime.now(), zone = null) {
+    const validDateTime = (referenceDateTime instanceof DateTime && referenceDateTime.isValid)
+        ? referenceDateTime
+        : DateTime.now();
+    const effectiveZone = (typeof zone === "string" && normalizeTimezone(zone))
+        ? normalizeTimezone(zone)
+        : getStreamerTimezone();
+    const localStreamerTime = validDateTime.setZone(effectiveZone);
+    return localStreamerTime.toISO();
+}
+
+/**
  * Updates the active streamer timezone dynamically at runtime (for example, if the broadcaster
  * travels to a different region or changes location mid-stream / after stream start).
  *
