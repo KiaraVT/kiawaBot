@@ -1,112 +1,315 @@
 # Working with Time in Kiara Bot
 
-A practical guide for developers, contributors, and maintainers explaining how to handle time properly in Kiara Bot and how to use the built-in time utilities when adding features or debugging.
+A practical guide for developers, contributors, and maintainers explaining how to handle time properly in Kiara Bot, how monotonic and wall-clock time work, and how to use the built-in time utilities instead of hand-rolling time arithmetic.
 
 All core time utilities are centralized in [`timeUtils.js`](../timeUtils.js) using [Luxon](https://moment.github.io/luxon/).
 
 ---
 
-## 1. How to Handle Time Properly: Choosing the Right Time Representation
+## 1. Monotonic Time vs. Wall-Clock Time
 
-When building a new feature or debugging an existing one, choosing the right way to represent time prevents common bugs like timer drift, timezone confusion, clock skew, or accidental location leaks. Use this guide to pick the right approach for your task:
+Understanding the difference between **monotonic time** and **wall-clock time** is the foundation for handling time properly in any long-running Node.js application.
+
+### Wall-Clock Time (`Date.now()`, `new Date()`)
+
+- **What it is:** The current calendar date and time in the physical world (e.g. `2026-10-10T16:08:00Z`). It is read from the operating system real-time clock.
+- **How it behaves:** Wall-clock time can change unpredictably. It can jump forward or backward when:
+  - Network Time Protocol (NTP) synchronizes the system clock with a time server.
+  - A user or automated script manually adjusts the system clock.
+  - Daylight Saving Time begins or ends (for local representations).
+  - A leap second is applied.
+- **The risk:** If you measure elapsed time by taking `Date.now() - startTime`, an NTP adjustment can produce a negative duration, zero, or an artificial multi-minute jump.
+- **When to use it:** Use wall-clock time when an event needs a human calendar timestamp:
+  - Saving records to disk (e.g. quote timestamps in `data/quotes.json`).
+  - Communicating with external web services (e.g. Twitch or YouTube API payloads).
+  - Displaying dates and times to users in chat or on overlay dashboards.
+
+### Monotonic Time (`performance.now()`, `getMonotonicMs()`)
+
+- **What it is:** A strictly increasing counter measuring time elapsed since a fixed point (typically process start), provided by `performance.timeOrigin + performance.now()`.
+- **How it behaves:** Monotonic means "always moving in one direction." It never jumps backward, never pauses, and ticks forward at a constant rate regardless of what happens to the system clock.
+- **The guarantee:** If $T_2$ is sampled after $T_1$, then $T_2 - T_1$ is guaranteed to be positive and represents the exact physical duration elapsed between the two samples.
+- **When to use it:** Use monotonic time for all runtime intervals and in-memory timing:
+  - Command cooldowns (e.g. 30-second delay between user commands).
+  - Rate limiting and token bucket throttling.
+  - In-memory cache or authentication state expiration.
+  - Periodic timers and measuring execution lag.
+
+---
+
+## 2. Choosing the Right Time Representation
+
+Use this quick guide to choose the appropriate time type for your feature:
 
 | What your feature is doing | Time Representation | Recommended Utilities | Why this handles time properly |
 |---|---|---|---|
-| **Elapsed durations, cooldowns, timers, recurring intervals** | Monotonic Time | `getMonotonicMs()`, `scheduleCompensatedInterval()` | Immune to system clock adjustments, NTP time steps, and daylight saving shifts. Guarantees steady forward progress. |
+| **Elapsed durations, cooldowns, timers, recurring intervals** | Monotonic Time | `getMonotonicMs()`, `scheduleCompensatedInterval()` | Immune to system clock adjustments, NTP steps, and daylight saving shifts. Guarantees steady forward progress. |
 | **Data persistence, JSON files, API payloads, WebSockets** | UTC ISO-8601 | `getUtcNowIsoString()`, `parseIsoDateTime()` | Universal, machine-readable source of truth across systems without timezone or daylight saving ambiguity. |
 | **Stream sessions, attendance streaks, daily check-in resets** | Streamer Local Time | `getDailyResetCutoffTime()`, `getStreamerTimezone()` | Matches real broadcast schedules, allowing overnight streams past midnight to count toward the same broadcast day until 06:00 AM local time. |
 | **Chat outputs, quote timestamps, web overlay text** | Privacy-Safe Display | `formatQuoteTimestamp()`, `getStreamerUtcOffset()`, `getStreamerIsoString()` | Human-readable formatting that protects broadcaster privacy by displaying UTC offsets rather than physical city names. |
 
 ---
 
-## 2. Practical Feature Recipes
+## 3. Hand-Rolled JavaScript vs. Kiara Bot Time Utilities
 
-### Recipe 1: Changing the Frequency of Automated Chat Messages
+When writing JavaScript, it is common to reach for native `Date` arithmetic or standard `setInterval`. Below are generic examples comparing common hand-rolled approaches with the specialized utilities provided in `timeUtils.js`.
 
-Automated chat messages (such as periodic links, rules reminders, or social shoutouts) run on a timer loop in [`Kiara_bot.js`](../Kiara_bot.js).
+### Example 1: Measuring In-Memory Cooldowns and Expiration
 
-Standard JavaScript `setInterval` can drift over weeks of continuous bot uptime due to event-loop delays. Kiara Bot uses `scheduleCompensatedInterval()`, which measures execution lag on each tick and self-corrects the next delay.
+When tracking whether an in-memory action has expired or is on cooldown:
 
-#### How it is currently configured:
-In [`Kiara_bot.js`](../Kiara_bot.js):
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled wall-clock check
+  const cooldowns = new Map();
+  const COOLDOWN_MS = 30000;
+
+  function canExecute(userId) {
+      const lastTime = cooldowns.get(userId) || 0;
+      return (Date.now() - lastTime) >= COOLDOWN_MS;
+  }
+  ```
+  *Why hand-rolling is tricky:* If the system clock steps backward via NTP, `Date.now() - lastTime` evaluates to a negative number, locking the user out for longer than intended.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { getMonotonicMs } from "./timeUtils.js";
+
+  const cooldowns = new Map();
+  const COOLDOWN_MS = 30000;
+
+  function canExecute(userId) {
+      const now = getMonotonicMs();
+      const lastTime = cooldowns.get(userId) || 0;
+      if (now - lastTime >= COOLDOWN_MS) {
+          cooldowns.set(userId, now);
+          return true;
+      }
+      return false;
+  }
+  ```
+  *Why this handles time properly:* `getMonotonicMs()` ticks forward steadily and never steps backward, guaranteeing reliable cooldown expiration.
+
+---
+
+### Example 2: Scheduling Recurring Timers Without Drift
+
+When scheduling a background routine to run at a recurring interval:
+
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled uncompensated timer
+  setInterval(() => {
+      broadcastPeriodicMessage();
+  }, 15 * 60 * 1000);
+  ```
+  *Why hand-rolling is tricky:* Standard `setInterval` guarantees only a minimum delay before callback execution. In Node.js, timer callbacks wait in the event loop queue until synchronous code finishes. If the bot is processing heavy chat bursts or disk writes, the callback fires late. With standard `setInterval`, this delay is not corrected on the next tick, causing the recurring schedule to drift further and further behind over days or weeks of uptime.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { scheduleCompensatedInterval } from "./timeUtils.js";
+
+  const intervalHandle = scheduleCompensatedInterval(() => {
+      broadcastPeriodicMessage();
+  }, 15 * 60 * 1000);
+
+  // During application shutdown:
+  intervalHandle.clear();
+  ```
+  *Why this handles time properly:* `scheduleCompensatedInterval()` samples monotonic time on each tick, calculates execution lag, and adjusts the next timeout (`Math.max(0, intervalMs - drift)`) so the recurring schedule stays synchronized. Calling `intervalHandle.clear()` cleanly stops scheduling.
+
+---
+
+### Example 3: Safely Cycling Through Collections
+
+When rotating through a list of announcements, quotes, or commands:
+
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled modulo increment
+  let currentIndex = 0;
+
+  function getNextItem(items) {
+      const item = items[currentIndex];
+      currentIndex = (currentIndex + 1) % items.length;
+      return item;
+  }
+  ```
+  *Why hand-rolling is tricky:* If `items` is empty (`items.length === 0`), `(currentIndex + 1) % 0` produces `NaN`. Once `currentIndex` becomes `NaN`, all future indexing operations fail.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { safeRotateIndex } from "./timeUtils.js";
+
+  let currentIndex = 0;
+
+  function getNextItem(items) {
+      if (items.length === 0) return null;
+      const item = items[currentIndex];
+      currentIndex = safeRotateIndex(currentIndex, items.length);
+      return item;
+  }
+  ```
+  *Why this handles time properly:* `safeRotateIndex()` guards against zero or negative lengths, safely returning `0` whenever `length <= 0`.
+
+---
+
+### Example 4: Verifying Elapsed Windows Between Two Timestamps
+
+When checking whether two stored ISO timestamps fall within an acceptable window (such as checking whether a disconnected stream restarted within 5 hours):
+
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled difference calculation
+  function isWithinWindow(startIso, endIso, maxWindowMs) {
+      const diff = new Date(endIso).getTime() - new Date(startIso).getTime();
+      return diff < maxWindowMs;
+  }
+  ```
+  *Why hand-rolling is tricky:* If timestamps arrive out of sequence, `diff` is negative. Because any negative number is less than `maxWindowMs`, the condition evaluates to `true` despite the inverted order.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { parseIsoDateTime, isWithinRestartWindow } from "./timeUtils.js";
+
+  function isWithinWindow(startIso, endIso, maxWindowMs) {
+      const start = parseIsoDateTime(startIso);
+      const end = parseIsoDateTime(endIso);
+      return start && end && isWithinRestartWindow(start, end, maxWindowMs);
+  }
+  ```
+  *Why this handles time properly:* `isWithinRestartWindow()` verifies both bounds simultaneously: `0 <= (end - start) < maxWindowMs`.
+
+---
+
+### Example 5: Formatting Timestamps for Chat and Quotes
+
+When generating a date and time string to output in chat or save in a record:
+
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled date string assembly
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  let hours = now.getHours();
+  let ampm = "AM";
+  if (hours >= 12) {
+      ampm = "PM";
+      if (hours > 12) hours -= 12;
+  } else if (hours === 0) {
+      hours = 12;
+  }
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const formatted = `${year}/${month}/${day} ${hours}:${minutes} ${ampm}`;
+  ```
+  *Why hand-rolling is tricky:* Assembling strings manually involves zero-indexed month offsets, padding logic, and tricky 12-hour noon and midnight conversions.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { formatQuoteTimestamp } from "./timeUtils.js";
+
+  // Returns unambiguous 24-hour UTC ISO string: "2026-10-10 12:00:00"
+  const formatted = formatQuoteTimestamp();
+  ```
+  *Why this handles time properly:* `formatQuoteTimestamp()` uses Luxon to output a consistent, unambiguous 24-hour format in UTC.
+
+---
+
+### Example 6: Calculating Daily Resets Across Timezones
+
+When computing a daily reset cutoff (such as 06:00 AM local time):
+
+* **Hand-Rolled JavaScript:**
+  ```javascript
+  // Hand-rolled numeric offset arithmetic
+  function getDailyCutoff(date) {
+      const cutoff = new Date(date);
+      // Hardcoding Pacific Standard Time as UTC-8:
+      cutoff.setUTCHours(6 + 8, 0, 0, 0);
+      return cutoff;
+  }
+  ```
+  *Why hand-rolling is tricky:* Fixed numeric offsets break when a region transitions between Standard Time and Daylight Saving Time (e.g. UTC-8 to UTC-7). They also fail if the broadcaster relocates to another timezone.
+  
+* **Kiara Bot Pattern:**
+  ```javascript
+  import { getDailyResetCutoffTime, getStreamerTimezone } from "./timeUtils.js";
+
+  // Computes 06:00 AM in the active IANA timezone and converts to UTC:
+  const cutoff = getDailyResetCutoffTime(currentDateTime);
+  ```
+  *Why this handles time properly:* `getDailyResetCutoffTime()` uses Luxon with the configured IANA timezone identifier (e.g. `"America/Los_Angeles"`), automatically accounting for Daylight Saving transitions and regional calendar rules.
+
+---
+
+## 4. Practical Feature Recipes
+
+### Recipe 1: Scheduling Recurring Chat Messages
+
+To broadcast recurring links, reminders, or social shoutouts:
+
 ```javascript
-import { scheduleCompensatedInterval, safeRotateIndex } from "./timeUtils.js";
+import { scheduleCompensatedInterval } from "./timeUtils.js";
 
-const DURATION_20_MINUTES_MS = 20 * 60 * 1000;
+const TWENTY_MINUTES_MS = 20 * 60 * 1000;
 
-let timedCommandsInterval = null;
-if (isMainModule) {
-    timedCommandsInterval = scheduleCompensatedInterval(
-        handleTimedCommandsInterval,
-        DURATION_20_MINUTES_MS
-    );
+// Schedule the interval
+const messageTimer = scheduleCompensatedInterval(() => {
+    postMessage(botID, "Follow our social channels and join the community!");
+}, TWENTY_MINUTES_MS);
+
+// Clean up when stopping the bot
+function onShutdown() {
+    if (messageTimer) {
+        messageTimer.clear();
+    }
 }
 ```
 
-#### How to change the interval:
-To change the broadcast cadence (for example, to every 15 minutes or 10 minutes), adjust the duration constant:
-```javascript
-// Change cadence to 15 minutes:
-const DURATION_TIMED_COMMANDS_MS = 15 * 60 * 1000;
+#### Why Background Timers Distort Time Under Processing Lag and During Shutdown:
 
-timedCommandsInterval = scheduleCompensatedInterval(
-    handleTimedCommandsInterval,
-    DURATION_TIMED_COMMANDS_MS
-);
-```
+In Node.js, timers do not execute on dedicated hardware threads; they share the single-threaded event loop. Understanding how event-loop lag affects timers explains why background cleanup is essential:
 
-#### Adding a new recurring announcement:
-If you want to add an independent recurring message (for example, a hydration reminder every 45 minutes):
-```javascript
-const HYDRATION_INTERVAL_MS = 45 * 60 * 1000;
+1. **Processing Lag Delays Timer Callbacks:**
+   When the bot performs heavy work (such as handling high-traffic chat spikes, running disk writes, or processing OAuth flows), the event loop is occupied. A timer scheduled for a specific instant cannot run until current synchronous operations finish. If a callback is delayed by several seconds, any timestamp sampled inside that callback reflects execution lag rather than the scheduled moment.
 
-let hydrationTimer = null;
-if (isMainModule) {
-    hydrationTimer = scheduleCompensatedInterval(() => {
-        postMessage(botID, "kiawaHydrate Time for water! Stay hydrated chat!");
-    }, HYDRATION_INTERVAL_MS);
-}
-```
+2. **Compounding Interval Drift:**
+   With standard `setInterval`, delayed execution shifts the baseline for all subsequent intervals. If each tick is delayed by even 50 milliseconds due to event-loop processing, the timer drifts significantly over days of continuous operation. `scheduleCompensatedInterval()` eliminates this by measuring the drift using monotonic time and shortening the subsequent delay to bring the timer back into sync.
 
-Clear your timer handle during shutdown in `performGracefulExit()` so background timers stop cleanly:
-```javascript
-if (hydrationTimer) {
-    hydrationTimer.clear();
-    hydrationTimer = null;
-}
-```
+3. **Distorted Calculations During Shutdown:**
+   During graceful shutdown routines (such as in `performGracefulExit()`), database files are flushed, network connections close, and caches clear. If background timers remain active:
+   - They continue queueing delayed callbacks during teardown.
+   - A lagging callback may fire against partially torn-down state, calculating elapsed durations against closed sockets or stale timestamps.
+   - Uncleared timer handles keep the Node.js event loop active, preventing the process from exiting cleanly.
+   - Clearing the timer handle via `timer.clear()` immediately deregisters the callback from the event loop, ensuring no delayed ticks execute against shutting-down state.
 
 ---
 
 ### Recipe 2: Adding a Command Cooldown for Chatters
 
-When adding a chat command or minigame (such as `!duel`, `!heist`, or `!trivia`), use a per-user cooldown to prevent spam.
-
-Use monotonic time (`getMonotonicMs()`). Never use wall-clock `Date.now()` for cooldowns, because system clock adjustments can make cooldowns jump backward or expire prematurely.
+To protect minigames or commands from spam:
 
 ```javascript
 import { getMonotonicMs } from "./timeUtils.js";
 
-// Map storing userId -> monotonic timestamp in milliseconds
-const duelCooldowns = new Map();
-const DUEL_COOLDOWN_MS = 30 * 1000; // 30 seconds
+const commandCooldowns = new Map();
+const COOLDOWN_MS = 30 * 1000; // 30 seconds
 
-function handleDuelCommand(userId, userName) {
+function handleChatCommand(userId, userName) {
     const now = getMonotonicMs();
-    const lastUsed = duelCooldowns.get(userId) || 0;
+    const lastUsed = commandCooldowns.get(userId) || 0;
     const elapsed = now - lastUsed;
 
-    if (elapsed < DUEL_COOLDOWN_MS) {
-        const secondsRemaining = Math.ceil((DUEL_COOLDOWN_MS - elapsed) / 1000);
-        postMessage(botID, `@${userName}, please wait ${secondsRemaining}s before dueling again!`);
+    if (elapsed < COOLDOWN_MS) {
+        const remainingSeconds = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+        postMessage(botID, `@${userName}, please wait ${remainingSeconds}s before using this command again!`);
         return;
     }
 
-    // Update cooldown timestamp
-    duelCooldowns.set(userId, now);
-
-    // Proceed with the duel logic...
-    postMessage(botID, `@${userName} steps into the arena!`);
+    commandCooldowns.set(userId, now);
+    postMessage(botID, `@${userName} executed the command!`);
 }
 ```
 
@@ -114,52 +317,35 @@ function handleDuelCommand(userId, userName) {
 
 ### Recipe 3: Storing and Reading Timestamps in JSON Data Files
 
-When persisting events (such as quotes, user rewards, or channel point redemptions) into `data/*.json` files:
+When persisting user activity, quotes, or redemptions:
 
-1. **Always write in UTC ISO-8601:**
-   ```javascript
-   import { getUtcNowIsoString } from "./timeUtils.js";
+```javascript
+import { getUtcNowIsoString, parseIsoDateTime, isWithinRestartWindow } from "./timeUtils.js";
 
-   const newRecord = {
-       userId: "12345",
-       redeemedAt: getUtcNowIsoString() // "2026-10-10T20:30:00.000Z"
-   };
-   ```
+// Storing a new record
+const record = {
+    userId: "12345",
+    updatedAt: getUtcNowIsoString() // "2026-10-10T20:30:00.000Z"
+};
 
-2. **Always parse with `parseIsoDateTime()`:**
-   ```javascript
-   import { parseIsoDateTime } from "./timeUtils.js";
+// Reading and checking elapsed time
+const recordTime = parseIsoDateTime(record.updatedAt);
+const currentTime = parseIsoDateTime(getUtcNowIsoString());
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
-   const redeemedTime = parseIsoDateTime(userRecord.redeemedAt);
-   if (!redeemedTime) {
-       // Graceful fallback if the file had null, empty, or unparseable text
-       console.warn("Invalid timestamp encountered; resetting record.");
-   }
-   ```
-
-3. **Checking elapsed time safely:**
-   Use `isWithinRestartWindow()` to guard against negative durations if timestamps arrive out of sequence:
-   ```javascript
-   import { isWithinRestartWindow, parseIsoDateTime } from "./timeUtils.js";
-
-   const previousTime = parseIsoDateTime(record.lastActionAt);
-   const currentTime = parseIsoDateTime(getUtcNowIsoString());
-   const ONE_HOUR_MS = 60 * 60 * 1000;
-
-   // Returns true only if 0 <= (currentTime - previousTime) < ONE_HOUR_MS
-   if (previousTime && isWithinRestartWindow(previousTime, currentTime, ONE_HOUR_MS)) {
-       console.log("Action occurred within the last hour.");
-   }
-   ```
+if (recordTime && currentTime && isWithinRestartWindow(recordTime, currentTime, ONE_HOUR_MS)) {
+    console.log("Record was updated within the last hour.");
+}
+```
 
 ---
 
-### Recipe 4: Working with Stream Sessions & Streaks
+### Recipe 4: Broadcast Day Sessions & 06:00 AM Cutoff
 
-Stream attendance streaks in Kiara Bot accommodate real broadcast schedules rather than calendar midnights:
+Stream attendance streaks in Kiara Bot follow broadcast habits rather than calendar midnights:
 
 1. **The 06:00 AM Broadcast Cutoff:**
-   - Broadcasts often extend past midnight. A stream starting at 01:00 AM belongs to the preceding evening broadcast day, not the next calendar day.
+   - Broadcasts often extend past midnight. A stream starting at 01:00 AM belongs to the preceding evening broadcast day.
    - The daily cutoff occurs at **06:00:00 local time** in the streamer active timezone (`America/Los_Angeles` by default).
    - Use `getDailyResetCutoffTime(streamStartDateTime)` to compute the 06:00 AM boundary.
 
@@ -193,170 +379,9 @@ const isoStr = getStreamerIsoString();
 postMessage(botID, `Current streamer timezone offset is ${offsetStr} (${isoStr}).`);
 ```
 
-#### Midstream Timezone Relocation Policy:
-If the broadcaster updates their timezone during an ongoing stream (for example, while traveling across the International Date Line):
-1. **Active Stream Safety:** The current stream session remains anchored to its UTC start time (`Current_Stream.Start`). Viewers who already checked in retain their streaks without double-counting.
-2. **Next Stream Governing Zone:** The updated timezone takes effect for the 06:00 AM reset cutoff of future streams starting after the active broadcast ends.
-
 ---
 
-## 3. Comparing Standard JavaScript and Kiara Bot Patterns
-
-Here is how common time operations differ between plain JavaScript and the specialized utilities in `timeUtils.js`:
-
-### Pattern 1: Formatting Timestamps for Chat or Quotes
-
-* **Standard JavaScript Approach:**
-  ```javascript
-  // Manual string formatting with Date
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const date = now.getDate();
-  let hour = now.getHours();
-  let ampm = "AM";
-  if (hour > 12) {
-      hour -= 12;
-      ampm = "PM";
-  }
-  if (hour === 0) {
-      hour = 12;
-  }
-  const minutes = now.getMinutes().toString().padStart(2, "0");
-  const formatted = `${year}/${month}/${date} ${hour}:${minutes} ${ampm}`;
-  ```
-  *Why use the helper:* Manual 12-hour formatting requires special cases around noon and midnight. `formatQuoteTimestamp()` directly produces unambiguous 24-hour UTC timestamps (`"yyyy-MM-dd HH:mm:ss"`).
-
-* **Kiara Bot Pattern:**
-  ```javascript
-  import { formatQuoteTimestamp } from "./timeUtils.js";
-
-  // Formats in clean 24-hour UTC ISO format with seconds: "2026-10-10 12:00:00"
-  const formatted = formatQuoteTimestamp();
-  ```
-
----
-
-### Pattern 2: Measuring Elapsed Windows Between Events
-
-* **Standard JavaScript Approach:**
-  ```javascript
-  // Raw millisecond subtraction
-  const currentStart = new Date(startedAtStr).getTime();
-  const lastStart = new Date(streakList.Current_Stream.Start).getTime();
-
-  if (!isNaN(lastStart) && (currentStart - lastStart) < 5 * 60 * 60 * 1000) {
-      // If currentStart precedes lastStart due to out-of-order events,
-      // the negative difference satisfies the < 5 hours condition unexpectedly.
-  }
-  ```
-  *Why use the helper:* `isWithinRestartWindow()` strictly verifies both lower and upper bounds: `0 <= (currentStart - lastStart) < maxWindowMs`.
-
-* **Kiara Bot Pattern:**
-  ```javascript
-  import { parseIsoDateTime, isWithinRestartWindow, FIVE_HOURS_MS } from "./timeUtils.js";
-
-  const currentStart = parseIsoDateTime(startedAtStr);
-  const lastStart = parseIsoDateTime(streakList.Current_Stream.Start);
-
-  // Verifies that 0 <= (currentStart - lastStart) < FIVE_HOURS_MS
-  if (lastStart && currentStart && isWithinRestartWindow(lastStart, currentStart, FIVE_HOURS_MS)) {
-      // Reconnected within 5-hour window
-  }
-  ```
-
----
-
-### Pattern 3: Periodic Timers and Message Lists
-
-* **Standard JavaScript Approach:**
-  ```javascript
-  // Uncompensated timer with plain modulo
-  setInterval(() => {
-      if (activityDetection) {
-          postCommand(timedCommands[commandIndex]);
-          commandIndex = (commandIndex + 1) % timedCommands.length;
-          activityDetection = false;
-      }
-  }, 1000 * 60 * 20);
-  ```
-  *Why use the helper:* If `timedCommands` is empty, `% 0` yields `NaN`. Additionally, `setInterval` drifts over extended uptime. `scheduleCompensatedInterval()` self-corrects drift on every tick, and `safeRotateIndex()` protects against empty arrays.
-
-* **Kiara Bot Pattern:**
-  ```javascript
-  import { scheduleCompensatedInterval, safeRotateIndex } from "./timeUtils.js";
-
-  const DURATION_20_MINUTES_MS = 20 * 60 * 1000;
-
-  const timerHandle = scheduleCompensatedInterval(() => {
-      if (activityDetection) {
-          if (timedCommands.length > 0) {
-              postCommand(timedCommands[commandIndex]);
-              // Safe against empty arrays: safeRotateIndex returns 0 if length <= 0
-              commandIndex = safeRotateIndex(commandIndex, timedCommands.length);
-          }
-          activityDetection = false;
-      }
-  }, DURATION_20_MINUTES_MS);
-
-  // When shutting down or tearing down tests:
-  timerHandle.clear();
-  ```
-
----
-
-### Pattern 4: Handling Daily Resets Across Timezones
-
-* **Standard JavaScript Approach:**
-  ```javascript
-  // Hardcoded offset calculation
-  const now = new Date();
-  const resetHour = 6;
-  // Hardcoding a fixed offset like -7 or -8 breaks across Daylight Saving transitions
-  // and does not adjust if the broadcaster streams from a different timezone.
-  ```
-  *Why use the helper:* `getDailyResetCutoffTime()` uses Luxon with the configured IANA timezone, automatically accounting for daylight saving shifts and regional rules.
-
-* **Kiara Bot Pattern:**
-  ```javascript
-  import { getDailyResetCutoffTime, getStreamerTimezone } from "./timeUtils.js";
-
-  // Automatically respects active IANA timezone and daylight saving shifts:
-  const cutoffDateTime = getDailyResetCutoffTime(streamStartDateTime);
-  ```
-
----
-
-### Pattern 5: In-Memory Cooldowns and Session Expiry
-
-* **Standard JavaScript Approach:**
-  ```javascript
-  // Wall-clock Date.now() for in-memory timers
-  const session = { createdAt: Date.now() };
-
-  // Later...
-  if (Date.now() - session.createdAt > 10 * 60 * 1000) {
-      // System clock adjustments or NTP sync can cause Date.now() to step backward,
-      // leaving elapsed time negative.
-  }
-  ```
-  *Why use the helper:* Monotonic time strictly increases regardless of wall-clock or NTP adjustments.
-
-* **Kiara Bot Pattern:**
-  ```javascript
-  import { getMonotonicMs, TEN_MINUTES_MS } from "./timeUtils.js";
-
-  const session = { createdAt: getMonotonicMs() };
-
-  // Monotonic time never steps backward:
-  if (getMonotonicMs() - session.createdAt > TEN_MINUTES_MS) {
-      // Expired reliably
-  }
-  ```
-
----
-
-## 4. Debugging and Testing Time Logic
+## 5. Debugging and Testing Time Logic
 
 When developing time-based features, you can test edge cases easily without waiting for real time to elapse:
 
@@ -389,62 +414,291 @@ When developing time-based features, you can test edge cases easily without wait
 3. **Defensive Divisors and Rotation:**
    When looping through arrays of chat messages or dividing elapsed durations:
    - Use `safeRotateIndex(currentIndex, array.length)` to prevent `NaN` or division-by-zero crashes on empty arrays.
-   - Use `safeDivideDuration(elapsed, total, fallback)` to safely calculate progress percentages without zero-division errors.
+   - Use `safeDivideDuration(numerator, divisor, fallback)` to safely calculate progress percentages without zero-division errors.
 
 ---
 
-## 5. Helper Function Reference (`timeUtils.js`)
+## 6. Helper Function Reference (`timeUtils.js`)
 
-A quick reference of the utility functions available for import:
+A quick reference and theoretical code examples for all utility functions exported by [`timeUtils.js`](../timeUtils.js):
 
 ### Parsing & Formatting
-- **`parseIsoDateTime(isoString)`**
-  Parses an ISO-8601 string into a UTC Luxon `DateTime`. Returns `null` for invalid or unparseable input.
-- **`getUtcNowIsoString(dateTime = null)`**
-  Returns a standard ISO-8601 UTC string (for example `"2026-10-10T12:00:00.000Z"`).
-- **`formatQuoteTimestamp(dateTime = null)`**
-  Formats quotes in 24-hour UTC format with seconds (`"yyyy-MM-dd HH:mm:ss"`), avoiding 12-hour noon/midnight ambiguity.
-- **`getStreamerUtcOffset(refTime = null, zone = null)`**
-  Returns formatted UTC offset (for example `"UTC-7"`) masking geographic location.
-- **`getStreamerIsoString(refTime = null, zone = null)`**
-  Returns ISO-8601 date/time string formatted in the streamer local offset.
+
+#### `parseIsoDateTime(isoString)`
+Parses an ISO-8601 string into a UTC Luxon `DateTime` instance. Returns `null` for invalid or unparseable input.
+
+```javascript
+import { parseIsoDateTime } from "./timeUtils.js";
+
+const dateTime = parseIsoDateTime("2026-10-10T16:00:00.000Z");
+if (dateTime) {
+    console.log("UTC hour:", dateTime.hour); // 16
+} else {
+    console.warn("Unparseable timestamp provided.");
+}
+```
+
+#### `getUtcNowIsoString(dateTime = null)`
+Returns a standard ISO-8601 UTC string (for example `"2026-10-10T16:00:00.000Z"`). If a `DateTime` instance is passed, it formats that instance; otherwise, it formats the current time.
+
+```javascript
+import { getUtcNowIsoString } from "./timeUtils.js";
+
+// Generate current UTC timestamp for JSON records
+const timestamp = getUtcNowIsoString();
+console.log("Recorded at:", timestamp);
+```
+
+#### `formatQuoteTimestamp(dateTime = null)`
+Formats timestamps in 24-hour UTC format with seconds (`"yyyy-MM-dd HH:mm:ss"`), avoiding 12-hour noon/midnight ambiguity.
+
+```javascript
+import { formatQuoteTimestamp } from "./timeUtils.js";
+
+// Format current time or an ISO string for quotes or chat
+const formatted = formatQuoteTimestamp();
+console.log(formatted); // "2026-10-10 16:00:00"
+```
+
+#### `getStreamerUtcOffset(refTime = null, zone = null)`
+Returns the formatted UTC offset (for example `"UTC-7"`) for the streamer's active timezone, protecting geographic privacy.
+
+```javascript
+import { getStreamerUtcOffset } from "./timeUtils.js";
+
+const offset = getStreamerUtcOffset();
+console.log(`Current broadcaster offset: ${offset}`);
+```
+
+#### `getStreamerIsoString(refTime = null, zone = null)`
+Returns an ISO-8601 formatted date/time string localized to the streamer's active timezone offset.
+
+```javascript
+import { getStreamerIsoString } from "./timeUtils.js";
+
+const localIso = getStreamerIsoString();
+console.log(`Localized timestamp: ${localIso}`); // "2026-10-10T09:00:00.000-07:00"
+```
+
+---
 
 ### Timers & Clocks
-- **`getMonotonicMs()`**
-  High-precision monotonic millisecond clock via `performance.timeOrigin + performance.now()`. Use for in-memory elapsed times and cooldowns.
-- **`scheduleCompensatedInterval(callback, intervalMs, options = {})`**
-  Drift-compensated periodic timer. Returns `{ clear: Function, unref: Function }`.
-- **`delayMilliseconds(ms)`**
-  Promise-based asynchronous delay helper.
+
+#### `getMonotonicMs()`
+Returns a high-precision monotonic millisecond timestamp via `performance.timeOrigin + performance.now()`. Use for in-memory cooldowns, rate limits, and elapsed duration checks.
+
+```javascript
+import { getMonotonicMs } from "./timeUtils.js";
+
+const start = getMonotonicMs();
+// Perform operation...
+const elapsed = getMonotonicMs() - start;
+console.log(`Execution took ${elapsed.toFixed(2)}ms`);
+```
+
+#### `scheduleCompensatedInterval(callback, intervalMs, options = {})`
+Schedules a recurring task with self-correcting drift compensation. Returns `{ clear: Function, unref: Function }`.
+
+```javascript
+import { scheduleCompensatedInterval } from "./timeUtils.js";
+
+const timer = scheduleCompensatedInterval(() => {
+    console.log("Compensated tick executed.");
+}, 10000);
+
+// Stop the timer
+timer.clear();
+```
+
+#### `delayMilliseconds(ms)`
+Promise-based asynchronous delay helper.
+
+```javascript
+import { delayMilliseconds } from "./timeUtils.js";
+
+async function waitAndRetry() {
+    console.log("Waiting 2 seconds...");
+    await delayMilliseconds(2000);
+    console.log("Done waiting.");
+}
+```
+
+---
 
 ### Timezone Management
-- **`normalizeTimezone(zone)`**
-  Normalizes IANA names, bare offsets (`+5`, `-8`), full offsets (`UTC+2`), and GMT aliases into valid Luxon timezone identifiers.
-- **`isValidTimezone(zone)`**
-  Returns `true` if the timezone string is valid and supported by Luxon.
-- **`getStreamerTimezone()`**
-  Returns the active streamer timezone identifier.
-- **`setStreamerTimezone(newZone)`**
-  Updates the active streamer timezone in memory.
-- **`resetStreamerTimezone()`**
-  Resets streamer timezone to default (`America/Los_Angeles`).
+
+#### `normalizeTimezone(zone)`
+Normalizes IANA names, bare offsets (`+5`, `-8`), full offsets (`UTC+2`), and GMT aliases into valid Luxon timezone identifiers. Returns `null` if invalid.
+
+```javascript
+import { normalizeTimezone } from "./timeUtils.js";
+
+console.log(normalizeTimezone("+5"));         // "UTC+5"
+console.log(normalizeTimezone("GMT-8"));      // "UTC-8"
+console.log(normalizeTimezone("Asia/Tokyo")); // "Asia/Tokyo"
+console.log(normalizeTimezone("invalid"));    // null
+```
+
+#### `isValidTimezone(zone)`
+Returns `true` if the timezone string or offset is recognized and supported by Luxon.
+
+```javascript
+import { isValidTimezone } from "./timeUtils.js";
+
+if (isValidTimezone(userInput)) {
+    console.log("Valid timezone.");
+} else {
+    console.warn("Invalid timezone specified.");
+}
+```
+
+#### `getStreamerTimezone()`
+Returns the active streamer timezone identifier.
+
+```javascript
+import { getStreamerTimezone } from "./timeUtils.js";
+
+const activeZone = getStreamerTimezone();
+console.log(`Active zone: ${activeZone}`); // e.g. "America/Los_Angeles"
+```
+
+#### `setStreamerTimezone(newZone)`
+Updates the active streamer timezone in memory. Returns `true` if updated successfully.
+
+```javascript
+import { setStreamerTimezone } from "./timeUtils.js";
+
+const updated = setStreamerTimezone("America/New_York");
+if (updated) {
+    console.log("Streamer timezone updated.");
+}
+```
+
+#### `resetStreamerTimezone()`
+Resets the streamer timezone back to the configured default (`America/Los_Angeles` or `process.env.STREAMER_TIMEZONE`).
+
+```javascript
+import { resetStreamerTimezone } from "./timeUtils.js";
+
+resetStreamerTimezone();
+console.log("Timezone reset to default.");
+```
+
+---
 
 ### Streaks & Broadcast Sessions
-- **`getDailyResetCutoffTime(refTime = null, zone = null)`**
-  Computes the 06:00:00 AM local reset cutoff converted to UTC.
-- **`isNewStreamAttendanceSession(activeStart, prevStart, prevEnd, cutoff, zone)`**
-  Evaluates whether a stream constitutes a new broadcast day session based on 5-hour gap and 06:00 AM boundary rules.
-- **`calculateUserStreakProgression(userInfo, activeStart, prevStart, isNewSession)`**
-  Calculates next streak count and handles corrupt date recovery.
-- **`StreamAttendanceSessionTracker`**
-  Class managing in-memory set of users who checked in during the active stream session.
+
+#### `getDailyResetCutoffTime(refTime = null, zone = null)`
+Computes the 06:00:00 AM local reset cutoff converted to UTC for the broadcast day corresponding to `refTime`.
+
+```javascript
+import { getDailyResetCutoffTime, parseIsoDateTime } from "./timeUtils.js";
+
+const streamStart = parseIsoDateTime("2026-10-10T02:00:00.000Z");
+const cutoffUtc = getDailyResetCutoffTime(streamStart);
+console.log("Cutoff in UTC:", cutoffUtc.toISO());
+```
+
+#### `isNewStreamAttendanceSession(activeStart, prevStart, prevEnd, cutoff, zone)`
+Evaluates whether a stream constitutes a new broadcast day session based on the 5-hour gap and 06:00 AM boundary rules.
+
+```javascript
+import { isNewStreamAttendanceSession, parseIsoDateTime } from "./timeUtils.js";
+
+const currentStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
+const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
+const prevEnd = parseIsoDateTime("2026-10-09T22:00:00.000Z");
+
+const isNew = isNewStreamAttendanceSession(currentStart, prevStart, prevEnd);
+console.log("Is new session:", isNew); // true
+```
+
+#### `calculateUserStreakProgression(userInfo, activeStart, prevStart, isNewSession)`
+Calculates the next streak count, updates the best streak, and handles corrupt date recovery.
+
+```javascript
+import { calculateUserStreakProgression, parseIsoDateTime } from "./timeUtils.js";
+
+const userStreak = { Streak: 4, Best_Streak: 10, Last_Updated: "2026-10-09T19:00:00.000Z" };
+const activeStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
+const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
+
+const result = calculateUserStreakProgression(userStreak, activeStart, prevStart, true);
+console.log(`New streak: ${result.streak}, status: ${result.status}`);
+```
+
+#### `StreamAttendanceSessionTracker`
+Class managing the in-memory cache of viewers who checked in during the active stream session.
+
+```javascript
+import { StreamAttendanceSessionTracker } from "./timeUtils.js";
+
+const tracker = new StreamAttendanceSessionTracker();
+
+// Synchronize session against current stream start:
+tracker.synchronizeSession("2026-10-10T18:00:00.000Z");
+
+if (!tracker.hasStreaked("user_123")) {
+    tracker.markStreaked("user_123");
+    console.log("Viewer checked in for this stream.");
+}
+```
+
+---
 
 ### Defensive Math
-- **`isWithinRestartWindow(earlier, later, maxDurationMs)`**
-  Returns `true` if `0 <= (later - earlier) < maxDurationMs`. Rejects negative intervals and out-of-order events.
-- **`safeDivideDuration(numerator, divisor, fallback = 0)`**
-  Safe division guarding against division by zero, negative divisors, or `NaN`.
-- **`safeRotateIndex(currentIndex, length)`**
-  Safe modulo index increment protecting against empty arrays (`length <= 0`).
-- **`findOldestTimestampKey(mapWithCreatedAt)`**
-  Finds the oldest key in a Map of objects with numeric `createdAt` properties for LRU/FIFO eviction.
+
+#### `isWithinRestartWindow(earlier, later, maxDurationMs)`
+Returns `true` if `0 <= (later - earlier) < maxDurationMs`. Safely rejects negative intervals and out-of-order events.
+
+```javascript
+import { isWithinRestartWindow, parseIsoDateTime, FIVE_HOURS_MS } from "./timeUtils.js";
+
+const prevEnd = parseIsoDateTime("2026-10-10T12:00:00.000Z");
+const currentStart = parseIsoDateTime("2026-10-10T14:30:00.000Z");
+
+if (isWithinRestartWindow(prevEnd, currentStart, FIVE_HOURS_MS)) {
+    console.log("Reconnected within 5 hours.");
+}
+```
+
+#### `safeDivideDuration(numerator, divisor, fallback = 0)`
+Safe division guarding against division by zero, negative divisors, or `NaN`.
+
+```javascript
+import { safeDivideDuration } from "./timeUtils.js";
+
+const elapsed = 45;
+const total = 100;
+const fraction = safeDivideDuration(elapsed, total, 0);
+console.log(`Progress: ${(fraction * 100).toFixed(0)}%`);
+```
+
+#### `safeRotateIndex(currentIndex, length)`
+Safe modulo index increment protecting against empty collections (`length <= 0`).
+
+```javascript
+import { safeRotateIndex } from "./timeUtils.js";
+
+const messages = ["Hello", "Welcome", "Rules"];
+let index = 0;
+
+// Advances safely to next index; returns 0 if messages is empty
+index = safeRotateIndex(index, messages.length);
+```
+
+#### `findOldestTimestampKey(mapWithCreatedAt)`
+Finds the key associated with the oldest `createdAt` timestamp in a Map for FIFO or LRU cache eviction.
+
+```javascript
+import { findOldestTimestampKey, getMonotonicMs } from "./timeUtils.js";
+
+const activeStates = new Map([
+    ["state_1", { createdAt: getMonotonicMs() - 600000 }],
+    ["state_2", { createdAt: getMonotonicMs() - 300000 }]
+]);
+
+const oldestKey = findOldestTimestampKey(activeStates);
+console.log("Evicting oldest state:", oldestKey); // "state_1"
+activeStates.delete(oldestKey);
+```
