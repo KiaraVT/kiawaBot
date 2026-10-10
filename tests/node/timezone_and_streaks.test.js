@@ -234,3 +234,219 @@ test("Security - messageHandler cleanly separates !timezone (display only) and !
 
     resetStreamerTimezone();
 });
+
+test("Streaks - midstream timezone shift advancing date preserves active and next streaks", () => {
+    resetStreamerTimezone();
+    setStreamerTimezone("America/Los_Angeles");
+
+    // Stream 1 starts Friday 22:00 PDT = Saturday 05:00 UTC
+    const s1Start = DateTime.fromISO("2026-10-10T05:00:00.000Z");
+    const prevStart = s1Start.minus({ days: 1 });
+    const prevEnd = prevStart.plus({ hours: 4 });
+
+    let alice = {
+        User_Name: "synthetic_viewer_alice",
+        Streak: 5,
+        Best_Streak: 5,
+        Last_Updated: prevStart.plus({ hours: 1 }).toISO()
+    };
+
+    const tracker = new StreamAttendanceSessionTracker();
+    tracker.synchronizeSession(s1Start.toISO());
+
+    // Stream 1 check-in before timezone change
+    const isNew1 = isNewStreamAttendanceSession(s1Start, prevStart, prevEnd);
+    assert.equal(isNew1, true);
+
+    const checkin1 = calculateUserStreakProgression(alice, s1Start, prevStart, isNew1, s1Start.plus({ minutes: 30 }));
+    assert.equal(checkin1.streak, 6);
+    assert.equal(checkin1.status, "incremented");
+
+    alice.Streak = checkin1.streak;
+    alice.Best_Streak = checkin1.bestStreak;
+    alice.Last_Updated = checkin1.lastUpdated;
+    tracker.markStreaked("synthetic_viewer_alice");
+
+    // Midstream: Broadcaster changes timezone to Tokyo (UTC+9), advancing local date to Saturday afternoon
+    setStreamerTimezone("Asia/Tokyo");
+    assert.equal(getStreamerTimezone(), "Asia/Tokyo");
+
+    // Alice chats again after the timezone change: must remain current at streak 6
+    const isNew1Post = isNewStreamAttendanceSession(s1Start, prevStart, prevEnd);
+    const checkin1Again = calculateUserStreakProgression(alice, s1Start, prevStart, isNew1Post, s1Start.plus({ hours: 1 }));
+    assert.equal(checkin1Again.streak, 6, "Streak must not be degraded on repeated messages after timezone change");
+    assert.equal(checkin1Again.status, "current");
+
+    // Stream 1 ends at 09:00 UTC; Stream 2 starts Sunday 03:00 UTC (18h gap > 5h)
+    const s1End = s1Start.plus({ hours: 4 });
+    const s2Start = s1End.plus({ hours: 18 });
+    tracker.synchronizeSession(s2Start.toISO());
+
+    const isNew2 = isNewStreamAttendanceSession(s2Start, s1Start, s1End);
+    assert.equal(isNew2, true);
+
+    // Alice checks in during Stream 2: streak must increment to 7
+    const checkin2 = calculateUserStreakProgression(alice, s2Start, s1Start, isNew2, s2Start.plus({ minutes: 30 }));
+    assert.equal(checkin2.streak, 7, "Streak must advance normally on next stream following midstream timezone change");
+    assert.equal(checkin2.status, "incremented");
+
+    resetStreamerTimezone();
+});
+
+test("Streaks - midstream timezone shift retreating date preserves active and next streaks", () => {
+    resetStreamerTimezone();
+    setStreamerTimezone("Asia/Tokyo");
+
+    // Stream 1 starts Saturday 11:00 JST = Saturday 02:00 UTC
+    const s1Start = DateTime.fromISO("2026-10-10T02:00:00.000Z");
+    const prevStart = s1Start.minus({ days: 1 });
+    const prevEnd = prevStart.plus({ hours: 4 });
+
+    let charlie = {
+        User_Name: "synthetic_viewer_charlie",
+        Streak: 8,
+        Best_Streak: 8,
+        Last_Updated: prevStart.plus({ hours: 1 }).toISO()
+    };
+
+    const isNew1 = isNewStreamAttendanceSession(s1Start, prevStart, prevEnd);
+    assert.equal(isNew1, true);
+
+    const checkin1 = calculateUserStreakProgression(charlie, s1Start, prevStart, isNew1, s1Start.plus({ minutes: 30 }));
+    assert.equal(checkin1.streak, 9);
+    assert.equal(checkin1.status, "incremented");
+
+    charlie.Streak = checkin1.streak;
+    charlie.Best_Streak = checkin1.bestStreak;
+    charlie.Last_Updated = checkin1.lastUpdated;
+
+    // Midstream: Broadcaster changes timezone to Honolulu (UTC-10), moving local date backward to Friday afternoon
+    setStreamerTimezone("Pacific/Honolulu");
+    assert.equal(getStreamerTimezone(), "Pacific/Honolulu");
+
+    // Charlie chats again in same stream: must stay at streak 9
+    const checkin1Again = calculateUserStreakProgression(charlie, s1Start, prevStart, isNew1, s1Start.plus({ hours: 1 }));
+    assert.equal(checkin1Again.streak, 9, "Streak must not decrement when local date shifts backward");
+    assert.equal(checkin1Again.status, "current");
+
+    // Stream 1 ends at 06:00 UTC; Stream 2 starts Sunday 00:00 UTC (Saturday 14:00 HST)
+    const s1End = s1Start.plus({ hours: 4 });
+    const s2Start = s1End.plus({ hours: 18 });
+
+    const isNew2 = isNewStreamAttendanceSession(s2Start, s1Start, s1End);
+    assert.equal(isNew2, true);
+
+    const checkin2 = calculateUserStreakProgression(charlie, s2Start, s1Start, isNew2, s2Start.plus({ minutes: 30 }));
+    assert.equal(checkin2.streak, 10, "Streak must increment normally on subsequent broadcast");
+    assert.equal(checkin2.status, "incremented");
+
+    resetStreamerTimezone();
+});
+
+test("Streaks - midstream traversal across International Date Line preserves streak progression", () => {
+    resetStreamerTimezone();
+
+    // Part A: Westbound across Date Line (Honolulu UTC-10 to Auckland UTC+13, skipping local calendar date)
+    setStreamerTimezone("Pacific/Honolulu");
+    const s1Start = DateTime.fromISO("2026-10-10T06:00:00.000Z");
+    const s1End = DateTime.fromISO("2026-10-10T10:00:00.000Z");
+
+    let dana = {
+        User_Name: "synthetic_viewer_dana",
+        Streak: 12,
+        Best_Streak: 12,
+        Last_Updated: "2026-10-09T06:30:00.000Z"
+    };
+
+    const isNewA1 = isNewStreamAttendanceSession(s1Start, s1Start.minus({ days: 1 }), s1Start.minus({ days: 1, hours: 20 }));
+    const checkinA1 = calculateUserStreakProgression(dana, s1Start, s1Start.minus({ days: 1 }), isNewA1, s1Start.plus({ minutes: 15 }));
+    assert.equal(checkinA1.streak, 13);
+    assert.equal(checkinA1.status, "incremented");
+
+    dana.Streak = checkinA1.streak;
+    dana.Best_Streak = checkinA1.bestStreak;
+    dana.Last_Updated = checkinA1.lastUpdated;
+
+    // Broadcaster updates timezone to Auckland (local date skips ahead)
+    setStreamerTimezone("Pacific/Auckland");
+    assert.equal(getStreamerTimezone(), "Pacific/Auckland");
+
+    const s2Start = s1End.plus({ hours: 16 });
+    const isNewA2 = isNewStreamAttendanceSession(s2Start, s1Start, s1End);
+    assert.equal(isNewA2, true, "16-hour gap must be recognized as new session across Date Line");
+
+    const checkinA2 = calculateUserStreakProgression(dana, s2Start, s1Start, isNewA2, s2Start.plus({ minutes: 30 }));
+    assert.equal(checkinA2.streak, 14, "Streak must increment across Date Line skip");
+    assert.equal(checkinA2.status, "incremented");
+
+    // Part B: Eastbound across Date Line (Auckland UTC+13 to Honolulu UTC-10, repeating local calendar date)
+    const s3Start = DateTime.fromISO("2026-10-15T01:00:00.000Z");
+    const s3End = DateTime.fromISO("2026-10-15T05:00:00.000Z");
+    const s3PrevStart = s3Start.minus({ days: 1 });
+
+    let evan = {
+        User_Name: "synthetic_viewer_evan",
+        Streak: 20,
+        Best_Streak: 20,
+        Last_Updated: s3PrevStart.plus({ hours: 1 }).toISO()
+    };
+
+    setStreamerTimezone("Pacific/Auckland");
+
+    const checkinB1 = calculateUserStreakProgression(evan, s3Start, s3PrevStart, true, s3Start.plus({ minutes: 15 }));
+    assert.equal(checkinB1.streak, 21);
+    evan.Streak = checkinB1.streak;
+    evan.Best_Streak = checkinB1.bestStreak;
+    evan.Last_Updated = checkinB1.lastUpdated;
+
+    // Midstream shift to Honolulu (local date repeats)
+    setStreamerTimezone("Pacific/Honolulu");
+    assert.equal(getStreamerTimezone(), "Pacific/Honolulu");
+
+    const s4Start = s3End.plus({ hours: 19 });
+    const isNewB2 = isNewStreamAttendanceSession(s4Start, s3Start, s3End);
+    assert.equal(isNewB2, true, "19-hour gap must be recognized as new session on Date Line repeat");
+
+    const checkinB2 = calculateUserStreakProgression(evan, s4Start, s3Start, isNewB2, s4Start.plus({ minutes: 30 }));
+    assert.equal(checkinB2.streak, 22, "Streak must increment across Date Line repeat");
+    assert.equal(checkinB2.status, "incremented");
+
+    resetStreamerTimezone();
+});
+
+test("Streaks - midstream timezone shift crossing 06:00 daily cutoff does not downgrade streaked users", () => {
+    resetStreamerTimezone();
+    setStreamerTimezone("America/Los_Angeles");
+
+    // Stream starts at 04:00 AM PDT (before 06:00 cutoff) = 11:00 UTC
+    const s1Start = DateTime.fromISO("2026-10-10T11:00:00.000Z");
+    const prevStart = s1Start.minus({ days: 1 });
+    const prevEnd = prevStart.plus({ hours: 4 });
+
+    let frank = {
+        User_Name: "synthetic_viewer_frank",
+        Streak: 3,
+        Best_Streak: 3,
+        Last_Updated: prevStart.plus({ hours: 1 }).toISO()
+    };
+
+    const isNew = isNewStreamAttendanceSession(s1Start, prevStart, prevEnd);
+    const checkin1 = calculateUserStreakProgression(frank, s1Start, prevStart, isNew, s1Start.plus({ minutes: 30 }));
+    assert.equal(checkin1.streak, 4);
+    assert.equal(checkin1.status, "incremented");
+
+    frank.Streak = checkin1.streak;
+    frank.Best_Streak = checkin1.bestStreak;
+    frank.Last_Updated = checkin1.lastUpdated;
+
+    // Midstream: Broadcaster changes timezone to Chicago (UTC-5), shifting local time past 06:00 AM cutoff to 07:30 AM CDT
+    setStreamerTimezone("America/Chicago");
+    assert.equal(getStreamerTimezone(), "America/Chicago");
+
+    // Frank chats again after the local cutoff shift: streak must stay current at 4
+    const checkinAgain = calculateUserStreakProgression(frank, s1Start, prevStart, isNew, s1Start.plus({ hours: 1, minutes: 45 }));
+    assert.equal(checkinAgain.streak, 4, "User must remain at incremented streak after local cutoff transition");
+    assert.equal(checkinAgain.status, "current");
+
+    resetStreamerTimezone();
+});
