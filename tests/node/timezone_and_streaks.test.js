@@ -186,3 +186,40 @@ test("Kiara_bot - exports streamAttendanceTracker, updateStreaks, handleTimedCom
     assert.equal(typeof kiaraBot.handleTimedCommandsInterval, "function");
     assert.equal(typeof kiaraBot.messageHandler, "function");
 });
+
+test("Security - messageHandler prevents non-broadcasters from modifying timezone", async () => {
+    const { messageHandler } = await import("../../Kiara_bot.js");
+    resetStreamerTimezone();
+    assert.equal(getStreamerTimezone(), "America/Los_Angeles");
+
+    // Attacker: itsjustatank with moderator or VIP badge
+    await messageHandler({
+        chatter_user_id: "12345",
+        chatter_user_name: "itsjustatank",
+        chatter_user_login: "itsjustatank",
+        message: { text: "!settimezone Asia/Tokyo" },
+        badges: [{ set_id: "moderator", id: "1" }]
+    });
+    assert.equal(getStreamerTimezone(), "America/Los_Angeles", "Moderator must not be able to change timezone");
+
+    await messageHandler({
+        chatter_user_id: "12345",
+        chatter_user_name: "itsjustatank",
+        chatter_user_login: "itsjustatank",
+        message: { text: "!timezone +5" },
+        badges: [{ set_id: "vip", id: "1" }]
+    });
+    assert.equal(getStreamerTimezone(), "America/Los_Angeles", "VIP must not be able to change timezone");
+
+    // Legitimate broadcaster with broadcaster badge
+    await messageHandler({
+        chatter_user_id: "99999",
+        chatter_user_name: "Kiara",
+        chatter_user_login: "kiaravt",
+        message: { text: "!settimezone Asia/Tokyo" },
+        badges: [{ set_id: "broadcaster", id: "1" }]
+    });
+    assert.equal(getStreamerTimezone(), "Asia/Tokyo", "Broadcaster must be permitted to change timezone");
+
+    resetStreamerTimezone();
+});
