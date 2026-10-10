@@ -418,287 +418,388 @@ When developing time-based features, you can test edge cases easily without wait
 
 ---
 
-## 6. Helper Function Reference (`timeUtils.js`)
+## 6. Manual Reference: Functions and Constants (`timeUtils.js`)
 
-A quick reference and theoretical code examples for all utility functions exported by [`timeUtils.js`](../timeUtils.js):
+This section serves as a manual page reference for every exported constant, function, and class in [`timeUtils.js`](../timeUtils.js).
+
+### Constants
+
+- **`FIVE_HOURS_MS`** (`number` = `18000000`): 5 hours in milliseconds. Used as the primary window to evaluate whether a broadcast is a continuation or a new session.
+- **`TEN_MINUTES_MS`** (`number` = `600000`): 10 minutes in milliseconds. Used for authorization state expiration and short cleanup timeouts.
+- **`QUOTE_DATE_FORMAT`** (`string` = `"yyyy-MM-dd HH:mm:ss"`): 24-hour UTC ISO format string with seconds.
+- **`DEFAULT_STREAMER_TIMEZONE`** (`string` = `"America/Los_Angeles"`): Primary fallback IANA timezone for broadcast day calculations.
+
+---
 
 ### Parsing & Formatting
 
 #### `parseIsoDateTime(isoString)`
-Parses an ISO-8601 string into a UTC Luxon `DateTime` instance. Returns `null` for invalid or unparseable input.
+- **Synopsis:** `parseIsoDateTime(isoString) -> DateTime | null`
+- **Description:** Parses an ISO-8601 formatted string into a UTC Luxon `DateTime` instance. Trims leading and trailing whitespace. Returns `null` if the input is not a string, empty, or unparseable.
+- **Parameters:**
+  - `isoString` (`string | null | undefined`): ISO formatted date string.
+- **Returns:** `DateTime | null`: Valid Luxon `DateTime` in UTC, or `null`.
+- **Example:**
+  ```javascript
+  import { parseIsoDateTime } from "./timeUtils.js";
 
-```javascript
-import { parseIsoDateTime } from "./timeUtils.js";
-
-const dateTime = parseIsoDateTime("2026-10-10T16:00:00.000Z");
-if (dateTime) {
-    console.log("UTC hour:", dateTime.hour); // 16
-} else {
-    console.warn("Unparseable timestamp provided.");
-}
-```
+  const dt = parseIsoDateTime("2026-10-10T16:00:00.000Z");
+  if (dt) {
+      console.log("UTC hour:", dt.hour); // 16
+  } else {
+      console.warn("Invalid ISO timestamp.");
+  }
+  ```
 
 #### `getUtcNowIsoString(dateTime = null)`
-Returns a standard ISO-8601 UTC string (for example `"2026-10-10T16:00:00.000Z"`). If a `DateTime` instance is passed, it formats that instance; otherwise, it formats the current time.
+- **Synopsis:** `getUtcNowIsoString(dateTime) -> string`
+- **Description:** Returns a standard ISO-8601 UTC string for storage or API responses. If a valid `DateTime` instance is provided, it converts it to UTC and serializes it; otherwise, it serializes the current instant.
+- **Parameters:**
+  - `dateTime` (`DateTime | null | undefined`, optional): Optional Luxon `DateTime` instance. Defaults to current time.
+- **Returns:** `string`: ISO-8601 UTC string (e.g. `"2026-10-10T16:00:00.000Z"`).
+- **Example:**
+  ```javascript
+  import { getUtcNowIsoString } from "./timeUtils.js";
 
-```javascript
-import { getUtcNowIsoString } from "./timeUtils.js";
-
-// Generate current UTC timestamp for JSON records
-const timestamp = getUtcNowIsoString();
-console.log("Recorded at:", timestamp);
-```
+  const currentUtcIso = getUtcNowIsoString();
+  console.log("Saved at:", currentUtcIso);
+  ```
 
 #### `formatQuoteTimestamp(dateTime = null)`
-Formats timestamps in 24-hour UTC format with seconds (`"yyyy-MM-dd HH:mm:ss"`), avoiding 12-hour noon/midnight ambiguity.
+- **Synopsis:** `formatQuoteTimestamp(dateTime) -> string`
+- **Description:** Formats a timestamp for quote records and chat displays using 24-hour UTC format with seconds (`"yyyy-MM-dd HH:mm:ss"`), eliminating 12-hour AM/PM rollover ambiguity.
+- **Parameters:**
+  - `dateTime` (`DateTime | string | null | undefined`, optional): Optional `DateTime` instance or ISO string. Defaults to now.
+- **Returns:** `string`: Formatted string in `"yyyy-MM-dd HH:mm:ss"` UTC.
+- **Example:**
+  ```javascript
+  import { formatQuoteTimestamp } from "./timeUtils.js";
 
-```javascript
-import { formatQuoteTimestamp } from "./timeUtils.js";
+  const formatted = formatQuoteTimestamp();
+  console.log(formatted); // "2026-10-10 16:00:00"
+  ```
 
-// Format current time or an ISO string for quotes or chat
-const formatted = formatQuoteTimestamp();
-console.log(formatted); // "2026-10-10 16:00:00"
-```
+#### `getStreamerUtcOffset(referenceDateTime = DateTime.now(), zone = null)`
+- **Synopsis:** `getStreamerUtcOffset(referenceDateTime, zone) -> string`
+- **Description:** Returns the formatted UTC offset string (e.g. `"UTC-7"`, `"UTC+9"`) for the streamer's active timezone, masking geographic location and region names to preserve broadcaster privacy.
+- **Parameters:**
+  - `referenceDateTime` (`DateTime`, optional): Reference time for offset evaluation. Defaults to now.
+  - `zone` (`string | null`, optional): Target timezone or offset. Defaults to `getStreamerTimezone()`.
+- **Returns:** `string`: Formatted UTC offset string (e.g. `"UTC-7"`).
+- **Example:**
+  ```javascript
+  import { getStreamerUtcOffset } from "./timeUtils.js";
 
-#### `getStreamerUtcOffset(refTime = null, zone = null)`
-Returns the formatted UTC offset (for example `"UTC-7"`) for the streamer's active timezone, protecting geographic privacy.
+  const offset = getStreamerUtcOffset();
+  console.log(`Current offset: ${offset}`); // "UTC-7"
+  ```
 
-```javascript
-import { getStreamerUtcOffset } from "./timeUtils.js";
+#### `getStreamerIsoString(referenceDateTime = DateTime.now(), zone = null)`
+- **Synopsis:** `getStreamerIsoString(referenceDateTime, zone) -> string`
+- **Description:** Returns an ISO-8601 formatted date and time string localized to the streamer's active timezone offset.
+- **Parameters:**
+  - `referenceDateTime` (`DateTime`, optional): Reference time. Defaults to now.
+  - `zone` (`string | null`, optional): Target timezone or offset. Defaults to `getStreamerTimezone()`.
+- **Returns:** `string`: ISO-8601 formatted string with offset (e.g. `"2026-10-10T12:00:00.000-07:00"`).
+- **Example:**
+  ```javascript
+  import { getStreamerIsoString } from "./timeUtils.js";
 
-const offset = getStreamerUtcOffset();
-console.log(`Current broadcaster offset: ${offset}`);
-```
-
-#### `getStreamerIsoString(refTime = null, zone = null)`
-Returns an ISO-8601 formatted date/time string localized to the streamer's active timezone offset.
-
-```javascript
-import { getStreamerIsoString } from "./timeUtils.js";
-
-const localIso = getStreamerIsoString();
-console.log(`Localized timestamp: ${localIso}`); // "2026-10-10T09:00:00.000-07:00"
-```
+  const localIso = getStreamerIsoString();
+  console.log("Local time:", localIso);
+  ```
 
 ---
 
 ### Timers & Clocks
 
 #### `getMonotonicMs()`
-Returns a high-precision monotonic millisecond timestamp via `performance.timeOrigin + performance.now()`. Use for in-memory cooldowns, rate limits, and elapsed duration checks.
+- **Synopsis:** `getMonotonicMs() -> number`
+- **Description:** Returns the current time in monotonic milliseconds using `performance.timeOrigin + performance.now()`. Immune to system wall-clock steps, manual adjustments, and NTP corrections.
+- **Parameters:** None.
+- **Returns:** `number`: Monotonic time in milliseconds on the epoch scale.
+- **Example:**
+  ```javascript
+  import { getMonotonicMs } from "./timeUtils.js";
 
-```javascript
-import { getMonotonicMs } from "./timeUtils.js";
-
-const start = getMonotonicMs();
-// Perform operation...
-const elapsed = getMonotonicMs() - start;
-console.log(`Execution took ${elapsed.toFixed(2)}ms`);
-```
+  const start = getMonotonicMs();
+  // Execute operation...
+  const elapsed = getMonotonicMs() - start;
+  console.log(`Operation took ${elapsed.toFixed(2)}ms`);
+  ```
 
 #### `scheduleCompensatedInterval(callback, intervalMs, options = {})`
-Schedules a recurring task with self-correcting drift compensation. Returns `{ clear: Function, unref: Function }`.
+- **Synopsis:** `scheduleCompensatedInterval(callback, intervalMs, options) -> { clear: Function, unref: Function }`
+- **Description:** Schedules a recurring callback with event-loop drift compensation. Measures execution drift on each tick and self-corrects subsequent timeouts to keep cadence steady over long uptimes.
+- **Parameters:**
+  - `callback` (`Function`): Function to execute periodically.
+  - `intervalMs` (`number`): Recurrence interval in milliseconds. Defaults to 1000 if invalid or <= 0.
+  - `options` (`object`, optional): Optional configuration object.
+  - `options.nowFn` (`Function`, optional): Monotonic clock provider. Defaults to `getMonotonicMs`.
+- **Returns:** `{ clear: Function, unref: Function }`: Control handles to stop or unref the timer.
+- **Example:**
+  ```javascript
+  import { scheduleCompensatedInterval } from "./timeUtils.js";
 
-```javascript
-import { scheduleCompensatedInterval } from "./timeUtils.js";
+  const timer = scheduleCompensatedInterval(() => {
+      console.log("Executing periodic task.");
+  }, 10000);
 
-const timer = scheduleCompensatedInterval(() => {
-    console.log("Compensated tick executed.");
-}, 10000);
-
-// Stop the timer
-timer.clear();
-```
+  // Stop timer during shutdown:
+  timer.clear();
+  ```
 
 #### `delayMilliseconds(ms)`
-Promise-based asynchronous delay helper.
+- **Synopsis:** `delayMilliseconds(ms) -> Promise<void>`
+- **Description:** Asynchronously pauses execution for the specified duration using a Promise. Safe against negative or invalid millisecond values.
+- **Parameters:**
+  - `ms` (`number`): Milliseconds to delay.
+- **Returns:** `Promise<void>`: Resolves after the specified delay.
+- **Example:**
+  ```javascript
+  import { delayMilliseconds } from "./timeUtils.js";
 
-```javascript
-import { delayMilliseconds } from "./timeUtils.js";
-
-async function waitAndRetry() {
-    console.log("Waiting 2 seconds...");
-    await delayMilliseconds(2000);
-    console.log("Done waiting.");
-}
-```
+  async function waitBriefly() {
+      console.log("Pausing 1 second...");
+      await delayMilliseconds(1000);
+      console.log("Resumed execution.");
+  }
+  ```
 
 ---
 
 ### Timezone Management
 
-#### `normalizeTimezone(zone)`
-Normalizes IANA names, bare offsets (`+5`, `-8`), full offsets (`UTC+2`), and GMT aliases into valid Luxon timezone identifiers. Returns `null` if invalid.
+#### `normalizeTimezone(timezone)`
+- **Synopsis:** `normalizeTimezone(timezone) -> string | null`
+- **Description:** Normalizes and validates a timezone identifier or UTC offset into a recognized Luxon zone. Supports IANA names (e.g. `"America/Los_Angeles"`), full offsets (e.g. `"UTC+2"`, `"+05:00"`), bare offsets (e.g. `"+5"`, `"-8"`), and GMT aliases (e.g. `"GMT+2"`).
+- **Parameters:**
+  - `timezone` (`string | null | undefined`): Timezone string or offset to normalize.
+- **Returns:** `string | null`: Canonical timezone string recognized by Luxon, or `null` if invalid.
+- **Example:**
+  ```javascript
+  import { normalizeTimezone } from "./timeUtils.js";
 
-```javascript
-import { normalizeTimezone } from "./timeUtils.js";
+  console.log(normalizeTimezone("+5"));         // "UTC+5"
+  console.log(normalizeTimezone("GMT-8"));      // "UTC-8"
+  console.log(normalizeTimezone("Asia/Tokyo")); // "Asia/Tokyo"
+  console.log(normalizeTimezone("invalid"));    // null
+  ```
 
-console.log(normalizeTimezone("+5"));         // "UTC+5"
-console.log(normalizeTimezone("GMT-8"));      // "UTC-8"
-console.log(normalizeTimezone("Asia/Tokyo")); // "Asia/Tokyo"
-console.log(normalizeTimezone("invalid"));    // null
-```
+#### `isValidTimezone(timezone)`
+- **Synopsis:** `isValidTimezone(timezone) -> boolean`
+- **Description:** Validates whether a given timezone string or offset is recognized and supported by Luxon.
+- **Parameters:**
+  - `timezone` (`string | null | undefined`): Timezone string or offset to validate.
+- **Returns:** `boolean`: `true` if recognized, `false` otherwise.
+- **Example:**
+  ```javascript
+  import { isValidTimezone } from "./timeUtils.js";
 
-#### `isValidTimezone(zone)`
-Returns `true` if the timezone string or offset is recognized and supported by Luxon.
-
-```javascript
-import { isValidTimezone } from "./timeUtils.js";
-
-if (isValidTimezone(userInput)) {
-    console.log("Valid timezone.");
-} else {
-    console.warn("Invalid timezone specified.");
-}
-```
+  if (isValidTimezone(input)) {
+      console.log("Timezone is valid.");
+  }
+  ```
 
 #### `getStreamerTimezone()`
-Returns the active streamer timezone identifier.
+- **Synopsis:** `getStreamerTimezone() -> string`
+- **Description:** Retrieves the currently active streamer timezone identifier.
+- **Parameters:** None.
+- **Returns:** `string`: Active IANA timezone string or normalized offset.
+- **Example:**
+  ```javascript
+  import { getStreamerTimezone } from "./timeUtils.js";
 
-```javascript
-import { getStreamerTimezone } from "./timeUtils.js";
+  const zone = getStreamerTimezone();
+  console.log("Active streamer zone:", zone); // e.g. "America/Los_Angeles"
+  ```
 
-const activeZone = getStreamerTimezone();
-console.log(`Active zone: ${activeZone}`); // e.g. "America/Los_Angeles"
-```
+#### `setStreamerTimezone(newTimezone)`
+- **Synopsis:** `setStreamerTimezone(newTimezone) -> boolean`
+- **Description:** Updates the active streamer timezone dynamically at runtime. Retains the previous timezone if the new input is invalid.
+- **Parameters:**
+  - `newTimezone` (`string`): Valid IANA timezone identifier or UTC offset.
+- **Returns:** `boolean`: `true` if updated successfully, `false` if the input was invalid.
+- **Example:**
+  ```javascript
+  import { setStreamerTimezone } from "./timeUtils.js";
 
-#### `setStreamerTimezone(newZone)`
-Updates the active streamer timezone in memory. Returns `true` if updated successfully.
-
-```javascript
-import { setStreamerTimezone } from "./timeUtils.js";
-
-const updated = setStreamerTimezone("America/New_York");
-if (updated) {
-    console.log("Streamer timezone updated.");
-}
-```
+  const success = setStreamerTimezone("Asia/Tokyo");
+  if (success) {
+      console.log("Broadcaster timezone updated.");
+  }
+  ```
 
 #### `resetStreamerTimezone()`
-Resets the streamer timezone back to the configured default (`America/Los_Angeles` or `process.env.STREAMER_TIMEZONE`).
+- **Synopsis:** `resetStreamerTimezone() -> void`
+- **Description:** Resets the active streamer timezone back to the configured default (`America/Los_Angeles` or `process.env.STREAMER_TIMEZONE`).
+- **Parameters:** None.
+- **Returns:** `void`
+- **Example:**
+  ```javascript
+  import { resetStreamerTimezone } from "./timeUtils.js";
 
-```javascript
-import { resetStreamerTimezone } from "./timeUtils.js";
-
-resetStreamerTimezone();
-console.log("Timezone reset to default.");
-```
+  resetStreamerTimezone();
+  ```
 
 ---
 
 ### Streaks & Broadcast Sessions
 
-#### `getDailyResetCutoffTime(refTime = null, zone = null)`
-Computes the 06:00:00 AM local reset cutoff converted to UTC for the broadcast day corresponding to `refTime`.
+#### `getDailyResetCutoffTime(referenceDateTime = DateTime.now(), zone = null)`
+- **Synopsis:** `getDailyResetCutoffTime(referenceDateTime, zone) -> DateTime`
+- **Description:** Calculates the daily streak reset cutoff point at 06:00:00 local time in the active streamer timezone for the broadcast day corresponding to `referenceDateTime`. If `referenceDateTime` is before 06:00 local time, the broadcast day began at 06:00 on the previous calendar day.
+- **Parameters:**
+  - `referenceDateTime` (`DateTime`, optional): Reference time. Defaults to now.
+  - `zone` (`string | null`, optional): Streamer IANA timezone or offset. Defaults to `getStreamerTimezone()`.
+- **Returns:** `DateTime`: Cutoff point at 06:00:00 local time converted to UTC.
+- **Example:**
+  ```javascript
+  import { getDailyResetCutoffTime, parseIsoDateTime } from "./timeUtils.js";
 
-```javascript
-import { getDailyResetCutoffTime, parseIsoDateTime } from "./timeUtils.js";
+  const streamStart = parseIsoDateTime("2026-10-10T02:00:00.000Z");
+  const cutoff = getDailyResetCutoffTime(streamStart);
+  console.log("Cutoff UTC ISO:", cutoff.toISO());
+  ```
 
-const streamStart = parseIsoDateTime("2026-10-10T02:00:00.000Z");
-const cutoffUtc = getDailyResetCutoffTime(streamStart);
-console.log("Cutoff in UTC:", cutoffUtc.toISO());
-```
+#### `isNewStreamAttendanceSession(activeStreamStartTime, previousStreamStartTime, previousStreamEndTime = null, dailyResetCutoff = null, zone = null)`
+- **Synopsis:** `isNewStreamAttendanceSession(activeStart, prevStart, prevEnd, cutoff, zone) -> boolean`
+- **Description:** Determines whether the active stream constitutes a new stream attendance session. If `previousStreamEndTime` is known, checks whether the gap exceeds 5 hours. Otherwise, checks whether the stream crossed the 06:00 AM daily cutoff.
+- **Parameters:**
+  - `activeStreamStartTime` (`DateTime`): Start time of the active broadcast.
+  - `previousStreamStartTime` (`DateTime | null`): Start time of the previous broadcast.
+  - `previousStreamEndTime` (`DateTime | null`, optional): End time of the previous broadcast.
+  - `dailyResetCutoff` (`DateTime | null`, optional): Precomputed daily reset point.
+  - `zone` (`string | null`, optional): Streamer IANA timezone.
+- **Returns:** `boolean`: `true` if a new session threshold has been crossed.
+- **Example:**
+  ```javascript
+  import { isNewStreamAttendanceSession, parseIsoDateTime } from "./timeUtils.js";
 
-#### `isNewStreamAttendanceSession(activeStart, prevStart, prevEnd, cutoff, zone)`
-Evaluates whether a stream constitutes a new broadcast day session based on the 5-hour gap and 06:00 AM boundary rules.
+  const currentStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
+  const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
+  const prevEnd = parseIsoDateTime("2026-10-09T22:00:00.000Z");
 
-```javascript
-import { isNewStreamAttendanceSession, parseIsoDateTime } from "./timeUtils.js";
+  const isNew = isNewStreamAttendanceSession(currentStart, prevStart, prevEnd);
+  console.log("New session:", isNew); // true
+  ```
 
-const currentStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
-const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
-const prevEnd = parseIsoDateTime("2026-10-09T22:00:00.000Z");
+#### `calculateUserStreakProgression(userInfo, activeStreamStartTime, previousStreamStartTime, isNewSession, executionTime = DateTime.now())`
+- **Synopsis:** `calculateUserStreakProgression(userInfo, activeStart, prevStart, isNewSession, executionTime) -> UserStreakProgressionResult`
+- **Description:** Pure evaluation function for calculating viewer attendance streak progression. Handles first-time viewers, ongoing sessions, corrupt timestamp recovery, consecutive stream increments, and missed stream resets.
+- **Parameters:**
+  - `userInfo` (`object | null | undefined`): Existing user record with `Streak`, `Best_Streak`, `Last_Updated`.
+  - `activeStreamStartTime` (`DateTime | null | undefined`): Start time of current stream.
+  - `previousStreamStartTime` (`DateTime | null | undefined`): Start time of previous stream.
+  - `isNewSession` (`boolean`): Whether current stream is a new broadcast day session.
+  - `executionTime` (`DateTime`, optional): Reference time for `lastUpdated`. Defaults to now.
+- **Returns:** `UserStreakProgressionResult`: `{ streak: number, bestStreak: number, lastUpdated: string, status: "started"|"incremented"|"restarted"|"current" }`.
+- **Example:**
+  ```javascript
+  import { calculateUserStreakProgression, parseIsoDateTime } from "./timeUtils.js";
 
-const isNew = isNewStreamAttendanceSession(currentStart, prevStart, prevEnd);
-console.log("Is new session:", isNew); // true
-```
+  const userRecord = { Streak: 3, Best_Streak: 5, Last_Updated: "2026-10-09T19:00:00.000Z" };
+  const currentStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
+  const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
 
-#### `calculateUserStreakProgression(userInfo, activeStart, prevStart, isNewSession)`
-Calculates the next streak count, updates the best streak, and handles corrupt date recovery.
-
-```javascript
-import { calculateUserStreakProgression, parseIsoDateTime } from "./timeUtils.js";
-
-const userStreak = { Streak: 4, Best_Streak: 10, Last_Updated: "2026-10-09T19:00:00.000Z" };
-const activeStart = parseIsoDateTime("2026-10-10T18:00:00.000Z");
-const prevStart = parseIsoDateTime("2026-10-09T18:00:00.000Z");
-
-const result = calculateUserStreakProgression(userStreak, activeStart, prevStart, true);
-console.log(`New streak: ${result.streak}, status: ${result.status}`);
-```
+  const result = calculateUserStreakProgression(userRecord, currentStart, prevStart, true);
+  console.log(`Updated streak: ${result.streak}, status: ${result.status}`);
+  ```
 
 #### `StreamAttendanceSessionTracker`
-Class managing the in-memory cache of viewers who checked in during the active stream session.
+- **Synopsis:** `class StreamAttendanceSessionTracker`
+- **Description:** Session-bound in-memory cache tracking which user IDs have streaked in the active stream session. Automatically resets when a new stream start timestamp is synchronized.
+- **Methods:**
+  - `synchronizeSession(streamStartIso)`: Synchronizes cache against current stream start timestamp string. Clears tracked IDs if the timestamp changed.
+  - `hasStreaked(userId)`: Returns `boolean` indicating whether the user already checked in for the active session.
+  - `markStreaked(userId)`: Adds `userId` to the set of streaked viewers for this session.
+  - `clear()`: Manually clears all tracked user IDs.
+- **Example:**
+  ```javascript
+  import { StreamAttendanceSessionTracker } from "./timeUtils.js";
 
-```javascript
-import { StreamAttendanceSessionTracker } from "./timeUtils.js";
+  const tracker = new StreamAttendanceSessionTracker();
+  tracker.synchronizeSession("2026-10-10T18:00:00.000Z");
 
-const tracker = new StreamAttendanceSessionTracker();
-
-// Synchronize session against current stream start:
-tracker.synchronizeSession("2026-10-10T18:00:00.000Z");
-
-if (!tracker.hasStreaked("user_123")) {
-    tracker.markStreaked("user_123");
-    console.log("Viewer checked in for this stream.");
-}
-```
+  if (!tracker.hasStreaked("user_123")) {
+      tracker.markStreaked("user_123");
+      console.log("Recorded attendance check-in.");
+  }
+  ```
 
 ---
 
 ### Defensive Math
 
-#### `isWithinRestartWindow(earlier, later, maxDurationMs)`
-Returns `true` if `0 <= (later - earlier) < maxDurationMs`. Safely rejects negative intervals and out-of-order events.
+#### `isWithinRestartWindow(earlierTime, laterTime, maxDurationMs)`
+- **Synopsis:** `isWithinRestartWindow(earlierTime, laterTime, maxDurationMs) -> boolean`
+- **Description:** Validates whether the duration between `earlierTime` and `laterTime` falls strictly within `[0, maxDurationMs)`. Rejects negative durations (clock skew or out-of-order events) and durations exceeding the allowed window.
+- **Parameters:**
+  - `earlierTime` (`DateTime | null | undefined`): Starting boundary.
+  - `laterTime` (`DateTime | null | undefined`): Ending boundary.
+  - `maxDurationMs` (`number`): Maximum allowed duration in milliseconds.
+- **Returns:** `boolean`: `true` if `0 <= (laterTime - earlierTime) < maxDurationMs`.
+- **Example:**
+  ```javascript
+  import { isWithinRestartWindow, parseIsoDateTime, FIVE_HOURS_MS } from "./timeUtils.js";
 
-```javascript
-import { isWithinRestartWindow, parseIsoDateTime, FIVE_HOURS_MS } from "./timeUtils.js";
+  const earlier = parseIsoDateTime("2026-10-10T12:00:00.000Z");
+  const later = parseIsoDateTime("2026-10-10T14:00:00.000Z");
 
-const prevEnd = parseIsoDateTime("2026-10-10T12:00:00.000Z");
-const currentStart = parseIsoDateTime("2026-10-10T14:30:00.000Z");
-
-if (isWithinRestartWindow(prevEnd, currentStart, FIVE_HOURS_MS)) {
-    console.log("Reconnected within 5 hours.");
-}
-```
+  if (isWithinRestartWindow(earlier, later, FIVE_HOURS_MS)) {
+      console.log("Within allowable restart window.");
+  }
+  ```
 
 #### `safeDivideDuration(numerator, divisor, fallback = 0)`
-Safe division guarding against division by zero, negative divisors, or `NaN`.
+- **Synopsis:** `safeDivideDuration(numerator, divisor, fallback) -> number`
+- **Description:** Divides a duration or count safely, protecting against zero, negative, or `NaN` divisors.
+- **Parameters:**
+  - `numerator` (`number`): Dividend value.
+  - `divisor` (`number`): Divisor value.
+  - `fallback` (`number`, optional): Safe fallback when divisor is invalid or <= 0. Defaults to 0.
+- **Returns:** `number`: Calculated quotient or fallback.
+- **Example:**
+  ```javascript
+  import { safeDivideDuration } from "./timeUtils.js";
 
-```javascript
-import { safeDivideDuration } from "./timeUtils.js";
+  const progress = safeDivideDuration(elapsed, total, 0);
+  console.log(`Percent: ${(progress * 100).toFixed(1)}%`);
+  ```
 
-const elapsed = 45;
-const total = 100;
-const fraction = safeDivideDuration(elapsed, total, 0);
-console.log(`Progress: ${(fraction * 100).toFixed(0)}%`);
-```
+#### `safeRotateIndex(currentIndex, collectionLength)`
+- **Synopsis:** `safeRotateIndex(currentIndex, collectionLength) -> number`
+- **Description:** Advances an index by 1 modulo `collectionLength` safely. Returns `0` if `collectionLength` is 0, negative, or not a number.
+- **Parameters:**
+  - `currentIndex` (`number`): Current integer index.
+  - `collectionLength` (`number`): Length of collection to rotate through.
+- **Returns:** `number`: Next 0-based index.
+- **Example:**
+  ```javascript
+  import { safeRotateIndex } from "./timeUtils.js";
 
-#### `safeRotateIndex(currentIndex, length)`
-Safe modulo index increment protecting against empty collections (`length <= 0`).
+  const items = ["One", "Two", "Three"];
+  let index = 0;
 
-```javascript
-import { safeRotateIndex } from "./timeUtils.js";
-
-const messages = ["Hello", "Welcome", "Rules"];
-let index = 0;
-
-// Advances safely to next index; returns 0 if messages is empty
-index = safeRotateIndex(index, messages.length);
-```
+  index = safeRotateIndex(index, items.length);
+  console.log("Next index:", index); // 1
+  ```
 
 #### `findOldestTimestampKey(mapWithCreatedAt)`
-Finds the key associated with the oldest `createdAt` timestamp in a Map for FIFO or LRU cache eviction.
+- **Synopsis:** `findOldestTimestampKey(mapWithCreatedAt) -> string | null`
+- **Description:** Finds the key associated with the oldest `createdAt` timestamp in a Map. Used for LRU/FIFO eviction of active sessions.
+- **Parameters:**
+  - `mapWithCreatedAt` (`Map<string, { createdAt: number }>`): Map containing objects with numeric `createdAt`.
+- **Returns:** `string | null`: Key of the oldest item, or `null` if empty or invalid.
+- **Example:**
+  ```javascript
+  import { findOldestTimestampKey, getMonotonicMs } from "./timeUtils.js";
 
-```javascript
-import { findOldestTimestampKey, getMonotonicMs } from "./timeUtils.js";
+  const sessions = new Map([
+      ["a", { createdAt: getMonotonicMs() - 10000 }],
+      ["b", { createdAt: getMonotonicMs() - 5000 }]
+  ]);
 
-const activeStates = new Map([
-    ["state_1", { createdAt: getMonotonicMs() - 600000 }],
-    ["state_2", { createdAt: getMonotonicMs() - 300000 }]
-]);
-
-const oldestKey = findOldestTimestampKey(activeStates);
-console.log("Evicting oldest state:", oldestKey); // "state_1"
-activeStates.delete(oldestKey);
-```
+  const oldestKey = findOldestTimestampKey(sessions);
+  console.log("Oldest session:", oldestKey); // "a"
+  ```
