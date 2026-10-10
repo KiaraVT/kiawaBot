@@ -319,6 +319,7 @@
           //run through the message fragments to build the chat message
           const messageParts=[];
           var messageFormatted="";
+          console.log(tags.message.fragments);
           tags.message.fragments.forEach((fragment) =>{
             
             //if the header is an emote, this will pull the image and place it in the message to be displayed in the widget
@@ -341,8 +342,13 @@
               messageParts.push(emoteHTML);
               
             }
+
+            if (fragment.type==="cheermote") {
+              //sanitize inputs so people can't just put an image in
+              messageParts.push(fragment.text.replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+            }
             //if the fragment is text, this just appends it onto our overall message
-            if (fragment.type==="text") {
+            if (fragment.type==="text" || fragment.type==="mention") {
               //sanitize inputs so people can't just put an image in
               messageParts.push(fragment.text.replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
             }
