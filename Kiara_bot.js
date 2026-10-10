@@ -1,20 +1,32 @@
-//load all the required crap
 import TES from "tesjs";
 import axios from "axios";
 import path from 'path';
-//import open from "open";
+import { fileURLToPath } from "url";
 import jsonfile from "jsonfile";
 const quote_Path = './data/quotes.json';
 const streak_Path = './data/streaks.json';
 const command_Path = './data/command_List.json';
+const isMainModule = Boolean(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]));
 import AuthDataHelper from "./AuthDataHelper.js";
 import IncentiveHelper from "./IncentiveHelper.js";
 import QuoteHelper, {castIdToNumber} from "./QuoteHelper.js";
 import { WebSocketServer } from "ws";
 import express from "express"
+import { formatAxiosError, redactSensitiveUrl, redactSensitiveData } from "./errorUtils.js";
+import {
+    createSequentialLock,
+    processStreamStartStreak,
+    validateCommandArguments,
+    TwitchAuthPipeline,
+    TWITCH_AUTH_URL,
+    TWITCH_TOKEN_URL,
+    TWITCH_VALIDATE_URL,
+    TWITCH_API_BASE_URL
+} from "./pipelineUtils.js";
+
+export { TWITCH_AUTH_URL, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL, TWITCH_API_BASE_URL };
 
 import querystring from "qs"
-import { spawn } from "child_process"
 //Include line reading module
 import fs from "fs"
 import crypto from "crypto"
@@ -115,263 +127,321 @@ var allow_List = ["baeginning", "caeshura", "chocolatedave", "clockworkophelia",
     "foung_shui", "eddie", "v0oid", "J_o_n_i_d_T_h_e_1_s_t_", "froggythighs", "lenaflieder", "zoiteki", "shoujo", "justanyia", "shinobufujiko", "minikitty", "pofflecakey", "bobbeigh", "dangers"]
 
 const oAuthPort = 3000;
-const redirectUri = 'http://127.0.0.1:' + oAuthPort
-const yt_oAuthPort = 5000;
-const yt_redirectUri = 'http://127.0.0.1:' + oAuthPort
+const redirectUri = 'http://127.0.0.1:' + oAuthPort;
+
 //variables to store auth-related data
 let validationTicker = null;
-let twitchAuthReady = false;
+const authData = new AuthDataHelper();
+let websockets = [];
+let socket = null;
 
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
-authListener.listen(oAuthPort);
-authListener.get("/", (req, res) => {
+let authServerInstance = null;
+let authRoutesConfigured = false;
 
-    exchangeCodeForAccessToken(req.query.code)
-        .then(tokenData => {
-            res.send("You're now Authorized!  You can close this tab and return to the bot");
-            authData.update('twitchBroadcaster.access_token', tokenData.access_token);
-            authData.update('twitchBroadcaster.refresh_token', tokenData.refresh_token);
-            validateAccessToken();
-            validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
-        })
-        .catch(error => {
-            //res.send("Error during authorization");
-            twitchAuthReady = false;
-            console.log(error);
-        })
-});
-// Start executing the bot from here
-
-//Begin the auth process by opening the user's browser to the consent screen
-//await startAuth()
-async function startAuth() {
-
-    const authQueryString = querystring.stringify({
-        response_type: 'code',
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        scope: scopes.join(' ')
-    });
-    const authUrl = 'https://id.twitch.tv/oauth2/authorize?' + authQueryString;
-    //await open(authUrl);
-    // switch (process.platform) {
-    //     case 'win32':
-    //         await spawn('cmd', ['/c', 'start', '""', `"${authUrl}"`])
-    //         break;
-    //     case 'linux':
-    //         await spawn('xdg-open', [authUrl])
-    //         break;
-    //     case 'darwin':
-    //         await spawn('open', [authUrl])
-    //         break;
-    //     case _:
-    //         console.error(`${process.platform} isn't supported for authentication`)
-    //         process.exit(1);
-    // }
+function configureAuthRoutes() {
+    if (authRoutesConfigured) {
+        return;
+    }
+    authListener.get("/", handleOAuthCallbackRoute);
+    authRoutesConfigured = true;
 }
 
-//exchange the authorization code we get from Twitch when the user consents to get an Access Token
-function exchangeCodeForAccessToken(code) {
-    return new Promise((resolve, reject) => {
-        const postData = {
-            grant_type: 'authorization_code',
-            client_id: clientId,
-            client_secret: clientSecret,
-            redirect_uri: redirectUri,
-            code: code
-        };
-        axios.post("https://id.twitch.tv/oauth2/token", postData)
-            .then(response => resolve(response.data))
-            .catch(error => reject(error));
-    });
+function ensureAuthListener(options = {}) {
+    configureAuthRoutes();
+    const autoStart = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
+    if (!autoStart) {
+        return authServerInstance;
+    }
+    if (!authServerInstance) {
+        authServerInstance = authListener.listen(oAuthPort, () => {
+            console.info(`[Auth] OAuth callback listener active on port ${oAuthPort}`);
+        });
+    }
+    return authServerInstance;
+}
+
+async function notifyAuthRequired(reason, authUrl) {
+    const webhookUrl = process.env.AUTH_WEBHOOK_URL;
+    if (webhookUrl) {
+        try {
+            const sanitizedWebhookUrl = redactSensitiveUrl(authUrl);
+            await axios.post(webhookUrl, {
+                event: 'auth_required',
+                reason: reason,
+                auth_url: sanitizedWebhookUrl,
+                timestamp: new Date().toISOString()
+            }, { timeout: 5000 }).catch(err => {
+                console.error('[Auth] Failed to send auth webhook alert:', formatAxiosError(err));
+            });
+        } catch (e) {
+            console.error('[Auth] Webhook dispatch error:', e.message);
+        }
+    }
+
+    console.info("================================================================================");
+    console.info("ACTION REQUIRED: " + reason);
+    console.info("Please visit the following URL to authorize the bot:");
+    console.info(authUrl);
+    console.info("Once authorized, return here and the bot will resume automatically.");
+    console.info("================================================================================");
+}
+
+function shouldExitOnAuthFailure() {
+    const authAction = (process.env.AUTH_FAILURE_ACTION || (process.env.EXIT_ON_AUTH_FAILURE === 'true' ? 'exit' : 'wait')).toLowerCase();
+    return authAction === 'exit';
+}
+
+async function performGracefulExit(options = {}) {
+    console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
+    try {
+        if (validationTicker) {
+            clearInterval(validationTicker);
+            validationTicker = null;
+        }
+        authData.saveDataImmediate();
+
+        const closePromises = [];
+        const currentAuthServer = options.authServer !== undefined ? options.authServer : authServerInstance;
+        if (currentAuthServer && typeof currentAuthServer.close === 'function') {
+            closePromises.push(new Promise((resolve) => {
+                try {
+                    currentAuthServer.close(() => resolve());
+                } catch (closeErr) {
+                    console.warn('[Auth] Error closing auth server during shutdown:', closeErr.message);
+                    resolve();
+                }
+            }));
+        }
+
+        const currentSocket = options.socket !== undefined ? options.socket : (typeof socket !== 'undefined' ? socket : null);
+        const currentWebsockets = options.websockets !== undefined ? options.websockets : (typeof websockets !== 'undefined' ? websockets : []);
+
+        if (currentSocket && typeof currentSocket.close === 'function') {
+            if (Array.isArray(currentWebsockets)) {
+                for (const ws of currentWebsockets) {
+                    try {
+                        ws.close();
+                    } catch (wsErr) {
+                        console.warn("[Auth] Error closing websocket during shutdown:", wsErr.message);
+                    }
+                }
+            }
+            try {
+                currentSocket.close();
+            } catch (sockErr) {
+                console.warn("[Auth] Error closing socket during shutdown:", sockErr.message);
+            }
+        }
+
+        if (closePromises.length > 0) {
+            await Promise.race([
+                Promise.allSettled(closePromises),
+                new Promise((resolve) => setTimeout(resolve, 2000))
+            ]);
+        }
+    } catch (cleanupErr) {
+        console.error('[Auth] Cleanup error before exit:', cleanupErr.message);
+    }
+    if (options.exitProcess !== false) {
+        process.exit(1);
+    }
+}
+
+let authExitTimer = null;
+const parsedGrace = parseInt(process.env.AUTH_EXIT_GRACE_PERIOD_MS || "120000", 10);
+const AUTH_EXIT_GRACE_PERIOD_MS = Number.isFinite(parsedGrace) && parsedGrace > 0 ? parsedGrace : 120000;
+
+function scheduleGracefulAuthExit() {
+    if (!shouldExitOnAuthFailure()) {
+        return;
+    }
+    if (!authExitTimer) {
+        console.warn(`[Auth] AUTH_FAILURE_ACTION=exit configured. Bot will shut down in ${AUTH_EXIT_GRACE_PERIOD_MS / 1000}s if authorization is not completed.`);
+        authExitTimer = setTimeout(async () => {
+            authExitTimer = null;
+            if (!authPipeline.broadcasterAuthReady || !authPipeline.botAuthReady) {
+                await performGracefulExit();
+            }
+        }, AUTH_EXIT_GRACE_PERIOD_MS);
+    }
+}
+
+function cancelGracefulAuthExit() {
+    if (authExitTimer) {
+        console.info('[Auth] Canceling scheduled shutdown: authorization recovered.');
+        clearTimeout(authExitTimer);
+        authExitTimer = null;
+    }
+}
+
+const authPipeline = new TwitchAuthPipeline({
+    authData,
+    axios,
+    clientId,
+    clientSecret,
+    redirectUri,
+    scopes,
+    tokenUrl: TWITCH_TOKEN_URL,
+    validateUrl: TWITCH_VALIDATE_URL,
+    authUrl: TWITCH_AUTH_URL,
+    cooldownMs: 10000,
+    onInitialValidation: () => {
+        handleInitialAuthValidation();
+    },
+    notifyAuthRequired: async (reason, authUrl, accountKey, accountName) => {
+        if (process.env.AUTO_START_AUTH_LISTENER !== "false") {
+            ensureAuthListener();
+        }
+        await notifyAuthRequired(`[${accountName}] ${reason}`, authUrl);
+        if (shouldExitOnAuthFailure()) {
+            scheduleGracefulAuthExit();
+        }
+    }
+});
+
+const commandFileLock = createSequentialLock();
+
+async function handleOAuthCallbackRoute(req, res) {
+    try {
+        if (!req.query.code) {
+            const sanitizedQuery = redactSensitiveData({ ...req.query });
+            console.warn("[Auth] Received authorization callback without code parameter:", sanitizedQuery);
+            if (!res.headersSent) {
+                res.status(400).send("Authorization failed: missing authorization code or access denied.");
+            }
+            return;
+        }
+
+        const stateNonce = req.query.state;
+        const result = await authPipeline.handleOAuthCallback(req.query.code, stateNonce);
+
+        if (result.status !== 200) {
+            console.warn("[Auth] Authorization callback error:", result.error);
+            if (!res.headersSent) {
+                res.status(result.status).send(result.error);
+            }
+            return;
+        }
+
+        cancelGracefulAuthExit();
+        if (!res.headersSent) {
+            res.send(result.message);
+        }
+
+        await authPipeline.validateAccessToken().catch((err) => {
+            console.error("[Auth] Background validation failed following OAuth callback:", formatAxiosError(err));
+        });
+        if (validationTicker) {
+            clearInterval(validationTicker);
+        }
+        validationTicker = setInterval(() => {
+            authPipeline.validateAccessToken().catch((err) => {
+                console.error("[Auth] Scheduled token validation error:", formatAxiosError(err));
+            });
+        }, 1000 * 600);
+    } catch (err) {
+        console.error("[Auth] Unhandled error during authorization callback:", formatAxiosError(err) || err?.message || String(err));
+        if (!res.headersSent) {
+            res.status(500).send("Internal Server Error during authorization callback.");
+        }
+    }
+}
+
+configureAuthRoutes();
+
+//Begin the auth process by opening the user's browser to the consent screen
+function startAuth(reason = "Twitch Authorization Needed", accountKey = "twitchBroadcaster", accountName = "Broadcaster", options = {}) {
+    ensureAuthListener(options);
+    return authPipeline.startAuth(reason, accountKey, accountName);
+}
+
+//helper to refresh a single account token with exponential backoff for transient errors
+function refreshSingleToken(accountKey, accountName) {
+    return authPipeline.refreshSingleToken(accountKey, accountName);
 }
 
 //attempt to refresh the Access Token using the Refresh Token
 function refreshAccessToken() {
-    const postDataBroadcaster = {
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: authData.read('twitchBroadcaster.refresh_token'),
-    };
-
-    const postDataBot = {
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: authData.read('twitchBot.refresh_token'),
-    };
-
-    console.log('Attempting to refresh Access Token for Broadcaster...');
-
-    axios.post("https://id.twitch.tv/oauth2/token", postDataBroadcaster)
-        .then(response => {
-            console.log('Access Token was successfully refreshed');
-            authData.update('twitchBroadcaster.access_token', response.data.access_token);
-            authData.update('twitchBroadcaster.refresh_token', response.data.refresh_token);
-            validateAccessToken();
-        })
-        .catch(error => {
-            if (error.response.status === 401 || error.response.status === 400) {
-                console.log('Unable to refresh Access Token, requesting new auth consent from user');
-                authData.update('twitchBroadcaster.access_token', '');
-                authData.update('twitchBroadcaster.refresh_token', '');
-                twitchAuthReady = false;
-                clearInterval(validationTicker)
-                // clearInterval(accessRefresh)
-                startAuth();
-            } else {
-                console.log(error);
-            }
-        });
-        console.log('Attempting to refresh Access Token for Bot...')
-            axios.post("https://id.twitch.tv/oauth2/token", postDataBot)
-        .then(response => {
-            console.log('Access Token was successfully refreshed');
-            authData.update('twitchBot.access_token', response.data.access_token);
-            authData.update('twitchBot.refresh_token', response.data.refresh_token);
-            validateAccessToken();
-        })
-        .catch(error => {
-            if (error.response.status === 401 || error.response.status === 400) {
-                console.log('Unable to refresh Access Token, requesting new auth consent from user');
-                authData.update('twitchBot.access_token', '');
-                authData.update('twitchBot.refresh_token', '');
-                twitchAuthReady = false;
-                clearInterval(validationTicker)
-                // clearInterval(accessRefresh)
-                startAuth();
-            } else {
-                console.log(error);
-            }
-        });
+    return authPipeline.refreshAccessToken();
 }
 
 //attempt to validate the Access Token to be sure it is still valid
 function validateAccessToken() {
-    console.log('Attempting to validate Access Token...');
-
-    axios.get("https://id.twitch.tv/oauth2/validate", {
-        headers: { Authorization: 'Bearer ' + authData.read('twitchBroadcaster.access_token') }
-    })
-        .then(response => {
-            console.log('Access Token for Broadcaster was successfully validated');
-            if (twitchAuthReady === false) {
-                twitchAuthReady = true;
-                handleInitialAuthValidation();
-            }
-        })
-        .catch(error => {
-            if (error?.response?.status === 401) {
-                console.log('Unable to validate Access Token, requesting a fully refreshed token');
-            }
-            else {
-                console.log('Unable to validate Access Token for an unexpected reason; requesting a fully refreshed token', error);
-            }
-            // no matter what went wrong when validating, let's just refresh the token entirely to try and recover?
-            twitchAuthReady = false;
-            refreshAccessToken();
-        })
-    axios.get("https://id.twitch.tv/oauth2/validate", {
-        headers: { Authorization: 'Bearer ' + authData.read('twitchBot.access_token') }
-    })
-        .then(response => {
-            console.log('Access Token for Broadcaster was successfully validated');
-            if (twitchAuthReady === false) {
-                twitchAuthReady = true;
-                handleInitialAuthValidation();
-            }
-        })
-        .catch(error => {
-            if (error?.response?.status === 401) {
-                console.log('Unable to validate Access Token, requesting a fully refreshed token');
-            }
-            else {
-                console.log('Unable to validate Access Token for an unexpected reason; requesting a fully refreshed token', error);
-            }
-            // no matter what went wrong when validating, let's just refresh the token entirely to try and recover?
-            twitchAuthReady = false;
-            refreshAccessToken();
-        })
+    return authPipeline.validateAccessToken();
 }
 
-//send a GET request to the Twitch API
-function apiGetRequest(method, parameters) {
-    return new Promise((resolve, reject) => {
-        if (!twitchAuthReady) reject(new Error("twitch not yet authorized, wait a bit and try again"));
+function ensureBroadcasterAuth() {
+    return authPipeline.ensureBroadcasterAuth();
+}
 
+function ensureBotAuth() {
+    return authPipeline.ensureBotAuth();
+}
+
+export {
+    authListener,
+    handleOAuthCallbackRoute,
+    commandFileLock,
+    authPipeline,
+    startAuth,
+    refreshSingleToken,
+    refreshAccessToken,
+    validateAccessToken,
+    ensureBroadcasterAuth,
+    ensureBotAuth,
+    ensureAuthListener,
+    configureAuthRoutes,
+    performGracefulExit,
+    startBot,
+    tesManager
+};
+
+
+//send a GET request to the Twitch API
+async function apiGetRequest(method, parameters) {
+    return authPipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
         const requestQueryString = querystring.stringify(parameters);
         const axiosConfig = {
             headers: {
-                "Authorization": "Bearer " + authData.read('twitchBroadcaster.access_token'),
+                "Authorization": "Bearer " + authData.read("twitchBroadcaster.access_token"),
                 "Client-Id": clientId
             }
-        }
-        axios.get("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, axiosConfig)
-            .then(response => resolve(response.data))
-            .catch(error => {
-                if (error.response.status === 401) {
-                    console.log('Unable to validate Access Token, requesting a refreshed token');
-                    refreshAccessToken();
-                }
-                reject(error);
-            });
+        };
+        const response = await axios.get(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, axiosConfig);
+        return response.data;
     });
 }
 
 //send a POST request to the Twitch API
-function apiPostRequest(method, parameters, data) {
-    return new Promise((resolve, reject) => {
-        if (!twitchAuthReady) reject(new Error("twitch not yet authorized, wait a bit and try again"));
+async function apiPostRequest(method, parameters, data) {
+    return authPipeline.withAuthRetry("twitchBroadcaster", "Broadcaster", async () => {
         const requestQueryString = querystring.stringify(parameters);
         const axiosConfig = {
-
             headers: {
-                "Authorization": "Bearer " + authData.read('twitchBroadcaster.access_token'),
+                "Authorization": "Bearer " + authData.read("twitchBroadcaster.access_token"),
                 "Client-Id": clientId,
-                "Content-Type": 'application/json'
+                "Content-Type": "application/json"
             }
-        }
-        axios.post("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, data, axiosConfig)
-            .then(response => resolve(response.data))
-            .catch(error => {
-                if (error.response.status === 401) {
-                    console.log('Unable to validate Access Token, requesting a refreshed token');
-                    refreshAccessToken();
-                }
-                if (error.response.status === 400) {
-                    console.log(error.response.data.message);
-                }
-                reject(error);
-            });
+        };
+        const response = await axios.post(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, data, axiosConfig);
+        return response.data;
     });
 }
 
-function apiPostRequestBot(method, parameters, data) {
-    return new Promise((resolve, reject) => {
-        if (!twitchAuthReady) reject(new Error("twitch not yet authorized, wait a bit and try again"));
+async function apiPostRequestBot(method, parameters, data) {
+    return authPipeline.withAuthRetry("twitchBot", "Bot", async () => {
         const requestQueryString = querystring.stringify(parameters);
         const axiosConfig = {
-
             headers: {
-                "Authorization": "Bearer " + authData.read('twitchBot.access_token'),
+                "Authorization": "Bearer " + authData.read("twitchBot.access_token"),
                 "Client-Id": clientId,
-                "Content-Type": 'application/json'
+                "Content-Type": "application/json"
             }
-        }
-        axios.post("https://api.twitch.tv/helix/" + method + "?" + requestQueryString, data, axiosConfig)
-            .then(response => resolve(response.data))
-            .catch(error => {
-                if (error.response.status === 401) {
-                    console.log('Unable to validate Access Token, requesting a refreshed token');
-                    refreshAccessToken();
-                }
-                if (error.response.status === 400) {
-                    console.log(error.response.data.message);
-                }
-                reject(error);
-            });
+        };
+        const response = await axios.post(TWITCH_API_BASE_URL + "/" + method + "?" + requestQueryString, data, axiosConfig);
+        return response.data;
     });
 }
 //use the API to get Channel Data for a given broadcaster_id
@@ -497,14 +567,17 @@ function serverBoop(user_id, duration, reason) {
 }
 
 function postMessage(user_id, message) {
-    return new Promise((resolve, reject) => {
-        apiPostRequestBot('chat/messages', { broadcaster_id: broadcasterID, sender_id: user_id, message: message})
-    })
+    return apiPostRequestBot('chat/messages', { broadcaster_id: broadcasterID, sender_id: user_id, message: message })
+        .then(data => ({ ok: true, data }))
+        .catch(error => {
+            console.error('[Bot] Failed to send chat message:', formatAxiosError(error));
+            return { ok: false, error: formatAxiosError(error) };
+        });
 }
 
 //handle changes to the status of the auth-data file
 function handleAuthFileStatusChange(status) {
-    console.log('Auth File status changed: ' + status);
+    console.info('Auth File status changed: ' + status);
     if (status === 'loaded') {
         //data has been loaded at app start.  Proceed with the rest of the bot stuff
         validateAccessToken();
@@ -519,7 +592,7 @@ function InitializeIncentive() {
 }
 
 function handleIncentiveFileStatusChange(status) {
-    console.log('Incentive File status changed: ' + status);
+    console.info('Incentive File status changed: ' + status);
     if (status === 'loaded') {
         //data has been loaded at app start.  Proceed with the rest of the bot stuff
         InitializeIncentive();
@@ -532,25 +605,36 @@ function handleInitialAuthValidation() {
     //as an example, we'll fetch the channel info once we know the token's good to show the API is working
     getChannelInfo(broadcasterID)
         .then(channel_data => {
-            console.log('Got channel data!', channel_data);
+            console.info('Got channel data!', channel_data);
         })
         .catch(error => {
-            console.log(error);
+            console.error('[Auth] Failed to fetch initial channel data:', formatAxiosError(error));
         });
 
 }
-//start up the auth file handler and attach the function that responds to changes
-const authData = new AuthDataHelper();
-
 //start up the incentive handler
 const incentiveData = new IncentiveHelper();
 const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
-authData.statusCallback = handleAuthFileStatusChange;
-authData.loadData();
-validateAccessToken();
-validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
-incentiveData.statusCallback = handleIncentiveFileStatusChange;
-incentiveData.loadData();
+
+async function startBot(options = {}) {
+    const autoStartListener = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
+    if (autoStartListener) {
+        ensureAuthListener();
+    }
+    authData.statusCallback = handleAuthFileStatusChange;
+    authData.loadData();
+    const validationPromise = validateAccessToken();
+    if (validationTicker) {
+        clearInterval(validationTicker);
+    }
+    validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
+    incentiveData.statusCallback = handleIncentiveFileStatusChange;
+    await incentiveData.loadData();
+    if (typeof tesManager !== "undefined" && tesManager && typeof tesManager.start === "function") {
+        await tesManager.start();
+    }
+    return await validationPromise;
+}
 // if (!fs.existsSync(INCENTIVEPATH)) {
 //     const content = incentiveData.read('incentive.command') + ' $' + Number(incentiveData.read('incentive.amount')).toFixed(2) + ' / $' + incentiveData.read('incentive.goal');
 //     //const content = Number(incentiveData.read('incentive.amount')).toFixed(0) + '/' + incentiveData.read('incentive.goal');
@@ -584,12 +668,18 @@ class TesManager {
     #subscriptionByType = {};
 
     constructor() {
-        this.#tes = this.#buildTesInstance();
-        if (this.#tes.on) { // if TES was able to auth properly
-            this.#initializeSubscriptionQueue();
+        this.#tes = null;
+    }
+
+    start() {
+        if (this.#tes) {
+            return;
         }
-        else {
-            console.log("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.")
+        this.#tes = this.#buildTesInstance();
+        if (this.#tes && this.#tes.on) { // if TES was able to auth properly
+            this.#initializeSubscriptionQueue();
+        } else {
+            console.warn("TesManager can only auth at startup.  Please restart the bot once Twitch auth is complete.");
         }
     }
 
@@ -624,7 +714,7 @@ class TesManager {
              */
             const onConnectionLost = subscriptionTypeAndConditionById => {
                 const types = Object.values(subscriptionTypeAndConditionById).map(({ type }) => type).sort().join(", ");
-                console.log(`Connection lost for subscription types ${types}; let's repair them.`)
+                console.warn(`Connection lost for subscription types ${types}; let's repair them.`);
                 this.#repairSubscriptions();
             };
             tes.on("connection_lost", onConnectionLost);
@@ -632,9 +722,12 @@ class TesManager {
             return tes;
         } catch (error) {
             //let's assume any error here is due to a bad access token and re-auth
-            const warning = () => console.log("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
+            const warning = () => console.error("TES failed to initialize.  Could just be an authentication error - try restarting the bot after you reauth.", error);
             warning();
-            startAuth();
+
+            if (process.env.AUTO_START_AUTH_LISTENER !== "false") {
+                startAuth("EventSub initialization failed: authentication required", "twitchBroadcaster", "Broadcaster");
+            }
             return { queueSubscription: warning }; // calls to queueSubscription won't crash the bot entirely
         }
     }
@@ -844,7 +937,7 @@ class TesManager {
                             this.#subscriptionByType[type] = hailMary;
                         }
                         catch (e) {
-                            console.log(`Repairing EventSub subscriptions: failed to recreate ${type} with ${JSON.stringify(fallbackCondition)}`);
+                            console.error(`Repairing EventSub subscriptions: failed to recreate ${type} with ${JSON.stringify(fallbackCondition)}:`, e.message);
                         }
                     }
                 }
@@ -872,17 +965,25 @@ const tesManager = new TesManager();
 const subCondition = { broadcaster_user_id: broadcasterID};
 const subCondition2 = { broadcaster_user_id: broadcasterID, user_id: broadcasterID};
 const subConditionMod = { broadcaster_user_id: broadcasterID, moderator_user_id: broadcasterID};
-let websockets = [];
 // setup websocket server for chat widget
-const socket = new WebSocketServer({ port: 8080 });
-socket.on('connection', ws => {
-    websockets.push(ws);
-    console.log('Client connected');
-    ws.on('close', () => {
-        console.log('Client disconnected');
-    });
-});
-console.log('WebSocket server started on port 8080');
+function ensureWebSocketServer() {
+    if (!socket) {
+        socket = new WebSocketServer({ port: 8080 });
+        socket.on('connection', ws => {
+            websockets.push(ws);
+            console.info('[WebSocket] Client connected');
+            ws.on('close', () => {
+                console.info('[WebSocket] Client disconnected');
+            });
+        });
+        console.info('[WebSocket] WebSocket server started on port 8080');
+    }
+    return socket;
+}
+if (isMainModule) {
+    ensureWebSocketServer();
+    startBot();
+}
 
 function sendToAllChatWidgets(data) {
     let serialized = data;
@@ -965,35 +1066,35 @@ const userIdsWhoAlreadyStreaked = {}
 
 // Under no circumstances should a streak failure of any kind crash the bot.
 function updateStreaksSafely(userId, userName, sayItOutLoud = false) {
-    //first check if stream is online, if not, then exit funcion.
-        return new Promise((resolve, reject) => {
-           apiGetRequest('streams', { user_id: broadcasterID, type: 'all', first: '1' })
-                .then(data => {
-                    resolve(data.data);
-            if (data.data[0]===undefined) {
-                console.log('stream is offline, will not update streaks');
-                return;
-            }
-            else{
+    //first check if stream is online, if not, then exit function.
+    return new Promise((resolve) => {
+        apiGetRequest('streams', { user_id: broadcasterID, type: 'all', first: '1' })
+            .then(data => {
+                if (!data?.data || data.data[0] === undefined) {
+                    console.info('[Streaks] Stream is offline, will not update streaks');
+                    resolve(null);
+                    return;
+                }
+
                 try {
                     if (userId && userName) {
-                        console.log('updating user streak!')
+                        console.info('[Streaks] Updating user streak!');
                         updateStreaks(userId, userName, sayItOutLoud);
-                    }
-                    else {
+                    } else {
                         // could have been something like an anonymous cheer
-                        console.log("No user given when updating a streak?  That's probably okay once in a while.");
+                        console.warn("[Streaks] No user given when updating a streak? That's probably okay once in a while.");
                     }
-                    return true;
+                    resolve(true);
+                } catch (e) {
+                    console.error("updateStreaks failed!", e);
+                    resolve(false);
                 }
-                catch (e) {
-                    console.log("updateStreaks failed!", e);
-                    return false;
-                }
-            }
             })
-            
-})
+            .catch(error => {
+                console.error('[Streaks] Failed to fetch stream info for streak update:', formatAxiosError(error));
+                resolve(null);
+            });
+    });
 }
 //check the current stream start time
 //compare against previous value of current stream time
@@ -1008,12 +1109,15 @@ function updateStreaks(userID, userName, sayItOutLoud = false) {
     }
 
     //read the json file
-    let streak_List
-    try { streak_List = jsonfile.readFileSync(streak_Path) }
-    catch (e) { }
+    let streak_List;
+    try {
+        streak_List = jsonfile.readFileSync(streak_Path);
+    } catch (e) {
+        console.error(`[Streaks] Failed to read streaks file from ${streak_Path}:`, e.message);
+    }
 
     if (!streak_List) {
-        console.log('something got messed up in streaks')
+        console.warn("[Streaks] Streak data missing or invalid; initializing.");
     }
     else {
         const say = msg => {
@@ -1151,76 +1255,30 @@ function writeAtomicSync(filePath,data,options, retries=3,delay =100){
     }
 }
 tesManager.queueSubscription('stream.online', subCondition, event => {
-    console.log("stream online detected");
-    let streak_List
-    try { streak_List = jsonfile.readFileSync(streak_Path) }
-    catch (e) { }
-    //if file is empty then initialize it
-    if (!streak_List) {
-        console.log("No File, Creating New File");
-        let lastStart = event.started_at;
-        console.log(lastStart)
-        let currentStart = event.started_at;
-        const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
-        writeAtomicSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
-    }
-
-    //if file is not empty, update stream info
-    else {
-        console.log("Updating Current Stream Date");
-        let currentStart = new Date(event.started_at);
-        let currentStartISO = currentStart;
-        let lastStart = new Date(streak_List.Last_Stream.Start); 
-        let lastEnd = new Date(streak_List.Last_Stream.End);
-        let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
-        let savedStart=new Date(streak_List.Current_Stream.Start);
-        currentStart = Date.parse(currentStart);
-        lastStart = Date.parse(lastStart);
-        lastEnd = Date.parse(lastEnd);
-        backupEnd=Date.parse(backupEnd);
-        //update stream times
-        //the end of stream was not detected last time, reset the end to a blank value
-        if (!lastEnd) {
-            console.log('End time was null');
-                streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                streak_List.Current_Stream.Start = currentStartISO;
-                writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-
-        }
-        
-        else if ((currentStart - backupEnd) < 5*60*60*1000) {
-                //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
-                console.log('Stream Started shortly after last stream, do not update times')
-        }
-        else if (backupEnd < lastStart) {
-            console.log('stream end detection did not work last stream');
-            streak_List.Last_Stream.End = "";
-            streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-            streak_List.Current_Stream.Start = currentStartISO;
-            writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-        }
-        //all is good, do standard procedure
-
-
-
-        else {
-            console.log('all is good on stream online check')
-            streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-            streak_List.Current_Stream.Start = currentStartISO;
-            streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
+    console.info("[Streaks] Stream online detected");
+    const streakResult = processStreamStartStreak(streak_Path, event?.started_at, {
+        readFn: jsonfile.readFileSync,
+        writeFn: writeAtomicSync,
+        onStreakReset: () => {
             Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
-            writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
         }
-        console.log(lastStart);
-        console.log(lastEnd);
-        console.log(currentStart);
+    });
+    if (!streakResult?.updated) {
+        console.warn(`[Streaks] Stream start streak was not updated: ${streakResult?.reason || 'unknown'}`);
     }
 });
 
 tesManager.queueSubscription('stream.offline', subCondition, event => {
-    let streak_List
-    try { streak_List = jsonfile.readFileSync(streak_Path) }
-    catch (e) { }
+    let streak_List;
+    try {
+        streak_List = jsonfile.readFileSync(streak_Path);
+    } catch (e) {
+        console.error(`[Streaks] Failed to read streaks file on stream.offline from ${streak_Path}:`, e.message);
+    }
+    if (!streak_List || typeof streak_List !== 'object' || !streak_List.Last_Stream) {
+        console.warn('[Streaks] Invalid or missing streaks data on stream.offline; skipping update');
+        return;
+    }
     //update stream times
     const now = new Date();
     streak_List.Last_Stream.Backup_End = now;
@@ -1235,89 +1293,41 @@ tesManager.queueSubscription('channel.chat.message', subCondition2, tags => {
 
 });
 
-let streamInfo = setTimeout(() => getStreamInfo(broadcasterID, 'all', '1'), 2000);
+let streamInfo = null;
+if (isMainModule) {
+    streamInfo = setTimeout(() => {
+        getStreamInfo(broadcasterID, 'all', '1')
+            .catch(err => console.error('[StreamInfo] Initial check failed:', formatAxiosError(err)));
+    }, 2000);
+}
 
-function getStreamInfo(broadcaster_id, type, first) {
-    return new Promise((resolve, reject) => {
-        console.log('Updating Stream Start Time')
-        apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first })
-            .then(data => {
-                resolve(data.data);
-                 let streak_List
-        try { streak_List = jsonfile.readFileSync(streak_Path) }
-        catch (e) { }
-        if (data.data[0]===undefined) {
-            console.log('stream is offline, will not update streaks');
-            return;
+async function getStreamInfo(broadcaster_id, type, first) {
+    console.info('[Stream] Updating Stream Start Time');
+    try {
+        const data = await apiGetRequest('streams', { user_id: broadcaster_id, type: type, first: first });
+        const streamList = data?.data;
+        if (!Array.isArray(streamList) || streamList.length === 0 || !streamList[0]) {
+            console.info('[Stream] Stream is offline, will not update streaks');
+            return { online: false, data: [] };
         }
-        //if file is empty then initialize it
-        if (!streak_List) {
-            console.log("No File, Creating New File");
-            let lastStart = data.data[0].started_at;
-            console.log(lastStart)
-            const initializeStreaks = { Last_Stream: { Start: `${lastStart}`, End: '' }, Current_Stream: { Start: `${lastStart}` }, Users: {} }
-            writeAtomicSync(streak_Path, initializeStreaks, { spaces: 2, EOL: "\n" })
-        }
-        else {
-            let currentStart = new Date(data.data[0].started_at);
-            let currentStartISO = currentStart;
-            let sanityCheck = new Date(streak_List.Current_Stream.Start);
-            currentStart = Date.parse(currentStart);
-            sanityCheck = Date.parse(sanityCheck);
-            if ((currentStart - sanityCheck) < 5*60*60*1000) {
-                console.log('Bot Restarted, do not update times')
-            }
-            //if file is not empty, update stream info
-            else {
-                console.log("Updating Current Stream Date");
-                console.log(data.data[0].started_at);
-                let lastStart = new Date(streak_List.Last_Stream.Start);
-                lastStart = Date.parse(lastStart);
-                let lastEnd = new Date(streak_List.Last_Stream.End);
-                let backupEnd=new Date(streak_List.Last_Stream.Backup_End);
-                let savedStart=new Date(streak_List.Current_Stream.Start);
-                lastEnd = Date.parse(lastEnd);
-                backupEnd=Date.parse(backupEnd);
-                console.log(currentStart - backupEnd)
-                //update stream times
-                //the end of stream was not detected last time, reset the end to a blank value
-                if (!lastEnd) {
-                    console.log('End time was null');
-                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                    streak_List.Current_Stream.Start = currentStartISO;
-                    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" });
-
-                }
-                
-                else if ((currentStart - backupEnd) < 5*60*60*1000) {
-                    //stream offline was detected, but new stream is within 5 hours of old stream, don't update anything
-                    console.log('Stream Started shortly after last stream, do not update times')
-                }
-                else if (backupEnd < lastStart) {
-                    console.log('stream end detection did not work last stream');
-                    streak_List.Last_Stream.End = "";
-                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                    streak_List.Current_Stream.Start = currentStartISO;
-                    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
-                }
-                //all is good, do standard procedure
-                else {
-                    console.log('all is good on stream online check')
-                    streak_List.Last_Stream.Start = streak_List.Current_Stream.Start;
-                    streak_List.Current_Stream.Start = currentStartISO;
-                    streak_List.Last_Stream.End=streak_List.Last_Stream.Backup_End;
+        const startedAt = streamList[0]?.started_at;
+        if (startedAt) {
+            const streakResult = processStreamStartStreak(streak_Path, startedAt, {
+                readFn: jsonfile.readFileSync,
+                writeFn: writeAtomicSync,
+                onStreakReset: () => {
                     Object.keys(userIdsWhoAlreadyStreaked).forEach(key => delete userIdsWhoAlreadyStreaked[key]);
-                    writeAtomicSync(streak_Path, streak_List, { spaces: 2, EOL: "\n" })
                 }
-                console.log(lastStart);
-                console.log(lastEnd);
-                console.log(currentStart);
+            });
+            if (!streakResult?.updated) {
+                console.warn(`[Streaks] Stream start streak was not updated: ${streakResult?.reason || 'unknown'}`);
             }
         }
-            })
-
-            .catch(error => reject(error))
-    });
+        return { online: true, data: streamList };
+    } catch (error) {
+        console.error('[StreamInfo] Failed to fetch stream info:', formatAxiosError(error));
+        throw error;
+    }
 }
 
 
@@ -1400,7 +1410,9 @@ tesManager.queueSubscription("channel.subscription.message", subCondition, event
  *         D D D D DUEL!!!!!!          *
  ***************************************/
 let Duelers = [];
-setInterval(() => {
+let duelInterval = null;
+if (isMainModule) {
+    duelInterval = setInterval(() => {
     if (Duelers.length > 1) {
         let dueler1 = Duelers[0];
         let dueler2 = Duelers[1];
@@ -1429,7 +1441,8 @@ setInterval(() => {
         }
             , 6000);
     }
-}, 15 * 1000)
+    }, 15 * 1000);
+}
 
 // function updateIncentiveFile() {
 
@@ -1472,16 +1485,19 @@ let activityDetection = false
 let commandIndex = 0
 
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
-setInterval(() => {
-    if (activityDetection === true) {
-        //send the current command in the rotation to get posted
-        postCommand(timedCommands[commandIndex]);
-        //increment the array index, reset to 0 if past max
-        commandIndex = (commandIndex + 1) % timedCommands.length;
-        //reset activity detection so that timed messages do not get spammed without chat activity
-        activityDetection = false;
-    }
-}, 1000*60*20)
+let timedCommandsInterval = null;
+if (isMainModule) {
+    timedCommandsInterval = setInterval(() => {
+        if (activityDetection === true) {
+            //send the current command in the rotation to get posted
+            postCommand(timedCommands[commandIndex]);
+            //increment the array index, reset to 0 if past max
+            commandIndex = (commandIndex + 1) % timedCommands.length;
+            //reset activity detection so that timed messages do not get spammed without chat activity
+            activityDetection = false;
+        }
+    }, 1000*60*20);
+}
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start
 
@@ -1612,57 +1628,34 @@ async function messageHandler(tags) {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true ) {
 
+            const parsed = validateCommandArguments(command, args);
+            if (!parsed.valid) {
+                postMessage(botID, parsed.error || 'Usage: !addcommand <tag> <response>');
+                return;
+            }
+            const command_Tag = parsed.tag;
+            const command_Text = parsed.text;
 
-            //Grab the Current Command total
-            jsonfile.readFile(command_Path, async function(err, command_List) {
-                if (err) {
-                    console.error(err)
-                }
-
-                //search the relevant field in the json
-                var command_Count = command_List.find(
-                    (search) => {
-                        return search.Command_Count;
+            commandFileLock(async () => {
+                try {
+                    const command_List = await jsonfile.readFile(command_Path);
+                    var command_Count = command_List.find(
+                        (search) => {
+                            return search.Command_Count;
+                        }
+                    );
+                    command_Count = Number(command_Count?.Command_Count || 0) + 1;
+                    const command_Formatted = { Index: `${command_Count}`, Tag: `${command_Tag}`, Response: `${command_Text}`, Timer: 'No' };
+                    if (command_List[0]) {
+                        command_List[0].Command_Count = `${command_Count}`;
                     }
-                );
-
-                //the comparison needs a number and not a string, convert it here
-                command_Count = Number(command_Count.Command_Count);
-                command_Count = command_Count + 1;
-                //check and make sure a command field was added
-                try {
-                    var command_Tag = args[1].toLowerCase();
-
-                    //this takes everything after the command identifier and recombines it to be the new command text
-                    var command_Text = args.slice(2).join(' ');
-                }
-
-                //check for a leading ! and remove it if it was Added
-
-                //I don't know how errors work so this just stops it from clogging the window
-                catch (err) {
-                    console.log('hmm command error!')
-                }
-
-                //Generate json format data object to add to the file
-                const command_Formatted = { Index: `${command_Count}`, Tag: `${command_Tag}`, Response: `${command_Text}`, Timer: 'No' }
-
-                //Update the command count in the json file
-                command_List[0].Command_Count = `${command_Count}`
-
-                //add the new command to the json object
-                command_List.push(command_Formatted)
-
-                //dump out a new file
-                try {
-                    writeAtomicSync(command_Path, command_List, { spaces: 2 })
-                    
-                }
-                catch (error) {
+                    command_List.push(command_Formatted);
+                    writeAtomicSync(command_Path, command_List, { spaces: 2 });
+                    postMessage(botID, `Added Command "!${command_Tag}"`);
+                } catch (error) {
+                    console.error('[Command] Failed to write command file:', error.message);
                     postMessage(botID, `Adding command failed, retrying...`);
                 }
-                //respond with success?
-                postMessage(botID, `Added Command "!${command_Tag}"`);
             });
         }
     }
@@ -1672,42 +1665,37 @@ async function messageHandler(tags) {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true) {
 
-            //check and make sure a command field was added
-            try {
-                var command_Tag = args[1].toLowerCase();
-
-                //this takes everything after the command identifier and recombines it to be the new command text
-                var command_Text = args.slice(2).join(' ');
+            const parsed = validateCommandArguments(command, args);
+            if (!parsed.valid) {
+                postMessage(botID, parsed.error || 'Usage: !editcommand <tag> <response>');
+                return;
             }
+            const command_Tag = parsed.tag;
+            const command_Text = parsed.text;
 
-            //I don't know how errors work so this just stops it from clogging the window
-            catch (err) {
-            }
+            commandFileLock(async () => {
+                try {
+                    const command_List = await jsonfile.readFile(command_Path);
+                    var command_Info = command_List.find(
+                        (search) => {
+                            return search.Tag === command_Tag;
+                        }
+                    );
 
-            //search the relevant field in the json
-
-            jsonfile.readFile(command_Path, async function(err, command_List) {
-                if (err) {
-                    console.error(err)
-                }
-                //search for the command tag and get all the info
-                var command_Info = command_List.find(
-                    (search) => {
-                        return search.Tag === command_Tag;
+                    if (!command_Info) {
+                        postMessage(botID, `Command "!${command_Tag}" not found.`);
+                        return;
                     }
-                );
 
-                //update the command text
-                command_List[Number(command_Info.Index)].Response = command_Text
-
-                //dump out a new file
-                writeAtomicSync(command_Path, command_List, { spaces: 2 })
-
-                //respond with success?
-                postMessage(botID, `Command "!${command_Tag}" Updated Successfully!`);
+                    command_List[Number(command_Info.Index)].Response = command_Text;
+                    writeAtomicSync(command_Path, command_List, { spaces: 2 });
+                    postMessage(botID, `Command "!${command_Tag}" Updated Successfully!`);
+                } catch (err) {
+                    console.error('[Command] Failed to edit command file:', err.message);
+                }
             });
-        };
-    };
+        }
+    }
     ///////////////////////////////////
     //                               //
     //                               //
@@ -1754,8 +1742,15 @@ async function messageHandler(tags) {
             const textToAdd = args.slice(1).join(" ");
             
             //Grab the category info
-            const broadcast_info = await getChannelInfo(broadcasterID);
-            const categoryToAdd = broadcast_info[0].game_name;
+            let categoryToAdd = "Unknown";
+            try {
+                const broadcast_info = await getChannelInfo(broadcasterID);
+                if (broadcast_info && broadcast_info[0]?.game_name) {
+                    categoryToAdd = broadcast_info[0].game_name;
+                }
+            } catch (err) {
+                console.error('[Quote] Failed to get category info for quote:', formatAxiosError(err));
+            }
             
             const addedQuote = quoteData.add(textToAdd, channel, categoryToAdd);
             
@@ -1835,39 +1830,24 @@ async function messageHandler(tags) {
                 }
             }
             catch (err) {
-                console.log(err)
+                console.error("[Command] Failed to execute !so shoutout:", formatAxiosError(err));
             }
-
-            //I don't know how errors work so this just stops it from clogging the window
         }
 
     //update incentive goal and bot command id
     if (command === '!updateincentive') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true) {
-            //Grab the Current incentive goal
-            incentiveGoal = incentiveData.read('incentive.goal');
-            incentiveGoal = incentiveData.read('incentive.goal');
-            //Check if a number was specified in the 2nd field
-            //check and see if a specific number was requested
-            try {
-                var new_Identifier = '!' + args[1].toLowerCase()
-                var new_Goal = args.slice(2).join(' ');
+            const parsed = validateCommandArguments(command, args);
+            if (!parsed.valid) {
+                postMessage(botID, parsed.error || 'Usage: !updateincentive <command> <goal>');
+                return;
             }
-
-            //I don't know how errors work so this just stops it from clogging the window
-            catch (err) {
-            }
-
-            new_Goal = Number(new_Goal);
-            console.log(new_Goal)
-            if (Number.isFinite(new_Goal)) {
-                incentiveData.update('incentive.goal', new_Goal);
-                incentiveData.update('incentive.command', new_Identifier);
-                console.log('Incentive Goal Updated from $' + incentiveGoal + ' to $' + new_Goal)
-                postMessage(botID, 'Incentive Goal Updated from $' + incentiveGoal + ' to $' + new_Goal);
-            }
-            //updateIncentiveFile();
+            const currentGoal = Number(incentiveData.read('incentive.goal')) || 0;
+            incentiveData.update('incentive.goal', parsed.goal);
+            incentiveData.update('incentive.command', parsed.identifier);
+            console.info('Incentive Goal Updated from $' + currentGoal + ' to $' + parsed.goal);
+            postMessage(botID, 'Incentive Goal Updated from $' + currentGoal + ' to $' + parsed.goal);
         }
     }
 
@@ -1880,7 +1860,6 @@ async function messageHandler(tags) {
         let dueler = `${channel}`;
         let duelerID = `${tags["chatter_user_id"]}`;
         let weapon = (args.slice(1).join(' ') ?? "").trim();
-        console.log(weapon)
         if (!weapon) {
             weapon = 'fists';
         }
@@ -1908,25 +1887,16 @@ async function messageHandler(tags) {
     if (command === '!addincentive') {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true) {
-            //Grab the Current incentive goal
-            incentiveAmount = incentiveData.read('incentive.amount');
-            incentiveGoal = incentiveData.read('incentive.goal');
-
-            //Check if a number was specified in the 2nd field
-            try {
-                var new_Amount = args.slice(1).join(' ');
+            const parsed = validateCommandArguments(command, args);
+            if (!parsed.valid) {
+                postMessage(botID, parsed.error || 'Usage: !addincentive <amount>');
+                return;
             }
-
-            //I don't know how errors work so this just stops it from clogging the window
-            catch (err) {
-            }
-
-            new_Amount = Number(new_Amount) + Number(incentiveAmount);
-            if (Number.isFinite(new_Amount)) {
-                incentiveData.update('incentive.amount', new_Amount);
-                console.log('Incentive Amount Updated from $' + incentiveData.read('incentive.amount').toFixed(2) + ' to $' + new_Amount.toFixed(2))
-                postMessage(botID, 'Incentive Amount Updated from $' + incentiveAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
-            }
+            const currentAmount = Number(incentiveData.read('incentive.amount')) || 0;
+            const new_Amount = currentAmount + parsed.amount;
+            incentiveData.update('incentive.amount', new_Amount);
+            console.info('Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
+            postMessage(botID, 'Incentive Amount Updated from $' + currentAmount.toFixed(2) + ' to $' + new_Amount.toFixed(2));
         }
     }
 

@@ -7,10 +7,18 @@ const app = express();
 const port = process.env.WEB_PORT || 8081;
 
 // Data file paths - look in parent directory's data folder
-const quote_Path = path.join(import.meta.dirname, '..', 'data', 'quotes.json');
-const streak_Path = path.join(import.meta.dirname, '..', 'data', 'streaks.json');
-const command_Path = path.join(import.meta.dirname, '..', 'data', 'command_List.json');
-const incentive_Path = path.join(import.meta.dirname, '..', 'data', 'incentives.json');
+function getQuotePath() {
+    return process.env.QUOTES_PATH || path.join(import.meta.dirname, '..', 'data', 'quotes.json');
+}
+function getStreakPath() {
+    return process.env.STREAKS_PATH || path.join(import.meta.dirname, '..', 'data', 'streaks.json');
+}
+function getCommandPath() {
+    return process.env.COMMANDS_PATH || path.join(import.meta.dirname, '..', 'data', 'command_List.json');
+}
+function getIncentivePath() {
+    return process.env.INCENTIVE_PATH || path.join(import.meta.dirname, '..', 'data', 'incentives.json');
+}
 
 // Ensure data directory exists
 const dataDir = path.join(import.meta.dirname, '..', 'data');
@@ -19,20 +27,24 @@ if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }
 
+const DEFAULT_INCENTIVE = Object.freeze({
+    incentive: {
+        command: '!update',
+        amount: 0,
+        goal: 0
+    }
+});
+
 // Helper function to safely read JSON files
 function safeReadJSON(filePath, defaultValue = {}) {
-    try {
-        if (!fs.existsSync(filePath)) {
-            console.log(`Web Server: Creating default ${filePath}...`);
-            jsonfile.writeFileSync(filePath, defaultValue, { spaces: 2, EOL: "\n" });
-            return defaultValue;
-        }
-        return jsonfile.readFileSync(filePath);
-    } catch (error) {
-        console.error(`Web Server: Error reading ${filePath}:`, error);
+    if (!fs.existsSync(filePath)) {
+        console.log(`Web Server: Creating default ${filePath}...`);
+        jsonfile.writeFileSync(filePath, defaultValue, { spaces: 2, EOL: "\n" });
         return defaultValue;
     }
+    return jsonfile.readFileSync(filePath);
 }
+
 
 // Helper function to escape HTML to prevent XSS
 function escapeHtml(unsafe) {
@@ -48,7 +60,7 @@ function escapeHtml(unsafe) {
 // Web endpoint to serve streaks data
 app.get("/api/streaks", (req, res) => {
     try {
-        const streaksData = safeReadJSON(streak_Path, {});
+        const streaksData = safeReadJSON(getStreakPath(), {});
         res.setHeader('Content-Type', 'application/json');
         res.json(streaksData);
     } catch (error) {
@@ -60,7 +72,7 @@ app.get("/api/streaks", (req, res) => {
 // Web endpoint to serve quotes data
 app.get("/api/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(getQuotePath(), []);
         res.setHeader('Content-Type', 'application/json');
         res.json(quotesData);
     } catch (error) {
@@ -72,7 +84,7 @@ app.get("/api/quotes", (req, res) => {
 // Web endpoint to serve commands data
 app.get("/api/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(getCommandPath(), []);
         res.setHeader('Content-Type', 'application/json');
         res.json(commandsData);
     } catch (error) {
@@ -81,10 +93,56 @@ app.get("/api/commands", (req, res) => {
     }
 });
 
+
+// Web endpoint to serve incentives data
+app.get("/api/incentives", async (req, res) => {
+    const defaultIncentive = DEFAULT_INCENTIVE;
+    const MAX_INCENTIVE_FILE_SIZE = 1024 * 1024;
+    try {
+        let rawContent = null;
+        const currentIncentivePath = getIncentivePath();
+        try {
+            const stat = await fs.promises.stat(currentIncentivePath);
+            if (stat.size > MAX_INCENTIVE_FILE_SIZE) {
+                console.error(`Incentive file exceeds allowed size limit (${stat.size} > ${MAX_INCENTIVE_FILE_SIZE})`);
+                return res.status(413).json({ error: 'Incentive file exceeds allowed size limit' });
+            }
+            rawContent = await fs.promises.readFile(currentIncentivePath, 'utf8');
+        } catch (readErr) {
+            if (readErr.code !== 'ENOENT') {
+                throw readErr;
+            }
+        }
+
+        let incentiveData = defaultIncentive;
+        if (rawContent) {
+            try {
+                incentiveData = JSON.parse(rawContent);
+            } catch (parseErr) {
+                console.error('Incentive file contains malformed JSON:', parseErr.message);
+                return res.status(500).json({ error: 'Incentive file contains malformed JSON', details: parseErr.message });
+            }
+        }
+
+        const validated = {
+            incentive: {
+                command: typeof incentiveData?.incentive?.command === 'string' ? incentiveData.incentive.command : '!update',
+                amount: typeof incentiveData?.incentive?.amount === 'number' ? incentiveData.incentive.amount : 0,
+                goal: typeof incentiveData?.incentive?.goal === 'number' ? incentiveData.incentive.goal : 0
+            }
+        };
+        res.setHeader('Content-Type', 'application/json');
+        res.json(validated);
+    } catch (error) {
+        console.error('Error reading incentive file:', error.message);
+        res.status(500).json({ error: 'Failed to read incentive data' });
+    }
+});
+
 // Simple HTML page to display the data
 app.get("/streaks", (req, res) => {
     try {
-        const streaksData = safeReadJSON(streak_Path, {});
+        const streaksData = safeReadJSON(getStreakPath(), {});
         const html = `
         <!DOCTYPE html>
         <html>
@@ -125,7 +183,7 @@ app.get("/streaks", (req, res) => {
 // Simple HTML page to display quotes
 app.get("/quotes", (req, res) => {
     try {
-        const quotesData = safeReadJSON(quote_Path, []);
+        const quotesData = safeReadJSON(getQuotePath(), []);
         const html = `
         <!DOCTYPE html>
         <html>
@@ -166,7 +224,8 @@ app.get("/quotes", (req, res) => {
 // Simple HTML page to display commands
 app.get("/commands", (req, res) => {
     try {
-        const commandsData = safeReadJSON(command_Path, []);
+        const commandsData = safeReadJSON(getCommandPath(), []);
+
         const html = `
         <!DOCTYPE html>
         <html>
@@ -206,14 +265,8 @@ app.get("/commands", (req, res) => {
 // Simple HTML page to display incentive
 app.get("/incentives", (req, res) => {
     try {
-        const defaultIncentive = {
-            incentive: {
-                command: '!update',
-                amount: 0,
-                goal: 0
-            }
-        };
-        const rawData = safeReadJSON(incentive_Path, defaultIncentive);
+        const defaultIncentive = DEFAULT_INCENTIVE;
+        const rawData = safeReadJSON(getIncentivePath(), defaultIncentive);
         const incentive = (rawData && typeof rawData === 'object' && rawData.incentive) ? rawData.incentive : defaultIncentive.incentive;
         const command = incentive.command || '!update';
         const amount = typeof incentive.amount === 'number' ? incentive.amount : 0;
@@ -311,10 +364,26 @@ app.get("/chatwidget", (_req, res) => {
     res.sendFile("chatwidget.html", { root: path.join(import.meta.dirname, "www") });
 });
 
+// Centralized error handling middleware
+function errorHandler(err, req, res, next) {
+    if (res.headersSent) {
+        return next(err);
+    }
+    void next;
+    console.error('Web Server: Unhandled error:', err?.message || String(err));
+    if (req.accepts(['html', 'json']) === 'html') {
+        res.status(500).type('text/html').send('<h1>500 Internal Server Error</h1><p>An unexpected error occurred.</p>');
+    } else {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+}
+
+app.use(errorHandler);
+
 const server = app.listen(port, '127.0.0.1', () => {
     console.log(`Kiara Bot Web Server running on port ${port}`);
     console.log(`Dashboard available at: http://127.0.0.1:${port}`);
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
-export { app, server }
+export { app, server, errorHandler, DEFAULT_INCENTIVE };
