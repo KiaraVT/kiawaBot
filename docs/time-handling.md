@@ -61,6 +61,16 @@ All code across the repository must adhere to the following principles:
 - Safe index rotation (`safeRotateIndex`): Protects against modulo by zero on empty arrays.
 - Corrupt date recovery: If user streak records contain invalid or unparseable timestamps, `calculateUserStreakProgression` recovers gracefully by starting a fresh streak count of 1 while preserving the user's recorded `Best_Streak`.
 
+### 3.7 Midstream Timezone Updates and Operational Relocation Policy
+- Session Anchor (UTC): Active broadcast session identity is anchored exclusively to the UTC instant of `Current_Stream.Start`. Viewer streaks and attendance are tracked in UTC and are completely immune to midstream timezone changes.
+- Operational Reference: The streamer timezone represents the broadcaster's active operational reference. Once updated via `!settimezone` (or following physical relocation across the International Date Line), the new timezone immediately governs the 06:00 AM daily reset cutoff for subsequent stream sessions starting after the active broadcast concludes.
+- Continuity Guarantee: Viewers who extend their streak during an active stream cannot be penalized or duplicate-counted if the broadcaster changes timezones before ending the stream.
+
+### 3.8 Monotonic Clocks and Drift-Compensated Scheduling
+- In-memory lifetimes: In-memory session lifetimes, OAuth authorization states, and token refresh cooldowns use monotonic time via `getMonotonicMs()` (`performance.timeOrigin + performance.now()`). This prevents negative durations or premature evictions caused by NTP adjustments or host clock slewing.
+- Drift compensation: Recurring intervals (such as periodic chat announcements) use `scheduleCompensatedInterval()`, which measures execution drift and self-corrects subsequent delays to prevent event-loop timing drift over extended uptime.
+- Injectable schedulers: Background token validation tickers accept configurable intervals and timer factories (`startValidationTicker`), enabling deterministic testing without relying on unmanaged background intervals.
+
 ## 4. Module Reference
 
 The centralized functions are located in [timeUtils.js](../timeUtils.js):
@@ -84,3 +94,5 @@ The centralized functions are located in [timeUtils.js](../timeUtils.js):
 - `findOldestTimestampKey(map)`: Finds key with oldest `createdAt` for FIFO eviction.
 - `delayMilliseconds(ms)`: Promise-based asynchronous delay.
 - `StreamAttendanceSessionTracker`: Session-bound tracker for attendance check-ins.
+- `getMonotonicMs()`: High-precision monotonic millisecond clock immune to wall-clock steps.
+- `scheduleCompensatedInterval(callback, intervalMs, options)`: Recurring interval scheduler with drift compensation.

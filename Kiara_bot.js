@@ -34,7 +34,8 @@ import {
     getStreamerTimezone,
     getStreamerUtcOffset,
     getStreamerIsoString,
-    setStreamerTimezone
+    setStreamerTimezone,
+    scheduleCompensatedInterval
 } from "./timeUtils.js";
 
 export { TWITCH_AUTH_URL, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL, TWITCH_API_BASE_URL };
@@ -157,6 +158,24 @@ const redirectUri = 'http://127.0.0.1:' + oAuthPort;
 
 //variables to store auth-related data
 let validationTicker = null;
+let validationIntervalMs = 1000 * 600;
+let setIntervalFn = setInterval;
+let clearIntervalFn = clearInterval;
+
+function startValidationTicker(intervalMs = validationIntervalMs, timerFn = setIntervalFn) {
+    if (validationTicker) {
+        clearIntervalFn(validationTicker);
+        validationTicker = null;
+    }
+    if (intervalMs > 0 && typeof timerFn === "function") {
+        validationTicker = timerFn(() => {
+            authPipeline.validateAccessToken().catch((err) => {
+                console.error("[Auth] Scheduled token validation error:", formatAxiosError(err));
+            });
+        }, intervalMs);
+    }
+}
+
 const authData = new AuthDataHelper();
 let websockets = [];
 let socket = null;
@@ -166,7 +185,18 @@ const authListener = express();
 let authServerInstance = null;
 let authRoutesConfigured = false;
 
-function configureAuthRoutes() {
+function configureAuthRoutes(options = {}) {
+    if (options && typeof options === "object") {
+        if (options.validationIntervalMs !== undefined) {
+            validationIntervalMs = options.validationIntervalMs;
+        }
+        if (typeof options.setIntervalFn === "function") {
+            setIntervalFn = options.setIntervalFn;
+        }
+        if (typeof options.clearIntervalFn === "function") {
+            clearIntervalFn = options.clearIntervalFn;
+        }
+    }
     if (authRoutesConfigured) {
         return;
     }
@@ -223,8 +253,16 @@ async function performGracefulExit(options = {}) {
     console.error("[Auth] Initiating graceful shutdown due to unrecoverable auth requirement (AUTH_FAILURE_ACTION=exit).");
     try {
         if (validationTicker) {
-            clearInterval(validationTicker);
+            clearIntervalFn(validationTicker);
             validationTicker = null;
+        }
+        if (timedCommandsInterval) {
+            if (typeof timedCommandsInterval.clear === 'function') {
+                timedCommandsInterval.clear();
+            } else {
+                clearInterval(timedCommandsInterval);
+            }
+            timedCommandsInterval = null;
         }
         authData.saveDataImmediate();
 
@@ -359,14 +397,7 @@ async function handleOAuthCallbackRoute(req, res) {
         await authPipeline.validateAccessToken().catch((err) => {
             console.error("[Auth] Background validation failed following OAuth callback:", formatAxiosError(err));
         });
-        if (validationTicker) {
-            clearInterval(validationTicker);
-        }
-        validationTicker = setInterval(() => {
-            authPipeline.validateAccessToken().catch((err) => {
-                console.error("[Auth] Scheduled token validation error:", formatAxiosError(err));
-            });
-        }, 1000 * 600);
+        startValidationTicker();
     } catch (err) {
         console.error("[Auth] Unhandled error during authorization callback:", formatAxiosError(err) || err?.message || String(err));
         if (!res.headersSent) {
@@ -420,6 +451,7 @@ export {
     ensureAuthListener,
     configureAuthRoutes,
     performGracefulExit,
+    startValidationTicker,
     startBot,
     tesManager,
     updateStreaks,
@@ -647,6 +679,17 @@ const incentiveData = new IncentiveHelper();
 const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
 
 async function startBot(options = {}) {
+    if (options && typeof options === "object") {
+        if (options.validationIntervalMs !== undefined) {
+            validationIntervalMs = options.validationIntervalMs;
+        }
+        if (typeof options.setIntervalFn === "function") {
+            setIntervalFn = options.setIntervalFn;
+        }
+        if (typeof options.clearIntervalFn === "function") {
+            clearIntervalFn = options.clearIntervalFn;
+        }
+    }
     const autoStartListener = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
     if (autoStartListener) {
         ensureAuthListener();
@@ -654,10 +697,7 @@ async function startBot(options = {}) {
     authData.statusCallback = handleAuthFileStatusChange;
     authData.loadData();
     const validationPromise = validateAccessToken();
-    if (validationTicker) {
-        clearInterval(validationTicker);
-    }
-    validationTicker = setInterval(() => { validateAccessToken(); }, 1000 * 600);
+    startValidationTicker();
     incentiveData.statusCallback = handleIncentiveFileStatusChange;
     await incentiveData.loadData();
     if (typeof tesManager !== "undefined" && tesManager && typeof tesManager.start === "function") {
@@ -1474,7 +1514,7 @@ const DURATION_20_MINUTES_MS = 20 * 60 * 1000;
 //interval for timed chat commands that run automagically if chat activity has been recorded since last run
 let timedCommandsInterval = null;
 if (isMainModule) {
-    timedCommandsInterval = setInterval(handleTimedCommandsInterval, DURATION_20_MINUTES_MS);
+    timedCommandsInterval = scheduleCompensatedInterval(handleTimedCommandsInterval, DURATION_20_MINUTES_MS);
 }
 // post first entry in array to postCommand
 //increment to next array index, if at max loop back to start

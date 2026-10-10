@@ -1544,5 +1544,36 @@ test("Kiara_bot - performGracefulExit logs warnings on websocket and socket clos
     }
 });
 
+test("Kiara_bot - startValidationTicker supports configurable intervals and custom scheduler", async () => {
+    const { startValidationTicker, configureAuthRoutes } = await import("../../Kiara_bot.js");
+    let scheduledIntervalMs = null;
+    let scheduledCallback = null;
+    let clearedTimer = null;
+
+    const mockSetInterval = (cb, ms) => {
+        scheduledCallback = cb;
+        scheduledIntervalMs = ms;
+        return 999;
+    };
+
+    const mockClearInterval = (timer) => {
+        clearedTimer = timer;
+    };
+
+    configureAuthRoutes({
+        validationIntervalMs: 5000,
+        setIntervalFn: mockSetInterval,
+        clearIntervalFn: mockClearInterval
+    });
+
+    startValidationTicker(5000, mockSetInterval);
+    assert.equal(scheduledIntervalMs, 5000);
+    assert.equal(typeof scheduledCallback, "function");
+
+    // Calling with interval <= 0 clears timer
+    startValidationTicker(0, mockSetInterval);
+    assert.equal(clearedTimer, 999);
+});
+
 
 

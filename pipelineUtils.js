@@ -10,6 +10,7 @@ import {
     parseIsoDateTime,
     isWithinRestartWindow,
     findOldestTimestampKey,
+    getMonotonicMs,
     FIVE_HOURS_MS,
     TEN_MINUTES_MS
 } from "./timeUtils.js";
@@ -290,6 +291,7 @@ export class TwitchAuthPipeline {
         this.cooldownMs = options.cooldownMs ?? 60000;
         this.onInitialValidation = options.onInitialValidation || (() => {});
         this.notifyAuthRequired = options.notifyAuthRequired || (() => {});
+        this.nowFn = typeof options.nowFn === "function" ? options.nowFn : getMonotonicMs;
 
         this.broadcasterAuthReady = false;
         this.botAuthReady = false;
@@ -337,7 +339,7 @@ export class TwitchAuthPipeline {
      * Purges expired auth states older than 10 minutes.
      */
     cleanupExpiredAuthStates() {
-        const now = Date.now();
+        const now = this.nowFn();
         for (const [nonce, session] of this.activeAuthStates.entries()) {
             if (now - session.createdAt > TEN_MINUTES_MS) {
                 this.activeAuthStates.delete(nonce);
@@ -360,8 +362,9 @@ export class TwitchAuthPipeline {
             if (!oldestKey) break;
             this.activeAuthStates.delete(oldestKey);
         }
+        const now = this.nowFn();
         for (const [nonce, session] of this.activeAuthStates.entries()) {
-            if (session.accountKey === accountKey && (Date.now() - session.createdAt < 60000)) {
+            if (session.accountKey === accountKey && (now - session.createdAt < 60000)) {
                 const pendingAuthUrl = this.buildAuthUrl(nonce, session.codeChallenge);
                 console.warn(`[Auth] Authorization prompt already active for ${accountName}; re-surfacing pending authorization URL.`);
                 await this.notifyAuthRequired(`[${accountName}] ${reason} (pending)`, pendingAuthUrl, accountKey, accountName);
@@ -374,7 +377,7 @@ export class TwitchAuthPipeline {
         this.activeAuthStates.set(nonce, {
             accountKey,
             accountName,
-            createdAt: Date.now(),
+            createdAt: now,
             codeVerifier,
             codeChallenge
         });
@@ -643,7 +646,7 @@ export class TwitchAuthPipeline {
         if (this.broadcasterAuthReady) return true;
         return this.ensureBroadcasterSingleFlight(async () => {
             if (this.broadcasterAuthReady) return true;
-            const now = Date.now();
+            const now = this.nowFn();
             if (now - this.lastRefreshBroadcasterAttempt > this.cooldownMs) {
                 this.lastRefreshBroadcasterAttempt = now;
                 const refreshRes = await this.refreshAccount("twitchBroadcaster", "Broadcaster");
@@ -665,7 +668,7 @@ export class TwitchAuthPipeline {
         if (this.botAuthReady) return true;
         return this.ensureBotSingleFlight(async () => {
             if (this.botAuthReady) return true;
-            const now = Date.now();
+            const now = this.nowFn();
             if (now - this.lastRefreshBotAttempt > this.cooldownMs) {
                 this.lastRefreshBotAttempt = now;
                 const refreshRes = await this.refreshAccount("twitchBot", "Bot");
@@ -711,11 +714,11 @@ export class TwitchAuthPipeline {
                     if (refreshRes?.refreshed) {
                         if (accountKey === "twitchBroadcaster") {
                             this.broadcasterAuthReady = true;
-                            this.lastRefreshBroadcasterAttempt = Date.now();
+                            this.lastRefreshBroadcasterAttempt = this.nowFn();
                         }
                         if (accountKey === "twitchBot") {
                             this.botAuthReady = true;
-                            this.lastRefreshBotAttempt = Date.now();
+                            this.lastRefreshBotAttempt = this.nowFn();
                         }
                         return await requestFn(true);
                     }

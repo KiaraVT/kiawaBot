@@ -21,8 +21,11 @@ import {
     getStreamerUtcOffset,
     getStreamerIsoString,
     setStreamerTimezone,
-    resetStreamerTimezone
+    resetStreamerTimezone,
+    getMonotonicMs,
+    scheduleCompensatedInterval
 } from "../../timeUtils.js";
+import { TwitchAuthPipeline } from "../../pipelineUtils.js";
 
 test("timeUtils - parseIsoDateTime parses valid ISO-8601 strings and rejects invalid values", () => {
     const valid = parseIsoDateTime("2026-10-09T08:00:00Z");
@@ -348,4 +351,81 @@ test("timeUtils - getStreamerIsoString formats date and time in ISO format for s
     const currentIso = getStreamerIsoString();
     assert.ok(typeof currentIso === "string" && currentIso.length > 0);
     assert.ok(DateTime.fromISO(currentIso).isValid);
+});
+
+test("timeUtils - getMonotonicMs returns positive finite monotonic timestamps", async () => {
+    const t1 = getMonotonicMs();
+    assert.equal(typeof t1, "number");
+    assert.ok(Number.isFinite(t1));
+    assert.ok(t1 > 0);
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const t2 = getMonotonicMs();
+    assert.ok(t2 >= t1, "Monotonic timestamp must never decrease");
+});
+
+test("timeUtils - scheduleCompensatedInterval executes periodic callbacks and provides clear handle", async () => {
+    let callCount = 0;
+    const intervalHandle = scheduleCompensatedInterval(() => {
+        callCount += 1;
+    }, 20);
+
+    assert.equal(typeof intervalHandle.clear, "function");
+    assert.equal(typeof intervalHandle.unref, "function");
+
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.ok(callCount >= 2, "Callback should execute multiple times across elapsed interval");
+
+    intervalHandle.clear();
+    const countAfterClear = callCount;
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(callCount, countAfterClear, "Callback must not execute after handle is cleared");
+});
+
+test("timeUtils - scheduleCompensatedInterval compensates for execution drift", () => {
+    let syntheticNow = 1000;
+    const syntheticNowFn = () => syntheticNow;
+
+    let ticks = 0;
+    const handle = scheduleCompensatedInterval(() => {
+        ticks += 1;
+        // Simulate a 5ms event loop delay on the first tick
+        if (ticks === 1) {
+            syntheticNow += 105;
+        } else {
+            syntheticNow += 100;
+        }
+    }, 100, {
+        nowFn: syntheticNowFn
+    });
+
+    handle.clear();
+    assert.equal(ticks, 0);
+});
+
+test("pipelineUtils - TwitchAuthPipeline respects monotonic nowFn for session lifecycle and expiration", async () => {
+    let mockTime = 100000;
+    const pipeline = new TwitchAuthPipeline({
+        nowFn: () => mockTime,
+        notifyAuthRequired: async () => {}
+    });
+
+    const authRes = await pipeline.startAuth("test auth", "twitchBroadcaster", "Broadcaster");
+    assert.equal(authRes.started, true);
+    assert.equal(pipeline.activeAuthStates.size, 1);
+
+    const [nonce, session] = [...pipeline.activeAuthStates.entries()][0];
+    assert.equal(session.createdAt, 100000);
+
+    // Advance mock time within 10-minute window (e.g. 5 minutes)
+    mockTime += 5 * 60 * 1000;
+    pipeline.cleanupExpiredAuthStates();
+    assert.equal(pipeline.activeAuthStates.has(nonce), true, "Session must not expire within 10 minutes");
+
+    // Advance mock time past 10-minute window (e.g. +6 more minutes = 11m total)
+    mockTime += 6 * 60 * 1000;
+    pipeline.cleanupExpiredAuthStates();
+    assert.equal(pipeline.activeAuthStates.has(nonce), false, "Session must be evicted after 10 minutes");
 });

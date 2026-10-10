@@ -4,6 +4,7 @@
  */
 
 import { DateTime } from "luxon";
+import { performance } from "node:perf_hooks";
 
 /**
  * 5 hours in milliseconds.
@@ -530,4 +531,58 @@ export class StreamAttendanceSessionTracker {
     clear() {
         this.streakedUserIds.clear();
     }
+}
+
+/**
+ * Returns the current time in monotonic milliseconds using performance.timeOrigin + performance.now().
+ * Provides high-precision time that is monotonically non-decreasing and immune to system wall-clock steps.
+ *
+ * @returns {number} Monotonic time in milliseconds on the epoch scale.
+ */
+export function getMonotonicMs() {
+    return performance.timeOrigin + performance.now();
+}
+
+/**
+ * Schedules a recurring task with event-loop drift compensation.
+ *
+ * @param {Function} callback - Function to execute periodically.
+ * @param {number} intervalMs - Recurrence interval in milliseconds.
+ * @param {Object} [options={}] - Scheduling options.
+ * @param {Function} [options.nowFn=getMonotonicMs] - Monotonic clock function.
+ * @returns {{ clear: Function, unref: Function }} Handle to clear or unref the timer.
+ */
+export function scheduleCompensatedInterval(callback, intervalMs, options = {}) {
+    const validInterval = (typeof intervalMs === "number" && !isNaN(intervalMs) && intervalMs > 0)
+        ? intervalMs
+        : 1000;
+    const nowFn = options.nowFn || getMonotonicMs;
+    let expected = nowFn() + validInterval;
+    let timer = null;
+    let cleared = false;
+
+    function step() {
+        if (cleared) return;
+        const drift = nowFn() - expected;
+        try {
+            callback();
+        } catch (err) {
+            console.error("[Timer] Error in compensated interval callback:", err);
+        }
+        expected += validInterval;
+        const nextDelay = Math.max(0, validInterval - drift);
+        timer = setTimeout(step, nextDelay);
+    }
+
+    timer = setTimeout(step, validInterval);
+
+    return {
+        clear: () => {
+            cleared = true;
+            if (timer) clearTimeout(timer);
+        },
+        unref: () => {
+            if (timer && typeof timer.unref === "function") timer.unref();
+        }
+    };
 }
