@@ -457,8 +457,10 @@ export {
     updateStreaks,
     streamAttendanceTracker,
     handleTimedCommandsInterval,
-    messageHandler
+    messageHandler,
+    handleEmotesRefresh
 };
+
 
 
 //send a GET request to the Twitch API
@@ -1516,9 +1518,25 @@ let timedCommandsInterval = null;
 if (isMainModule) {
     timedCommandsInterval = scheduleCompensatedInterval(handleTimedCommandsInterval, DURATION_20_MINUTES_MS);
 }
-// post first entry in array to postCommand
-//increment to next array index, if at max loop back to start
-
+// Trigger on-demand emote refresh and broadcast to all connected chat widgets
+async function handleEmotesRefresh() {
+    const webPort = process.env.WEB_PORT || 8081;
+    try {
+        const res = await fetch(`http://127.0.0.1:${webPort}/api/emotes/refresh`, {
+            method: "POST"
+        });
+        if (res.ok) {
+            const data = await res.json();
+            sendToAllChatWidgets({ kiawaAction: "Emotes_Refresh" });
+            postMessage(botID, `Emotes refreshed! Loaded ${data.count ?? 0} emotes.`);
+            return;
+        }
+    } catch (err) {
+        console.error("[Emotes] Failed to refresh via webserver:", err?.message || err);
+    }
+    sendToAllChatWidgets({ kiawaAction: "Emotes_Refresh" });
+    postMessage(botID, "Emotes refresh signal sent to chat overlay.");
+}
 
 //message handler
 async function messageHandler(tags) {
@@ -1948,6 +1966,13 @@ async function messageHandler(tags) {
             } else {
                 postMessage(botID, `Invalid timezone or offset "${rawZone}". Please provide a valid IANA zone or UTC offset.`);
             }
+        }
+        return;
+    }
+
+    if (command === "!refreshemotes" || command === "!reloademotes") {
+        if (isbroadcaster === true) {
+            await handleEmotesRefresh();
         }
         return;
     }

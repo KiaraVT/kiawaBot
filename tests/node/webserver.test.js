@@ -196,3 +196,23 @@ test("Webserver - exports or reuses consistent default incentive object", async 
         goal: 0
     });
 });
+
+test("Webserver - /api/emotes endpoint returns 200 and emote map structure", async () => {
+    const res = await fetch(`${BASE_URL}/api/emotes`);
+    assert.equal(res.status, 200);
+    const contentType = res.headers.get("content-type") || "";
+    assert.ok(contentType.includes("application/json"));
+    const data = await res.json();
+    assert.ok(data.emotes !== undefined);
+    assert.ok(Array.isArray(data.channels));
+    assert.ok(typeof data.updatedAt === "string");
+});
+
+test("Webserver - POST /api/emotes/refresh refreshes and returns 200", async () => {
+    const res = await fetch(`${BASE_URL}/api/emotes/refresh`, { method: "POST" });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.ok(typeof data.count === "number");
+});
+
