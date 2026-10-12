@@ -381,7 +381,8 @@ function errorHandler(err, req, res, next) {
 
 app.use(errorHandler);
 
-const server = app.listen(port, '127.0.0.1', () => {
+//const server = app.listen(port, '127.0.0.1', () => {
+    const server = app.listen(port, () => {
     console.log(`Kiara Bot Web Server running on port ${port}`);
     console.log(`Dashboard available at: http://127.0.0.1:${port}`);
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
