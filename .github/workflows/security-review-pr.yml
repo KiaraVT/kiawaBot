@@ -214,7 +214,7 @@ jobs:
       needs.resolve-pr.outputs.found == 'true' &&
       needs.resolve-pr.outputs.same_repo == 'true' &&
       needs.resolve-pr.outputs.already_reviewed != 'true'
-    uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
+    uses: abuzucom/foucault/.github/workflows/security-review.yml@c398b5a29890ba01dee5065a7dc97a91e3e2b08b
     with:
       audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
       model_call_command: "python3 ci/call_model.py"
@@ -238,7 +238,7 @@ jobs:
       needs.resolve-pr.outputs.already_reviewed != 'true'
     # Upstream reusable workflow activates the fork-review environment gate
     # when fork_review is true. Caller jobs cannot declare environment directly.
-    uses: abuzucom/foucault/.github/workflows/security-review.yml@f58255c8d75658e62e7cff9b607c13aeab5f5e18
+    uses: abuzucom/foucault/.github/workflows/security-review.yml@c398b5a29890ba01dee5065a7dc97a91e3e2b08b
     with:
       audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
       model_call_command: "python3 ci/call_model.py"
