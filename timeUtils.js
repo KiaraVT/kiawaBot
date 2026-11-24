@@ -28,6 +28,21 @@ export const TEN_MINUTES_MS = 10 * 60 * 1000;
 export const QUOTE_DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
 /**
+ * Parses the stored quote timestamp format as UTC.
+ * Returns null when the input is missing, malformed, or invalid.
+ *
+ * @param {string|null|undefined} timestamp
+ * @returns {DateTime|null}
+ */
+export function parseQuoteTimestamp(timestamp) {
+    if (typeof timestamp !== "string" || !timestamp.trim()) {
+        return null;
+    }
+    const parsed = DateTime.fromFormat(timestamp.trim(), QUOTE_DATE_FORMAT, { zone: "utc" });
+    return parsed.isValid ? parsed : null;
+}
+
+/**
  * Parses an ISO-8601 date string into a Luxon DateTime instance in UTC.
  * Returns null if the input is null, undefined, unparseable, or invalid.
  *

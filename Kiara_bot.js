@@ -1783,6 +1783,25 @@ async function messageHandler(tags) {
         }
     }
     
+    if (command === "!undoaddquote") {
+        if (allow_List.includes(channel) || ismod === true || isvip === true) {
+            if (args.length <= 2 && (args.length === 1 || /^\d+$/.test(args[1]))) {
+                const quoteId = args.length === 2 ? args[1] : null;
+                const undoneQuote = quoteData.undoAdd(channel, quoteId);
+                if (undoneQuote) {
+                    postMessage(
+                        botID,
+                        `Undid Quote #${undoneQuote.Index} and moved it to trash #${undoneQuote.Trash_ID}.`
+                    );
+                } else {
+                    postMessage(botID, `No quote added by ${channel} within the last 24 hours can be undone.`);
+                }
+            } else {
+                postMessage(botID, `Usage: !undoaddquote [quote number]`);
+            }
+        }
+    }
+
     if (command === "!removequote") {
         if (isbroadcaster === true) {
             if (args.length === 2 && /^\d+$/.test(args[1])) {

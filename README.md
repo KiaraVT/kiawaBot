@@ -67,6 +67,7 @@ KiaraBot supports built-in and user-defined chat commands:
 |---|---|---|---|
 | `!quote` | `[id]` | Everyone | Retrieves a random quote, or a specific quote by numerical ID. |
 | `!addquote` | `<text>` | Allow list / Mods / VIPs | Adds a new quote to the database with an auto-incrementing ID. |
+| `!undoaddquote` | `[id]` | Allow list / Mods / VIPs | Moves the caller's latest eligible quote, or a specified eligible quote, to trash. Only quotes added within 24 hours are eligible. |
 | `!editquote` | `<id> <text>` | Allow list / Mods / VIPs | Updates the text of an existing quote by ID. |
 | `!removequote` | `<id>` | Broadcaster | Moves a quote to recoverable trash. |
 | `!restorequote` | `<trash id>` | Broadcaster | Restores a quote from trash with a new active ID. |

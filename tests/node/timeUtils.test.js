@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DateTime } from "luxon";
 import {
     parseIsoDateTime,
+    parseQuoteTimestamp,
     getUtcNowIsoString,
     formatQuoteTimestamp,
     isWithinRestartWindow,
@@ -37,6 +38,15 @@ test("timeUtils - parseIsoDateTime parses valid ISO-8601 strings and rejects inv
     assert.equal(parseIsoDateTime(undefined), null);
     assert.equal(parseIsoDateTime(""), null);
     assert.equal(parseIsoDateTime("not-a-date"), null);
+});
+
+test("timeUtils - parseQuoteTimestamp parses stored quote timestamps as UTC", () => {
+    const parsed = parseQuoteTimestamp("2026-10-09 12:30:45");
+    assert.ok(parsed instanceof DateTime);
+    assert.equal(parsed.isValid, true);
+    assert.equal(parsed.toISO(), "2026-10-09T12:30:45.000Z");
+    assert.equal(parseQuoteTimestamp("not-a-date"), null);
+    assert.equal(parseQuoteTimestamp(null), null);
 });
 
 test("timeUtils - getUtcNowIsoString produces standard ISO-8601 UTC strings", () => {

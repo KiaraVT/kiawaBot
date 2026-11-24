@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added recoverable quote trash with broadcaster-only `!restorequote` and `!clearquotetrash` commands.
+- Added `!undoaddquote` for eligible quote submitters to move their own quotes from the last 24 hours to trash.
 
 ### Security
 - Updated Axios to 1.21.1 and ws to 8.23.0 to include upstream security fixes.

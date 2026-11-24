@@ -1,6 +1,13 @@
 import fs from "fs";
 import jsonfile from "jsonfile";
-import { formatQuoteTimestamp, getUtcNowIsoString } from "./timeUtils.js";
+import {
+    formatQuoteTimestamp,
+    getUtcNowIsoString,
+    parseIsoDateTime,
+    parseQuoteTimestamp,
+} from "./timeUtils.js";
+
+const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The first element in quotes.json.  Not a quote itself, just metadata.
@@ -265,6 +272,75 @@ export default class QuoteHelper {
         this.trashQuotes = [{ Last_Trash_ID: String(lastTrashId) }];
         this.saveTrash();
         return clearedCount;
+    }
+
+    /**
+     * Moves a caller's eligible quote to trash.
+     * Without an ID, selects the caller's most recently added quote.
+     *
+     * @param { string } submitter
+     * @param { any } [id]
+     * @param { string } [now]
+     * @returns { Quote | undefined } the removed Quote, if eligible
+     */
+    undoAdd(submitter, id = null, now = getUtcNowIsoString()) {
+        const nowDateTime = parseIsoDateTime(now);
+        if (!nowDateTime) {
+            return undefined;
+        }
+
+        const normalizedSubmitter = String(submitter || "").toLowerCase();
+        this.load();
+        if (id !== null && id !== undefined && id !== "") {
+            const quoteId = castIdToString(id);
+            const quote = this.quotes.find(candidate => candidate.Index === quoteId);
+            return this.removeUndoableQuote(quote, normalizedSubmitter, nowDateTime);
+        }
+
+        let latestQuote;
+        let latestSubmittedAt;
+        for (const candidate of this.quotes) {
+            if (!candidate.Index || String(candidate.Submitter || "").toLowerCase() !== normalizedSubmitter) {
+                continue;
+            }
+            const submittedAt = parseQuoteTimestamp(candidate.Date);
+            if (!submittedAt || !this.isQuoteUndoable(submittedAt, nowDateTime)) {
+                continue;
+            }
+            if (!latestSubmittedAt || submittedAt.toMillis() > latestSubmittedAt.toMillis()) {
+                latestQuote = candidate;
+                latestSubmittedAt = submittedAt;
+            }
+        }
+
+        return latestQuote ? this.remove(latestQuote.Index) : undefined;
+    }
+
+    /**
+     * @param { Quote | undefined } quote
+     * @param { string } normalizedSubmitter
+     * @param { import("luxon").DateTime } nowDateTime
+     * @returns { Quote | undefined }
+     */
+    removeUndoableQuote(quote, normalizedSubmitter, nowDateTime) {
+        if (!quote || String(quote.Submitter || "").toLowerCase() !== normalizedSubmitter) {
+            return undefined;
+        }
+        const submittedAt = parseQuoteTimestamp(quote.Date);
+        if (!submittedAt || !this.isQuoteUndoable(submittedAt, nowDateTime)) {
+            return undefined;
+        }
+        return this.remove(quote.Index);
+    }
+
+    /**
+     * @param { DateTime } submittedAt
+     * @param { import("luxon").DateTime } nowDateTime
+     * @returns { boolean }
+     */
+    isQuoteUndoable(submittedAt, nowDateTime) {
+        const quoteAgeMs = nowDateTime.diff(submittedAt).as("milliseconds");
+        return quoteAgeMs >= 0 && quoteAgeMs < QUOTE_UNDO_WINDOW_MS;
     }
 
     /**

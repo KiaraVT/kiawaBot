@@ -132,3 +132,79 @@ test("QuoteHelper - clearTrash removes trash entries without reusing trash IDs",
         fs.rmSync(fixture.tempDir, { recursive: true, force: true });
     }
 });
+
+function createUndoQuoteFixture(quotes) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-undo-test-"));
+    const quotesPath = path.join(tempDir, "quotes.json");
+    const trashPath = path.join(tempDir, "quotes-trash.json");
+    fs.writeFileSync(quotesPath, JSON.stringify([
+        { Quote_Count: String(quotes.length) },
+        ...quotes
+    ], null, 2));
+    const writeJson = (filePath, data) => {
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    };
+    const helper = new QuoteHelper(quotesPath, writeJson, trashPath);
+    return { tempDir, quotesPath, trashPath, helper };
+}
+
+function createUndoQuotes() {
+    return [
+        { Index: "1", Quote_Text: "Alice recent", Submitter: "Alice", Category: "Chat", Date: "2026-11-22 13:00:00" },
+        { Index: "2", Quote_Text: "Bob recent", Submitter: "Bob", Category: "Chat", Date: "2026-11-23 11:30:00" },
+        { Index: "3", Quote_Text: "Alice latest", Submitter: "Alice", Category: "Chat", Date: "2026-11-23 10:00:00" },
+        { Index: "4", Quote_Text: "Alice expired", Submitter: "Alice", Category: "Chat", Date: "2026-11-21 12:00:00" }
+    ];
+}
+
+test("QuoteHelper - undoAdd without an ID removes the caller's latest quote within 24 hours", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        const undoneQuote = fixture.helper.undoAdd("alice", null, now);
+        assert.equal(undoneQuote?.Index, "3");
+        assert.equal(undoneQuote?.Quote_Text, "Alice latest");
+        assert.equal(undoneQuote?.Trash_ID, "1");
+
+        const trash = JSON.parse(fs.readFileSync(fixture.trashPath, "utf8"));
+        assert.equal(trash[0].Quote_Text, "Alice latest");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - undoAdd with an ID removes only the caller's eligible quote", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        const undoneQuote = fixture.helper.undoAdd("alice", "1", now);
+        assert.equal(undoneQuote?.Index, "1");
+        assert.equal(undoneQuote?.Quote_Text, "Alice recent");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - undoAdd rejects another submitter and quotes older than 24 hours", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        assert.equal(fixture.helper.undoAdd("alice", "2", now), undefined);
+        assert.equal(fixture.helper.undoAdd("alice", "4", now), undefined);
+        assert.equal(JSON.parse(fs.readFileSync(fixture.quotesPath, "utf8")).length, 5);
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - undoAdd rejects a quote exactly 24 hours old", () => {
+    const quotes = createUndoQuotes();
+    quotes[0].Date = "2026-11-22 12:00:00";
+    const fixture = createUndoQuoteFixture(quotes);
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        assert.equal(fixture.helper.undoAdd("alice", "1", now), undefined);
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
