@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from "url";
 import jsonfile from "jsonfile";
 const quote_Path = './data/quotes.json';
+const quoteTrash_Path = './data/quotes-trash.json';
 const streak_Path = './data/streaks.json';
 const command_Path = './data/command_List.json';
 const isMainModule = Boolean(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]));
@@ -55,6 +56,7 @@ if (!fs.existsSync(dataDir)) {
 // Initialize data files if they don't exist
 const defaultFiles = [
     { path: quote_Path, content: [] },
+    { path: quoteTrash_Path, content: [] },
     { path: streak_Path, content: {} },
     { path: command_Path, content: [] }
 ];
@@ -758,7 +760,7 @@ function handleInitialAuthValidation() {
 }
 //start up the incentive handler
 const incentiveData = new IncentiveHelper();
-const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
+const quoteData = new QuoteHelper(quote_Path, writeAtomicSync, quoteTrash_Path);
 
 async function startBot(options = {}) {
     if (options && typeof options === "object") {
@@ -1602,11 +1604,40 @@ if (isMainModule) {
 //increment to next array index, if at max loop back to start
 
 
+export function canManageQuotes(sender, roles = {}) {
+    return allow_List.includes(sender) ||
+        roles.isMod === true ||
+        roles.isVip === true ||
+        roles.isBroadcaster === true;
+}
+
+export function getMessageSender(tags) {
+    if (!tags || typeof tags !== "object") {
+        return "";
+    }
+    const senderCandidates = [
+        tags["display-name"],
+        tags.username,
+        tags["chatter_user_name"],
+        tags["chatter_user_login"],
+    ];
+    for (const candidate of senderCandidates) {
+        if (typeof candidate === "string" && candidate.trim()) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
 //message handler
-async function messageHandler(tags) {
+async function messageHandler(tags, options) {
+            const commandOptions = options && typeof options === "object" ? options : {};
+            const activeQuoteData = commandOptions.quoteData ?? quoteData;
+            const sendQuoteMessage = commandOptions.postMessage ?? postMessage;
             const user_id=tags["chatter_user_id"];
             const message=tags.message.text;
             const channel=tags["chatter_user_name"];
+            const sender=getMessageSender(tags);
             //determine if chat activity in last ten minutes
             if (tags.chatter_user_login != "kiawa_bot") {
                 activityDetection = true;
@@ -1817,10 +1848,10 @@ async function messageHandler(tags) {
         /** @type Quote */
         let quote;
         if (id > 0) {
-            quote = quoteData.findByIndex(id);
+            quote = activeQuoteData.findByIndex(id);
         }
         else {
-            quote = quoteData.findRandom();
+            quote = activeQuoteData.findRandom();
         }
         
         if (quote) {
@@ -1829,14 +1860,18 @@ async function messageHandler(tags) {
             postMessage(botID, message);
         }
         else {
-            const maxIndex = quoteData.getMaxIndex();
+            const maxIndex = activeQuoteData.getMaxIndex();
             postMessage(botID, `Number Provided out of range! The highest number is ${maxIndex}`);
         }
     }
     
     if (command === "!addquote") {
         //check if user is a mod or VIP allow_List.includes(tags.username) ||
-        if (allow_List.includes(channel) || ismod === true || isvip === true) {
+        if (canManageQuotes(sender, {
+            isMod: ismod,
+            isVip: isvip,
+            isBroadcaster: isbroadcaster
+        })) {
             
             //the remainder of the text is separated from the command, this is the quote text
             const textToAdd = args.slice(1).join(" ");
@@ -1852,7 +1887,7 @@ async function messageHandler(tags) {
                 console.error('[Quote] Failed to get category info for quote:', formatAxiosError(err));
             }
             
-            const addedQuote = quoteData.add(textToAdd, channel, categoryToAdd);
+            const addedQuote = activeQuoteData.add(textToAdd, sender, categoryToAdd);
             
             if (addedQuote) {
                 postMessage(botID, `Added Quote #${addedQuote.Index} ${addedQuote.Quote_Text} [${addedQuote.Category}] [${addedQuote.Date}]`);
@@ -1863,12 +1898,57 @@ async function messageHandler(tags) {
         }
     }
     
+    if (command === "!undoaddquote") {
+        if (canManageQuotes(sender, {
+            isMod: ismod,
+            isVip: isvip,
+            isBroadcaster: isbroadcaster
+        })) {
+            if (args.length <= 2 && (args.length === 1 || /^\d+$/.test(args[1]))) {
+                const quoteId = args.length === 2 ? args[1] : null;
+                const result = activeQuoteData.undoAdd(sender, quoteId);
+                if (result.status === "removed") {
+                    sendQuoteMessage(
+                        botID,
+                        `Undid Quote #${result.quote.Index} and moved it to trash #${result.quote.Trash_ID}.`
+                    );
+                } else if (result.status === "not-found") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} was not found.`
+                        : `You do not have any quote that can be undone.`;
+                    sendQuoteMessage(botID, message);
+                } else if (result.status === "not-owner") {
+                    sendQuoteMessage(botID, `Quote #${quoteId} was not added by you and cannot be undone.`);
+                } else if (result.status === "expired") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} was not added within the last 24 hours and cannot be undone.`
+                        : `No quote added by you within the last 24 hours can be undone.`;
+                    sendQuoteMessage(botID, message);
+                } else if (result.status === "unparsable-date") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} has an unsupported creation timestamp and cannot be undone.`
+                        : `One of your quotes has an unsupported creation timestamp and cannot be undone.`;
+                    sendQuoteMessage(botID, message);
+                } else if (result.status === "invalid-reference-time") {
+                    sendQuoteMessage(botID, `Unable to evaluate quote eligibility because the reference time is invalid.`);
+                }
+            } else {
+                sendQuoteMessage(botID, `Usage: !undoaddquote [quote number]`);
+            }
+        }
+    }
+
     if (command === "!removequote") {
         if (isbroadcaster === true) {
             if (args.length === 2 && /^\d+$/.test(args[1])) {
-                const removedQuote = quoteData.remove(args[1]);
+                const removedQuote = activeQuoteData.remove(args[1]);
                 if (removedQuote) {
-                    postMessage(botID, `Removed Quote #${removedQuote.Index}: ${removedQuote.Quote_Text}`);
+                    const trashId = removedQuote.Trash_ID;
+                    postMessage(
+                        botID,
+                        `Moved Quote #${removedQuote.Index} to trash #${trashId}: ${removedQuote.Quote_Text} ` +
+                        `Restore with !restorequote ${trashId}`
+                    );
                 } else {
                     postMessage(botID, `Could not find Quote #${args[1]} to remove.`);
                 }
@@ -1877,7 +1957,33 @@ async function messageHandler(tags) {
             }
         }
     }
+
+    if (command === "!restorequote") {
+        if (isbroadcaster === true) {
+            if (args.length === 2 && /^\d+$/.test(args[1])) {
+                const restoredQuote = activeQuoteData.restore(args[1]);
+                if (restoredQuote) {
+                    postMessage(botID, `Restored Quote #${restoredQuote.Index}: ${restoredQuote.Quote_Text}`);
+                } else {
+                    postMessage(botID, `Could not find trash item #${args[1]} to restore.`);
+                }
+            } else {
+                postMessage(botID, `Usage: !restorequote <trash number>`);
+            }
+        }
+    }
     
+    if (command === "!clearquotetrash") {
+        if (isbroadcaster === true) {
+            if (args.length === 1) {
+                const clearedCount = activeQuoteData.clearTrash();
+                postMessage(botID, `Cleared ${clearedCount} quote(s) from trash.`);
+            } else {
+                postMessage(botID, `Usage: !clearquotetrash`);
+            }
+        }
+    }
+
     if (command === "!editquote") {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true || isvip === true) {
@@ -1889,14 +1995,14 @@ async function messageHandler(tags) {
             const textToUpdate = args.slice(2).join(" ");
             
             //update the quote
-            const updatedQuote = quoteData.edit(idToUpdate, textToUpdate);
+            const updatedQuote = activeQuoteData.edit(idToUpdate, textToUpdate);
             
             if (updatedQuote) {
                 postMessage(botID, `Updated Quote #${updatedQuote.Index} ${updatedQuote.Quote_Text}`);
             }
             else {
                 //Grab the highest quote ID
-                const maxIndex = quoteData.getMaxIndex();
+                const maxIndex = activeQuoteData.getMaxIndex();
                 postMessage(botID, `Number Provided out of range! The highest number is ${maxIndex}`);
             }
             

@@ -7,18 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added recoverable quote trash with 30-day retention and broadcaster-only `!restorequote` and `!clearquotetrash` commands.
+- Added `!undoaddquote` for eligible quote submitters to move their own quotes from the last 24 hours to trash.
+
 ### Security
 - Updated Axios to 1.21.1 and ws to 8.23.0 to include upstream security fixes.
 - Downgraded Nodemon to 3.1.11 to avoid the vulnerable Minimatch 10 dependency range.
 
 ### Changed
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
+- Hardened quote trash loading to discard malformed entries and skip retention pruning for invalid reference times.
+- Rejected empty quote text and preserved quote creation ordering across trash restoration.
+- Routed quote ownership through the message sender and removed full trash serialization from unchanged-file detection.
 - Pinned the CI Node.js runtime to 26.13.1 to match the container runtime.
 - Pull request review workflows now run for every CI outcome and group concurrency by the resolved pull request number.
 - Superseded CI events skip before review dispatch, and removing `safe-to-review` cancels active fork reviews.
 - Stale pull request revisions skip without failing, while ambiguous revisions fail visibly.
 
 ### Fixed
+- Reconciled interrupted quote removals, restored active quote ordering, and corrected undo failure precedence.
+- Allowed broadcasters to undo their own eligible quotes.
 - Closed the OAuth callback listener during test cleanup to prevent CI test runs from reaching the job timeout.
 - Added explicit OAuth listener state tracking so stopped listeners close without waiting indefinitely.
 - Added a two-minute timeout to the Node.js unit test step.

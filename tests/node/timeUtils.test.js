@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DateTime } from "luxon";
 import {
     parseIsoDateTime,
+    parseQuoteTimestamp,
     getUtcNowIsoString,
     formatQuoteTimestamp,
     isWithinRestartWindow,
@@ -15,6 +16,9 @@ import {
     delayMilliseconds,
     StreamAttendanceSessionTracker,
     FIVE_HOURS_MS,
+    QUOTE_UNDO_WINDOW_MS,
+    QUOTE_TRASH_RETENTION_DAYS,
+    QUOTE_TRASH_RETENTION_MS,
     normalizeTimezone,
     isValidTimezone,
     getStreamerTimezone,
@@ -27,6 +31,12 @@ import {
 } from "../../timeUtils.js";
 import { TwitchAuthPipeline } from "../../pipelineUtils.js";
 
+test("timeUtils - quote time windows use centralized exclusive boundaries", () => {
+    assert.equal(QUOTE_UNDO_WINDOW_MS, 24 * 60 * 60 * 1000);
+    assert.equal(QUOTE_TRASH_RETENTION_DAYS, 30);
+    assert.equal(QUOTE_TRASH_RETENTION_MS, QUOTE_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+});
+
 test("timeUtils - parseIsoDateTime parses valid ISO-8601 strings and rejects invalid values", () => {
     const valid = parseIsoDateTime("2026-10-09T08:00:00Z");
     assert.ok(valid instanceof DateTime);
@@ -37,6 +47,15 @@ test("timeUtils - parseIsoDateTime parses valid ISO-8601 strings and rejects inv
     assert.equal(parseIsoDateTime(undefined), null);
     assert.equal(parseIsoDateTime(""), null);
     assert.equal(parseIsoDateTime("not-a-date"), null);
+});
+
+test("timeUtils - parseQuoteTimestamp parses stored quote timestamps as UTC", () => {
+    const parsed = parseQuoteTimestamp("2026-10-09 12:30:45");
+    assert.ok(parsed instanceof DateTime);
+    assert.equal(parsed.isValid, true);
+    assert.equal(parsed.toISO(), "2026-10-09T12:30:45.000Z");
+    assert.equal(parseQuoteTimestamp("not-a-date"), null);
+    assert.equal(parseQuoteTimestamp(null), null);
 });
 
 test("timeUtils - getUtcNowIsoString produces standard ISO-8601 UTC strings", () => {

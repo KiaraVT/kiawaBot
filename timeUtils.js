@@ -21,11 +21,46 @@ export const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 export const TEN_MINUTES_MS = 10 * 60 * 1000;
 
 /**
+ * 24 hours in milliseconds.
+ * Exclusive upper bound for quote undo eligibility.
+ * @type {number}
+ */
+export const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Number of days retained in quote trash.
+ * @type {number}
+ */
+export const QUOTE_TRASH_RETENTION_DAYS = 30;
+
+/**
+ * Quote trash retention period in milliseconds.
+ * Exclusive upper bound for trash entry age.
+ * @type {number}
+ */
+export const QUOTE_TRASH_RETENTION_MS = QUOTE_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+/**
  * Format string for quotes: 24-hour UTC ISO format with seconds.
  * Example output: "2026-10-09 12:30:45".
  * @type {string}
  */
 export const QUOTE_DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
+/**
+ * Parses the stored quote timestamp format as UTC.
+ * Returns null when the input is missing, malformed, or invalid.
+ *
+ * @param {string|null|undefined} timestamp
+ * @returns {DateTime|null}
+ */
+export function parseQuoteTimestamp(timestamp) {
+    if (typeof timestamp !== "string" || !timestamp.trim()) {
+        return null;
+    }
+    const parsed = DateTime.fromFormat(timestamp.trim(), QUOTE_DATE_FORMAT, { zone: "utc" });
+    return parsed.isValid ? parsed : null;
+}
 
 /**
  * Parses an ISO-8601 date string into a Luxon DateTime instance in UTC.

@@ -43,6 +43,7 @@ If you need to quickly look up how to perform a common time task:
 | **Schedule a recurring message without drift** | `scheduleCompensatedInterval()` | `const timer = scheduleCompensatedInterval(fn, 15 * 60 * 1000);` |
 | **Save a timestamp into a JSON data file** | `getUtcNowIsoString()` | `const nowIso = getUtcNowIsoString();` |
 | **Parse an ISO-8601 string from a file or API** | `parseIsoDateTime()` | `const dt = parseIsoDateTime(record.updatedAt);` |
+| **Parse a stored quote creation timestamp** | `parseQuoteTimestamp()` | `const dt = parseQuoteTimestamp(quote.Date);` |
 | **Format current time for chat or quotes** | `formatQuoteTimestamp()` | `const str = formatQuoteTimestamp(); // "2026-10-10 16:00:00"` |
 | **Display broadcaster timezone in chat** | `getStreamerUtcOffset()` | `const offset = getStreamerUtcOffset(); // "UTC-7"` |
 | **Cycle through an array of announcements** | `safeRotateIndex()` | `index = safeRotateIndex(index, messages.length);` |
@@ -105,7 +106,7 @@ Use this decision table to choose the appropriate time type for your feature:
 | **Elapsed durations, cooldowns, timers, recurring intervals** | Monotonic Time | `getMonotonicMs()`, `scheduleCompensatedInterval()` | Immune to system clock adjustments, NTP steps, and daylight saving shifts. Guarantees steady forward progress. |
 | **Data persistence, JSON files, API payloads, WebSockets** | UTC ISO-8601 | `getUtcNowIsoString()`, `parseIsoDateTime()` | Universal, machine-readable source of truth across systems without timezone or daylight saving ambiguity. |
 | **Stream sessions, attendance streaks, daily check-in resets** | Streamer Local Time | `getDailyResetCutoffTime()`, `getStreamerTimezone()` | Matches real broadcast schedules, allowing overnight streams past midnight to count toward the same broadcast day until 06:00 AM local time. |
-| **Chat outputs, quote timestamps, web overlay text** | Privacy-Safe Display | `formatQuoteTimestamp()`, `getStreamerUtcOffset()`, `getStreamerIsoString()` | Human-readable formatting that protects broadcaster privacy by displaying UTC offsets rather than physical city names. |
+| **Chat outputs, quote timestamps, web overlay text** | Privacy-Safe Display | `formatQuoteTimestamp()`, `parseQuoteTimestamp()`, `getStreamerUtcOffset()`, `getStreamerIsoString()` | Human-readable formatting that protects broadcaster privacy by displaying UTC offsets rather than physical city names. Quote timestamps use an explicit UTC interpretation. |
 
 ---
 
@@ -489,7 +490,10 @@ This section serves as a manual page reference for every exported constant, func
 
 - **`FIVE_HOURS_MS`** (`number` = `18000000`): 5 hours in milliseconds. Primary window to evaluate whether a stream reconnection is a continuation.
 - **`TEN_MINUTES_MS`** (`number` = `600000`): 10 minutes in milliseconds. Used for authorization state expiration and short timeouts.
-- **`QUOTE_DATE_FORMAT`** (`string` = `"yyyy-MM-dd HH:mm:ss"`): 24-hour UTC ISO format string with seconds.
+- **`QUOTE_UNDO_WINDOW_MS`** (`number` = `86400000`): 24 hours in milliseconds. Exclusive upper bound for quote undo eligibility. A quote exactly 24 hours old is not eligible.
+- **`QUOTE_TRASH_RETENTION_DAYS`** (`number` = `30`): Number of days retained in quote trash.
+- **`QUOTE_TRASH_RETENTION_MS`** (`number` = `2592000000`): Quote trash retention period in milliseconds. Exclusive upper bound for trash entry age.
+- **`QUOTE_DATE_FORMAT`** (`string` = `"yyyy-MM-dd HH:mm:ss"`): 24-hour quote creation timestamp format with seconds. `parseQuoteTimestamp()` interprets this format explicitly as UTC. Legacy local-time values without a UTC marker are rejected instead of being interpreted using the host timezone.
 - **`DEFAULT_STREAMER_TIMEZONE`** (`string` = `"America/Los_Angeles"`): Primary fallback IANA timezone for broadcast day calculations.
 
 ### Quick Function Index
@@ -497,6 +501,7 @@ This section serves as a manual page reference for every exported constant, func
 | Function | Category | Summary |
 |---|---|---|
 | [`parseIsoDateTime`](#parseisodatetimeisostring) | Parsing & Formatting | Parses ISO-8601 string into a UTC Luxon `DateTime` |
+| [`parseQuoteTimestamp`](#parsequotetimestamptimestamp) | Parsing & Formatting | Parses stored quote creation timestamp explicitly as UTC |
 | [`getUtcNowIsoString`](#getutcnowisostringdatetime--null) | Parsing & Formatting | Serializes current or given date to UTC ISO-8601 string |
 | [`formatQuoteTimestamp`](#formatquotetimestampdatetime--null) | Parsing & Formatting | Formats 24-hour UTC timestamp string with seconds |
 | [`getStreamerUtcOffset`](#getstreamerutcoffsetreferencedatetime--datetimenow-zone--null) | Parsing & Formatting | Returns formatted UTC offset (e.g. `"UTC-7"`) |
@@ -537,6 +542,22 @@ This section serves as a manual page reference for every exported constant, func
       console.log("UTC hour:", dt.hour); // 16
   } else {
       console.warn("Invalid ISO timestamp.");
+  }
+  ```
+
+#### `parseQuoteTimestamp(timestamp)`
+- **Synopsis:** `parseQuoteTimestamp(timestamp) -> DateTime | null`
+- **Description:** Parses the stored quote creation timestamp format (`"yyyy-MM-dd HH:mm:ss"`) explicitly as UTC. The format has second precision and does not contain a timezone designator. Legacy local-time values such as `"2026/10/9 1:30 PM"` return `null` because interpreting them would depend on the host timezone.
+- **Parameters:**
+  - `timestamp` (`string | null | undefined`): Stored quote creation timestamp.
+- **Returns:** `DateTime | null`: Valid Luxon `DateTime` in UTC, or `null` for missing, malformed, legacy, or invalid values.
+- **Example:**
+  ```javascript
+  import { parseQuoteTimestamp } from "./timeUtils.js";
+
+  const submittedAt = parseQuoteTimestamp("2026-10-10 16:00:00");
+  if (submittedAt) {
+      console.log("UTC hour:", submittedAt.hour); // 16
   }
   ```
 
