@@ -24,11 +24,11 @@ The security reviewer utilizes local adopter scripts to prepare context, invoke 
 ## Wiring and Lifecycle
 
 - `.github/workflows/security-review-pr.yml` runs the caller workflow.
-- Trigger: fires on completion of `ci` (`workflow_run` event). The resolver runs only when the source CI event was a pull request and the CI conclusion was `success`. Failed or canceled CI runs do not allocate review jobs.
-- Concurrency: grouped by the source repository and pull request branch with `cancel-in-progress: true`. A newer review cancels an obsolete review for the same pull request branch.
+- Trigger: fires on completion of `ci` (`workflow_run` event). The resolver runs for every pull request CI outcome. Failed, canceled, and skipped CI runs remain reviewable so a pull request author cannot suppress the review by changing the CI workflow.
+- Concurrency: review jobs use the resolved pull request number with `cancel-in-progress: true`. A newer review cancels an obsolete review for the same pull request. Stale workflow events that resolve to no current pull request do not enter the review concurrency group.
 - Permissions: declares `actions: read`, `checks: write`, `contents: read`, and `pull-requests: write`.
 - Resolution (`resolve-pr` job):
-  - Matches `head_sha` against open pull requests. A stale revision with no matching open pull request exits without a review.
+  - Matches `head_sha` against open pull requests. A stale revision with no matching open pull request exits without a review. Multiple matching pull requests fail visibly.
   - Base Commit Fallback: queries GitHub API for required adopter review scripts (`ci/build_pr_case.py`, `ci/run_model_command.py`, `scripts/check_pr_review_response.py`) on `base_sha`. If any script returns 404 (e.g. older forks predating reviewer adoption), falls back to `context.sha` on the default branch so the checkout step succeeds.
   - Re-review Deduplication: checks for existing trusted verdict artifacts (`security-review-verdict-${head_sha}`) and completed checks from default-branch runs, setting `already_reviewed: true` to prevent redundant execution.
   - Queries PR labels via GitHub API, checking for `safe-to-review`. Fails closed if label queries fail.

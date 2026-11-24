@@ -157,18 +157,18 @@ class WorkflowContractsTestCase(unittest.TestCase):
                 )
 
     def test_ci_pins_node_version_and_bounds_node_tests(self) -> None:
-        """CI must use a reproducible Node version and bound the test step."""
+        """CI must use the production Node version and bound the test step."""
         workflow_file = self.workflows_dir / "ci.yml"
         content = workflow_file.read_text(encoding="utf-8")
 
-        self.assertIn('node-version: "22.23.5"', content)
+        self.assertIn('node-version: "26.13.1"', content)
         self.assertIn(
             "- name: Run Node.js unit tests\n        timeout-minutes: 2\n        run: npm test",
             content,
         )
 
-    def test_review_resolvers_require_successful_pull_request_ci(self) -> None:
-        """Review jobs must not start after failed or canceled CI runs."""
+    def test_review_resolvers_run_for_all_pull_request_ci_outcomes(self) -> None:
+        """Review jobs must not let a pull request author suppress reviews."""
         workflow_files = [
             self.workflows_dir / "quality-review-pr.yml",
             self.workflows_dir / "security-review-pr.yml",
@@ -179,44 +179,63 @@ class WorkflowContractsTestCase(unittest.TestCase):
                 "github.event.workflow_run.event == 'pull_request'",
                 content,
             )
-            self.assertIn(
+            self.assertNotIn(
                 "github.event.workflow_run.conclusion == 'success'",
                 content,
             )
 
-    def test_review_concurrency_groups_use_pull_request_branch_identity(self) -> None:
-        """Review concurrency must cancel obsolete runs for the same PR branch."""
+    def test_review_concurrency_groups_use_resolved_pull_request_number(self) -> None:
+        """Review concurrency must cancel obsolete runs for the same PR."""
         workflow_files = [
             self.workflows_dir / "quality-review-pr.yml",
             self.workflows_dir / "security-review-pr.yml",
         ]
+        expected_output = {
+            "quality-review-pr.yml": "needs.resolve.outputs.number",
+            "security-review-pr.yml": "needs.resolve-pr.outputs.pr_number",
+        }
         for workflow_file in workflow_files:
             content = workflow_file.read_text(encoding="utf-8")
-            self.assertIn(
+            jobs = extract_workflow_jobs(content)
+            for job_name in ("review", "review-fork"):
+                self.assertIn(
+                    expected_output[workflow_file.name],
+                    jobs[job_name],
+                )
+                self.assertIn("cancel-in-progress: true", jobs[job_name])
+            self.assertNotIn(
                 "github.event.workflow_run.head_repository.full_name",
                 content,
             )
-            self.assertIn(
+            self.assertNotIn(
                 "github.event.workflow_run.head_branch",
                 content,
             )
-            self.assertNotIn(
-                "group: quality-review-${{ github.event.workflow_run.head_sha }}",
-                content,
-            )
-            self.assertNotIn(
-                "group: security-review-${{ github.event.workflow_run.head_sha }}",
+
+    def test_review_resolvers_distinguish_stale_and_ambiguous_heads(self) -> None:
+        """Zero matches must skip, while multiple matches must fail visibly."""
+        quality_file = self.workflows_dir / "quality-review-pr.yml"
+        quality_content = quality_file.read_text(encoding="utf-8")
+        security_file = self.workflows_dir / "security-review-pr.yml"
+        security_content = security_file.read_text(encoding="utf-8")
+
+        self.assertIn("if (matches.length === 0)", quality_content)
+        self.assertIn("if (matches.length > 1)", quality_content)
+        self.assertIn("if (candidates.length === 0)", security_content)
+        self.assertIn("if (candidates.length > 1)", security_content)
+        for content in (quality_content, security_content):
+            self.assertIn(
+                "expected one pull request for workflow run head",
                 content,
             )
 
-    def test_security_review_treats_missing_pull_request_as_skipped(self) -> None:
-        """A stale workflow run must not fail when no current PR matches."""
+    def test_security_review_sets_all_stale_outputs(self) -> None:
+        """The stale security resolver must publish a complete output set."""
         workflow_file = self.workflows_dir / "security-review-pr.yml"
         content = workflow_file.read_text(encoding="utf-8")
 
-        self.assertIn("if (candidates.length !== 1)", content)
-        self.assertNotIn(
-            "expected one pull request for workflow run head",
+        self.assertIn(
+            'core.setOutput("already_reviewed", "false");',
             content,
         )
 
