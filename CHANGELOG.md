@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added recoverable quote trash and the broadcaster-only `!restorequote` command.
+
 ### Security
 - Updated Axios to 1.21.1 and ws to 8.23.0 to include upstream security fixes.
 - Downgraded Nodemon to 3.1.11 to avoid the vulnerable Minimatch 10 dependency range.

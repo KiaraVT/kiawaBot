@@ -1,5 +1,6 @@
+import fs from "fs";
 import jsonfile from "jsonfile";
-import { formatQuoteTimestamp } from "./timeUtils.js";
+import { formatQuoteTimestamp, getUtcNowIsoString } from "./timeUtils.js";
 
 /**
  * The first element in quotes.json.  Not a quote itself, just metadata.
@@ -21,6 +22,20 @@ import { formatQuoteTimestamp } from "./timeUtils.js";
  * The contents of quotes.json, which is a single array.
  * The first element is a metadata object, the rest are actual quotes.
  * @typedef { [QuoteCounter, ...Quote[]] } Quotes
+ */
+
+/**
+ * A deleted quote retained in the trash for restoration.
+ * @typedef { Object } TrashedQuote
+ * @property { string } Trash_ID
+ * @property { string } Original_Index
+ * @property { string } Quote_Text
+ * @property { string } Submitter
+ * @property { string } Category
+ * @property { string } Date
+ * @property { string } Deleted_At
+ * @property { string } [Restored_At]
+ * @property { string } [Restored_Index]
  */
 
 /**
@@ -56,9 +71,12 @@ export function castIdToString(id, logWarning = false) {
 export default class QuoteHelper {
 
     // writeFile is passed in from the bot so we can reuse the new atomic write function
-    constructor(dataPath, writeFile) {
+    constructor(dataPath, writeFile, trashDataPath = "./data/quotes-trash.json") {
         /** @type {Quotes} */
         this.quotes = [{Quote_Count: "0"}];
+        /** @type {TrashedQuote[]} */
+        this.trashQuotes = [];
+        this.trashDataPath = trashDataPath;
 
         // reread the file for freshness.
         // defined in the constructor just to avoid extra instance variables for dataPath.
@@ -70,6 +88,22 @@ export default class QuoteHelper {
         // defined in the constructor just to avoid extra instance variables for dataPath and writeFile.
         this.save = () => {
             writeFile(dataPath, this.quotes, { spaces: 2 });
+        }
+
+        this.loadTrash = () => {
+            if (!fs.existsSync(this.trashDataPath)) {
+                this.trashQuotes = [];
+                return;
+            }
+            const trashQuotes = jsonfile.readFileSync(this.trashDataPath);
+            if (!Array.isArray(trashQuotes)) {
+                throw new Error("Quote trash data must be an array");
+            }
+            this.trashQuotes = trashQuotes;
+        }
+
+        this.saveTrash = () => {
+            writeFile(this.trashDataPath, this.trashQuotes, { spaces: 2 });
         }
     }
 
@@ -169,8 +203,24 @@ export default class QuoteHelper {
             this.load();
             const quoteIndex = this.quotes.findIndex(quote => quote.Index === index);
             if (quoteIndex !== -1) {
-                const removedQuote = this.quotes.splice(quoteIndex, 1)[0];
-                
+                const removedQuote = this.quotes[quoteIndex];
+                this.loadTrash();
+                const trashId = this.getMaxTrashIndex() + 1;
+                const trashEntry = {
+                    Trash_ID: String(trashId),
+                    Original_Index: removedQuote.Index,
+                    Quote_Text: removedQuote.Quote_Text,
+                    Submitter: removedQuote.Submitter,
+                    Category: removedQuote.Category,
+                    Date: removedQuote.Date,
+                    Deleted_At: getUtcNowIsoString(),
+                };
+
+                // Save the recoverable copy before changing the active collection.
+                this.trashQuotes.push(trashEntry);
+                this.saveTrash();
+                this.quotes.splice(quoteIndex, 1);
+
                 // Atomically re-index all quotes to perfectly sequential numbering
                 let newId = 1;
                 for (let i = 0; i < this.quotes.length; i++) {
@@ -179,7 +229,7 @@ export default class QuoteHelper {
                         newId++;
                     }
                 }
-                
+
                 // Update the Quote_Count metadata element
                 const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
                 if (metadataElement) {
@@ -187,10 +237,61 @@ export default class QuoteHelper {
                 }
 
                 this.save();
-                return removedQuote;
+                return { ...removedQuote, Trash_ID: trashEntry.Trash_ID };
             }
         }
         return undefined;
+    }
+
+    /**
+     * @returns {number} the largest trash ID in use
+     */
+    getMaxTrashIndex() {
+        this.loadTrash();
+        const indexes = this.trashQuotes.map(quote => castIdToNumber(quote.Trash_ID));
+        return Math.max(0, ...indexes);
+    }
+
+    /**
+     * @param { any } id
+     * @returns { Quote | undefined } the restored Quote, if any
+     */
+    restore(id) {
+        const trashId = castIdToString(id);
+        if (!trashId) {
+            return undefined;
+        }
+
+        this.loadTrash();
+        const trashIndex = this.trashQuotes.findIndex(quote => (
+            quote.Trash_ID === trashId && !quote.Restored_At
+        ));
+        if (trashIndex === -1) {
+            return undefined;
+        }
+
+        const trashEntry = this.trashQuotes[trashIndex];
+        this.load();
+        const restoredQuote = {
+            Index: String(this.getMaxIndex() + 1),
+            Quote_Text: trashEntry.Quote_Text,
+            Submitter: trashEntry.Submitter,
+            Category: trashEntry.Category,
+            Date: trashEntry.Date,
+        };
+        this.quotes.push(restoredQuote);
+
+        const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
+        if (metadataElement) {
+            metadataElement.Quote_Count = restoredQuote.Index;
+        }
+
+        // Save the active quote before marking the trash entry to avoid data loss.
+        this.save();
+        trashEntry.Restored_At = getUtcNowIsoString();
+        trashEntry.Restored_Index = restoredQuote.Index;
+        this.saveTrash();
+        return restoredQuote;
     }
 
 }

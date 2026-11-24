@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from "url";
 import jsonfile from "jsonfile";
 const quote_Path = './data/quotes.json';
+const quoteTrash_Path = './data/quotes-trash.json';
 const streak_Path = './data/streaks.json';
 const command_Path = './data/command_List.json';
 const isMainModule = Boolean(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]));
@@ -55,6 +56,7 @@ if (!fs.existsSync(dataDir)) {
 // Initialize data files if they don't exist
 const defaultFiles = [
     { path: quote_Path, content: [] },
+    { path: quoteTrash_Path, content: [] },
     { path: streak_Path, content: {} },
     { path: command_Path, content: [] }
 ];
@@ -676,7 +678,7 @@ function handleInitialAuthValidation() {
 }
 //start up the incentive handler
 const incentiveData = new IncentiveHelper();
-const quoteData = new QuoteHelper(quote_Path, writeAtomicSync);
+const quoteData = new QuoteHelper(quote_Path, writeAtomicSync, quoteTrash_Path);
 
 async function startBot(options = {}) {
     if (options && typeof options === "object") {
@@ -1786,12 +1788,32 @@ async function messageHandler(tags) {
             if (args.length === 2 && /^\d+$/.test(args[1])) {
                 const removedQuote = quoteData.remove(args[1]);
                 if (removedQuote) {
-                    postMessage(botID, `Removed Quote #${removedQuote.Index}: ${removedQuote.Quote_Text}`);
+                    const trashId = removedQuote.Trash_ID;
+                    postMessage(
+                        botID,
+                        `Moved Quote #${removedQuote.Index} to trash #${trashId}: ${removedQuote.Quote_Text} ` +
+                        `Restore with !restorequote ${trashId}`
+                    );
                 } else {
                     postMessage(botID, `Could not find Quote #${args[1]} to remove.`);
                 }
             } else {
                 postMessage(botID, `Usage: !removequote <number>`);
+            }
+        }
+    }
+
+    if (command === "!restorequote") {
+        if (isbroadcaster === true) {
+            if (args.length === 2 && /^\d+$/.test(args[1])) {
+                const restoredQuote = quoteData.restore(args[1]);
+                if (restoredQuote) {
+                    postMessage(botID, `Restored Quote #${restoredQuote.Index}: ${restoredQuote.Quote_Text}`);
+                } else {
+                    postMessage(botID, `Could not find trash item #${args[1]} to restore.`);
+                }
+            } else {
+                postMessage(botID, `Usage: !restorequote <trash number>`);
             }
         }
     }
