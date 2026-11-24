@@ -1818,6 +1818,17 @@ async function messageHandler(tags) {
         }
     }
     
+    if (command === "!clearquotetrash") {
+        if (isbroadcaster === true) {
+            if (args.length === 1) {
+                const clearedCount = quoteData.clearTrash();
+                postMessage(botID, `Cleared ${clearedCount} quote(s) from trash.`);
+            } else {
+                postMessage(botID, `Usage: !clearquotetrash`);
+            }
+        }
+    }
+
     if (command === "!editquote") {
         //check if user is in the allow_List (AKA, is a MOD or approved person)
         if (allow_List.includes(channel) || ismod === true || isvip === true) {

@@ -248,8 +248,23 @@ export default class QuoteHelper {
      */
     getMaxTrashIndex() {
         this.loadTrash();
-        const indexes = this.trashQuotes.map(quote => castIdToNumber(quote.Trash_ID));
+        const indexes = this.trashQuotes.flatMap(quote => [
+            castIdToNumber(quote.Trash_ID),
+            castIdToNumber(quote.Last_Trash_ID),
+        ]);
         return Math.max(0, ...indexes);
+    }
+
+    /**
+     * @returns {number} the number of trash entries removed
+     */
+    clearTrash() {
+        this.loadTrash();
+        const clearedCount = this.trashQuotes.filter(quote => quote.Trash_ID).length;
+        const lastTrashId = this.getMaxTrashIndex();
+        this.trashQuotes = [{ Last_Trash_ID: String(lastTrashId) }];
+        this.saveTrash();
+        return clearedCount;
     }
 
     /**

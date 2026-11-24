@@ -115,3 +115,20 @@ test("QuoteHelper - restore does not restore the same trash entry twice", () => 
         fs.rmSync(fixture.tempDir, { recursive: true, force: true });
     }
 });
+
+test("QuoteHelper - clearTrash removes trash entries without reusing trash IDs", () => {
+    const fixture = createQuoteHelperFixture();
+    try {
+        fixture.helper.remove("2");
+        fixture.helper.remove("2");
+        assert.equal(fixture.helper.clearTrash(), 2);
+
+        const clearedTrash = JSON.parse(fs.readFileSync(fixture.trashPath, "utf8"));
+        assert.equal(clearedTrash.filter(quote => quote.Trash_ID).length, 0);
+
+        const removedQuote = fixture.helper.remove("1");
+        assert.equal(removedQuote?.Trash_ID, "3");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});

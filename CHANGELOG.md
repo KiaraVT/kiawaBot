@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added recoverable quote trash and the broadcaster-only `!restorequote` command.
+- Added recoverable quote trash with broadcaster-only `!restorequote` and `!clearquotetrash` commands.
 
 ### Security
 - Updated Axios to 1.21.1 and ws to 8.23.0 to include upstream security fixes.

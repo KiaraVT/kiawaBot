@@ -70,6 +70,7 @@ KiaraBot supports built-in and user-defined chat commands:
 | `!editquote` | `<id> <text>` | Allow list / Mods / VIPs | Updates the text of an existing quote by ID. |
 | `!removequote` | `<id>` | Broadcaster | Moves a quote to recoverable trash. |
 | `!restorequote` | `<trash id>` | Broadcaster | Restores a quote from trash with a new active ID. |
+| `!clearquotetrash` | None | Broadcaster | Permanently clears all quote trash entries. |
 | `!addcommand` | `<tag> <response>` | Mods / Streamer | Registers a new custom command (invoked via `!<tag>`). |
 | `!editcommand` | `<tag> <response>` | Mods / Streamer | Updates an existing custom command's response text. |
 | `!so` | `<channel>` | VIPs / Mods | Generates a shoutout link for a featured streamer. |
