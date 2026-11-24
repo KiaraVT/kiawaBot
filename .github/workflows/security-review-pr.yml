@@ -33,11 +33,44 @@ jobs:
           script: |
             const workflowRun = context.payload.workflow_run;
             const headSha = workflowRun?.head_sha;
-            if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+            const setEmptyOutputs = () => {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
               core.setOutput("safe_to_review", "false");
+              core.setOutput("already_reviewed", "false");
+              core.setOutput("pr_number", "");
+              core.setOutput("base_sha", "");
+              core.setOutput("head_sha", "");
+              core.setOutput("head_repo_url", "");
+              core.setOutput("head_repo_full_name", "");
+            };
+            if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+              setEmptyOutputs();
               core.setFailed("workflow run head SHA is invalid");
+              return;
+            }
+            const sourceRunId = Number(workflowRun?.id);
+            if (!Number.isSafeInteger(sourceRunId) || sourceRunId <= 0) {
+              setEmptyOutputs();
+              core.setFailed("workflow run id is invalid");
+              return;
+            }
+            // Ignore delayed workflow_run events for superseded CI runs.
+            const { data: ciRuns } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "ci.yml",
+              head_sha: headSha,
+              event: "pull_request",
+              status: "completed",
+              per_page: 100,
+            });
+            const latestCiRunId = ciRuns.workflow_runs.reduce(
+              (latestId, run) => Math.max(latestId, Number(run.id) || 0),
+              0,
+            );
+            if (sourceRunId < latestCiRunId) {
+              setEmptyOutputs();
               return;
             }
 
@@ -281,6 +314,9 @@ jobs:
       needs.resolve-pr.outputs.found == 'true' &&
       needs.resolve-pr.outputs.same_repo == 'false' &&
       needs.resolve-pr.outputs.safe_to_review != 'true'
+    concurrency:
+      group: security-review-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       checks: write
