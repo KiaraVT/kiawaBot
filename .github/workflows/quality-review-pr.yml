@@ -17,12 +17,14 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: quality-review-${{ github.event.workflow_run.head_sha }}
+  group: quality-review-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   resolve:
-    if: github.event.workflow_run.event == 'pull_request'
+    if: |
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
