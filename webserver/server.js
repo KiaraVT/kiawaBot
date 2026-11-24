@@ -3,9 +3,22 @@ import jsonfile from "jsonfile"
 import path from "path"
 import fs from "fs"
 import { getUtcNowIsoString } from "../timeUtils.js"
+import EmoteHelper from "../EmoteHelper.js"
 
 const app = express();
 const port = process.env.WEB_PORT || 8081;
+
+const configuredChannels = process.env.EMOTE_CHANNELS
+    ? process.env.EMOTE_CHANNELS.split(",").map((c) => c.trim()).filter(Boolean)
+    : [];
+const configuredBanList = process.env.EMOTE_BAN_LIST
+    ? process.env.EMOTE_BAN_LIST.split(",").map((b) => b.trim()).filter(Boolean)
+    : [];
+
+const emoteHelper = new EmoteHelper({
+    channels: configuredChannels,
+    banList: configuredBanList
+});
 
 // Data file paths - look in parent directory's data folder
 function getQuotePath() {
@@ -137,6 +150,31 @@ app.get("/api/incentives", async (req, res) => {
     } catch (error) {
         console.error('Error reading incentive file:', error.message);
         res.status(500).json({ error: 'Failed to read incentive data' });
+    }
+});
+
+// Web endpoint to serve emotes data
+app.get("/api/emotes", async (req, res) => {
+    try {
+        const emoteData = await emoteHelper.getEmotes();
+        res.setHeader('Content-Type', 'application/json');
+        res.json(emoteData);
+    } catch (error) {
+        console.error('Error reading emotes data:', error?.message || error);
+        res.status(500).json({ error: 'Failed to read emotes data' });
+    }
+});
+
+// Web endpoint to force refresh emotes data
+app.post("/api/emotes/refresh", async (req, res) => {
+    try {
+        const refreshed = await emoteHelper.refresh();
+        const count = Object.keys(refreshed.emotes || {}).length;
+        res.setHeader('Content-Type', 'application/json');
+        res.json({ ok: true, count });
+    } catch (error) {
+        console.error('Error refreshing emotes data:', error?.message || error);
+        res.status(500).json({ error: 'Failed to refresh emotes data' });
     }
 });
 
@@ -350,6 +388,7 @@ app.get("/", (req, res) => {
             <a href="/api/quotes">Quotes JSON API</a>
             <a href="/api/commands">Commands JSON API</a>
             <a href="/api/incentives">Incentives JSON API</a>
+            <a href="/api/emotes">Emotes JSON API</a>
         </div>
     </body>
     </html>`;
@@ -388,4 +427,4 @@ app.use(errorHandler);
     console.log(`Server listening on 127.0.0.1:${port} (local only)`);
 });
 
-export { app, server, errorHandler, DEFAULT_INCENTIVE };
+export { app, server, errorHandler, DEFAULT_INCENTIVE, emoteHelper };

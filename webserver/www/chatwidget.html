@@ -207,6 +207,24 @@
           }
         }
         
+        let activeEmotes = {};
+
+        async function loadActiveEmotes() {
+          try {
+            const res = await fetch("/api/emotes");
+            if (res.ok) {
+              const data = await res.json();
+              activeEmotes = data.emotes || {};
+              console.log(`[Emotes] Loaded ${Object.keys(activeEmotes).length} active emotes.`);
+            }
+          } catch (err) {
+            console.error("[Emotes] Failed to load emotes from server:", err);
+          }
+        }
+
+        loadActiveEmotes();
+        setInterval(loadActiveEmotes, 30 * 60 * 1000);
+
         new ChatBotConnectionManager(`ws://${location.hostname}:8080`, event => {
           /** @type {({kiawaAction: string, [key: string]: any})} */
           const data = JSON.parse(event.data) ; // Parse the JSON string
@@ -217,7 +235,10 @@
             handleModAction(data.modAction)
           }
           else if(data.kiawaAction==="Message"){
-          addMessage(data.tags, data.channel, data.message, data.messageBadges)
+            addMessage(data.tags, data.channel, data.message, data.messageBadges)
+          }
+          else if (data.kiawaAction === "Emotes_Refresh") {
+            loadActiveEmotes();
           }
           else{
             console.log('unhandled kiawa Action')
@@ -347,18 +368,32 @@
               //sanitize inputs so people can't just put an image in
               messageParts.push(fragment.text.replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
             }
-            //if the fragment is text, this just appends it onto our overall message
+            //if the fragment is text, this parses and replaces emotes safely
             if (fragment.type==="text" || fragment.type==="mention") {
-              //sanitize inputs so people can't just put an image in
-              messageParts.push(fragment.text.replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+              const textTokens = fragment.text.split(/(\s+)/);
+              textTokens.forEach(token => {
+                if (!token) return;
+                if (/^\s+$/.test(token)) {
+                  messageParts.push(token);
+                  return;
+                }
+                const customEmote = activeEmotes[token];
+                if (customEmote && customEmote.url) {
+                  const escapedToken = token.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+                  const escapedUrl = customEmote.url.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+                  messageParts.push(`<img class="emote" src="${escapedUrl}" alt="${escapedToken}" title="${escapedToken}">`);
+                  return;
+                }
+                if (token === "kiawaSilvia") {
+                  messageParts.push("<img class='emote-special' src='emotes/kiawaSilvia.png'>");
+                  return;
+                }
+                messageParts.push(token.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"));
+              });
             }
           }
           )
           messageFormatted = messageParts.join("")
-          messageFormatted = messageFormatted.replace(/\bSoStylish\b/g, "<img class='emote' src= 'https://cdn.betterttv.net/frankerfacez_emote/81792/4'>");
-          messageFormatted = messageFormatted.replace(/\bcrabMissile\b/g, "<img class='emote' src= 'https://cdn.betterttv.net/frankerfacez_emote/31554/4'>");
-          messageFormatted = messageFormatted.replace(/\bTitsAMe\b/g, "<img class='emote' src= 'https://cdn.betterttv.net/frankerfacez_emote/196494/4'>");
-          messageFormatted = messageFormatted.replace(/\bkiawaSilvia\b/g, "<img class='emote-special' src= 'emotes/kiawaSilvia.png'>");
           const usernameElement = createElementFromHtml(`<span class="chat-message-username" style="color:${userColor}">${username}:</span>`);
           
           // Push the chat message to the webpage.
