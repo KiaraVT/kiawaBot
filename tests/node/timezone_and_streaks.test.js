@@ -15,7 +15,49 @@ import {
 } from "../../timeUtils.js";
 
 const originalAutoStartAuthListener = process.env.AUTO_START_AUTH_LISTENER;
-process.env.AUTO_START_AUTH_LISTENER = "false";
+const LISTENER_TEST_TIMEOUT_MS = 1000;
+
+function waitForListening(server) {
+    if (server.listening) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            server.removeListener("error", handleError);
+            reject(new Error("OAuth listener did not start within the test timeout"));
+        }, LISTENER_TEST_TIMEOUT_MS);
+        const handleListening = () => {
+            clearTimeout(timeout);
+            server.removeListener("error", handleError);
+            resolve();
+        };
+        const handleError = (error) => {
+            clearTimeout(timeout);
+            server.removeListener("listening", handleListening);
+            reject(error);
+        };
+        server.once("listening", handleListening);
+        server.once("error", handleError);
+    });
+}
+
+async function withTimeout(promise, message) {
+    let timeout;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timeout = setTimeout(() => reject(new Error(message)), LISTENER_TEST_TIMEOUT_MS);
+            })
+        ]);
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+test.before(() => {
+    process.env.AUTO_START_AUTH_LISTENER = "false";
+});
 
 test.after(async () => {
     const { closeAuthListener } = await import("../../Kiara_bot.js");
@@ -204,18 +246,38 @@ test("Kiara_bot - exports streamAttendanceTracker, updateStreaks, handleTimedCom
 });
 
 test("Kiara_bot - closeAuthListener closes the OAuth listener", async () => {
-    const { closeAuthListener, ensureAuthListener } = await import("../../Kiara_bot.js");
+    const { closeAuthListener, ensureAuthListener, performGracefulExit } = await import("../../Kiara_bot.js");
     process.env.AUTO_START_AUTH_LISTENER = "true";
     try {
-        const authServer = ensureAuthListener();
+        const authServer = ensureAuthListener({ port: 0 });
         assert.ok(authServer, "OAuth listener should start when explicitly enabled");
-        if (!authServer.listening) {
-            await new Promise((resolve) => authServer.once("listening", resolve));
-        }
-        await closeAuthListener();
+        await waitForListening(authServer);
+        assert.notEqual(authServer.address().port, 3000, "Tests should use an ephemeral listener port");
+
+        await performGracefulExit({
+            exitProcess: false,
+            authServer,
+            socket: null,
+            websockets: []
+        });
+        await withTimeout(
+            closeAuthListener(),
+            "closeAuthListener did not resolve after the listener stopped"
+        );
         assert.equal(authServer.listening, false, "OAuth listener should close during test cleanup");
+
+        const replacementServer = ensureAuthListener({ port: 0 });
+        await waitForListening(replacementServer);
+        await withTimeout(
+            Promise.all([closeAuthListener(), closeAuthListener()]),
+            "Concurrent OAuth listener cleanup did not resolve"
+        );
+        assert.equal(replacementServer.listening, false, "OAuth listener should close during test cleanup");
     } finally {
-        await closeAuthListener();
+        await withTimeout(
+            closeAuthListener(),
+            "OAuth listener cleanup did not resolve"
+        );
         process.env.AUTO_START_AUTH_LISTENER = "false";
     }
 });

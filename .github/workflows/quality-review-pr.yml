@@ -16,15 +16,9 @@ permissions:
   contents: read
   pull-requests: write
 
-concurrency:
-  group: quality-review-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
-
 jobs:
   resolve:
-    if: |
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +43,7 @@ jobs:
             const headSha = process.env.HEAD_SHA;
             const pulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'open' });
             const matches = pulls.filter((pull) => pull.head.sha === headSha);
-            if (matches.length !== 1) {
+            if (matches.length === 0) {
               core.setOutput('found', 'false');
               core.setOutput('same_repo', 'false');
               core.setOutput('safe_to_review', 'false');
@@ -58,6 +52,20 @@ jobs:
               core.setOutput('head_sha', '');
               core.setOutput('title', '');
               core.setOutput('body', '');
+              return;
+            }
+            if (matches.length > 1) {
+              core.setOutput('found', 'false');
+              core.setOutput('same_repo', 'false');
+              core.setOutput('safe_to_review', 'false');
+              core.setOutput('number', '');
+              core.setOutput('base_sha', '');
+              core.setOutput('head_sha', '');
+              core.setOutput('title', '');
+              core.setOutput('body', '');
+              core.setFailed(
+                `expected one pull request for workflow run head, found ${matches.length}`,
+              );
               return;
             }
             const pull = matches[0];
@@ -109,6 +117,9 @@ jobs:
       needs.resolve.result == 'success' &&
       needs.resolve.outputs.found == 'true' &&
       needs.resolve.outputs.same_repo == 'true'
+    concurrency:
+      group: quality-review-${{ needs.resolve.outputs.number }}
+      cancel-in-progress: true
     uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.number) }}
@@ -133,6 +144,9 @@ jobs:
       needs.resolve.outputs.found == 'true' &&
       needs.resolve.outputs.same_repo == 'false' &&
       needs.resolve.outputs.safe_to_review == 'true'
+    concurrency:
+      group: quality-review-${{ needs.resolve.outputs.number }}
+      cancel-in-progress: true
     # Upstream reusable workflow activates the fork-review environment gate
     # when fork_review is true. Caller jobs cannot declare environment directly.
     uses: abuzucom/euler/.github/workflows/quality-review.yml@aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44

@@ -183,6 +183,8 @@ let socket = null;
 //setup for server that will listen for OAuth stuff so we can get our Access Token when the user consents
 const authListener = express();
 let authServerInstance = null;
+let authServerState = "stopped";
+let authServerClosePromise = null;
 let authRoutesConfigured = false;
 
 function configureAuthRoutes(options = {}) {
@@ -206,13 +208,37 @@ function configureAuthRoutes(options = {}) {
 
 function ensureAuthListener(options = {}) {
     configureAuthRoutes();
+    const listenerPort = options.port ?? oAuthPort;
+    if (!Number.isInteger(listenerPort) || listenerPort < 0 || listenerPort > 65535) {
+        throw new RangeError("OAuth listener port must be an integer between 0 and 65535");
+    }
     const autoStart = options.autoStartListener ?? (process.env.AUTO_START_AUTH_LISTENER !== "false");
     if (!autoStart) {
         return authServerInstance;
     }
     if (!authServerInstance) {
-        authServerInstance = authListener.listen(oAuthPort, () => {
-            console.info(`[Auth] OAuth callback listener active on port ${oAuthPort}`);
+        authServerState = "starting";
+        const server = authListener.listen(listenerPort, () => {
+            if (authServerInstance === server) {
+                authServerState = "listening";
+            }
+            const address = server.address();
+            const activePort = typeof address === "object" && address ? address.port : listenerPort;
+            console.info(`[Auth] OAuth callback listener active on port ${activePort}`);
+        });
+        authServerInstance = server;
+        server.once("error", (error) => {
+            console.error(`[Auth] OAuth callback listener failed: ${error.message}`);
+            if (authServerInstance === server) {
+                authServerInstance = null;
+                authServerState = "stopped";
+            }
+        });
+        server.once("close", () => {
+            if (authServerInstance === server) {
+                authServerInstance = null;
+                authServerState = "stopped";
+            }
         });
     }
     return authServerInstance;
@@ -224,45 +250,53 @@ function ensureAuthListener(options = {}) {
  * @returns {Promise<void>}
  */
 function closeAuthListener() {
+    if (authServerClosePromise) {
+        return authServerClosePromise;
+    }
     const currentAuthServer = authServerInstance;
-    if (!currentAuthServer || typeof currentAuthServer.close !== "function") {
+    if (!currentAuthServer || authServerState === "stopped") {
+        authServerInstance = null;
         return Promise.resolve();
     }
-    return new Promise((resolve, reject) => {
-        const clearCurrentServer = () => {
+    authServerClosePromise = new Promise((resolve, reject) => {
+        const finish = (error) => {
             if (authServerInstance === currentAuthServer) {
                 authServerInstance = null;
             }
+            authServerState = "stopped";
+            authServerClosePromise = null;
+            if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
+                reject(error);
+                return;
+            }
+            resolve();
         };
         const closeServer = () => {
             if (typeof currentAuthServer.closeAllConnections === "function") {
                 currentAuthServer.closeAllConnections();
             }
-            currentAuthServer.close((error) => {
-                clearCurrentServer();
-                if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
-                    reject(error);
-                    return;
-                }
-                resolve();
-            });
+            currentAuthServer.close(finish);
         };
-        if (currentAuthServer.listening) {
+        if (authServerState === "listening") {
             closeServer();
             return;
         }
-        const handleListening = () => {
-            currentAuthServer.removeListener("error", handleError);
-            closeServer();
-        };
-        const handleError = (error) => {
-            currentAuthServer.removeListener("listening", handleListening);
-            clearCurrentServer();
-            reject(error);
-        };
-        currentAuthServer.once("listening", handleListening);
-        currentAuthServer.once("error", handleError);
+        if (authServerState === "starting") {
+            const handleListening = () => {
+                currentAuthServer.removeListener("error", handleError);
+                closeServer();
+            };
+            const handleError = (error) => {
+                currentAuthServer.removeListener("listening", handleListening);
+                finish(error);
+            };
+            currentAuthServer.once("listening", handleListening);
+            currentAuthServer.once("error", handleError);
+            return;
+        }
+        finish();
     });
+    return authServerClosePromise;
 }
 
 async function notifyAuthRequired(reason, authUrl) {
