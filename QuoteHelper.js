@@ -8,6 +8,8 @@ import {
 } from "./timeUtils.js";
 
 const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const QUOTE_TRASH_RETENTION_DAYS = 30;
+const QUOTE_TRASH_RETENTION_MS = QUOTE_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 /**
  * The first element in quotes.json.  Not a quote itself, just metadata.
@@ -22,7 +24,7 @@ const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
  * @property { string } Quote_Text
  * @property { string } Submitter
  * @property { string } Category
- * @property { string } Date
+ * @property { string } Date - Original creation timestamp in UTC quote format.
  */
 
 /**
@@ -39,10 +41,16 @@ const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
  * @property { string } Quote_Text
  * @property { string } Submitter
  * @property { string } Category
- * @property { string } Date
- * @property { string } Deleted_At
- * @property { string } [Restored_At]
+ * @property { string } Original_Date - Original quote creation timestamp in UTC quote format.
+ * @property { string } Deleted_At - UTC ISO-8601 timestamp for the trash event.
+ * @property { string } [Restored_At] - UTC ISO-8601 timestamp for the restore event.
  * @property { string } [Restored_Index]
+ */
+
+/**
+ * @typedef { Object } UndoAddResult
+ * @property { "removed" | "not-found" | "not-owner" | "expired" | "unparsable-date" } status
+ * @property { Quote } [quote]
  */
 
 /**
@@ -97,16 +105,46 @@ export default class QuoteHelper {
             writeFile(dataPath, this.quotes, { spaces: 2 });
         }
 
-        this.loadTrash = () => {
+        this.loadTrash = (now = getUtcNowIsoString()) => {
             if (!fs.existsSync(this.trashDataPath)) {
                 this.trashQuotes = [];
-                return;
+                return 0;
             }
             const trashQuotes = jsonfile.readFileSync(this.trashDataPath);
             if (!Array.isArray(trashQuotes)) {
                 throw new Error("Quote trash data must be an array");
             }
-            this.trashQuotes = trashQuotes;
+
+            const nowDateTime = parseIsoDateTime(now);
+            if (!nowDateTime) {
+                this.trashQuotes = trashQuotes;
+                return 0;
+            }
+
+            const retainedQuotes = trashQuotes.filter(quote => {
+                if (!quote.Trash_ID) {
+                    return true;
+                }
+                const deletedAt = parseIsoDateTime(quote.Deleted_At);
+                if (!deletedAt) {
+                    return true;
+                }
+                const entryAgeMs = nowDateTime.diff(deletedAt).as("milliseconds");
+                return entryAgeMs < QUOTE_TRASH_RETENTION_MS;
+            });
+
+            const originalEntryCount = trashQuotes.filter(quote => quote.Trash_ID).length;
+            const retainedEntryCount = retainedQuotes.filter(quote => quote.Trash_ID).length;
+            const prunedEntryCount = originalEntryCount - retainedEntryCount;
+            if (prunedEntryCount > 0) {
+                const lastTrashId = this.calculateMaxTrashIndex(trashQuotes);
+                const retainedEntries = retainedQuotes.filter(quote => quote.Trash_ID);
+                this.trashQuotes = [{ Last_Trash_ID: String(lastTrashId) }, ...retainedEntries];
+                this.saveTrash();
+            } else {
+                this.trashQuotes = retainedQuotes;
+            }
+            return prunedEntryCount;
         }
 
         this.saveTrash = () => {
@@ -211,7 +249,6 @@ export default class QuoteHelper {
             const quoteIndex = this.quotes.findIndex(quote => quote.Index === index);
             if (quoteIndex !== -1) {
                 const removedQuote = this.quotes[quoteIndex];
-                this.loadTrash();
                 const trashId = this.getMaxTrashIndex() + 1;
                 const trashEntry = {
                     Trash_ID: String(trashId),
@@ -219,7 +256,7 @@ export default class QuoteHelper {
                     Quote_Text: removedQuote.Quote_Text,
                     Submitter: removedQuote.Submitter,
                     Category: removedQuote.Category,
-                    Date: removedQuote.Date,
+                    Original_Date: removedQuote.Date,
                     Deleted_At: getUtcNowIsoString(),
                 };
 
@@ -255,11 +292,27 @@ export default class QuoteHelper {
      */
     getMaxTrashIndex() {
         this.loadTrash();
-        const indexes = this.trashQuotes.flatMap(quote => [
+        return this.calculateMaxTrashIndex(this.trashQuotes);
+    }
+
+    /**
+     * @param { TrashedQuote[] } trashQuotes
+     * @returns {number}
+     */
+    calculateMaxTrashIndex(trashQuotes) {
+        return trashQuotes.reduce((maximumId, quote) => Math.max(
+            maximumId,
             castIdToNumber(quote.Trash_ID),
             castIdToNumber(quote.Last_Trash_ID),
-        ]);
-        return Math.max(0, ...indexes);
+        ), 0);
+    }
+
+    /**
+     * @param { string } [now]
+     * @returns {number} the number of expired trash entries removed
+     */
+    pruneExpiredTrash(now = getUtcNowIsoString()) {
+        return this.loadTrash(now);
     }
 
     /**
@@ -268,7 +321,7 @@ export default class QuoteHelper {
     clearTrash() {
         this.loadTrash();
         const clearedCount = this.trashQuotes.filter(quote => quote.Trash_ID).length;
-        const lastTrashId = this.getMaxTrashIndex();
+        const lastTrashId = this.calculateMaxTrashIndex(this.trashQuotes);
         this.trashQuotes = [{ Last_Trash_ID: String(lastTrashId) }];
         this.saveTrash();
         return clearedCount;
@@ -281,12 +334,12 @@ export default class QuoteHelper {
      * @param { string } submitter
      * @param { any } [id]
      * @param { string } [now]
-     * @returns { Quote | undefined } the removed Quote, if eligible
+     * @returns { UndoAddResult }
      */
     undoAdd(submitter, id = null, now = getUtcNowIsoString()) {
         const nowDateTime = parseIsoDateTime(now);
         if (!nowDateTime) {
-            return undefined;
+            return { status: "expired" };
         }
 
         const normalizedSubmitter = String(submitter || "").toLowerCase();
@@ -297,40 +350,68 @@ export default class QuoteHelper {
             return this.removeUndoableQuote(quote, normalizedSubmitter, nowDateTime);
         }
 
-        let latestQuote;
-        let latestSubmittedAt;
+        let latestEligibleQuote;
+        let latestEligibleAt;
+        let latestOwnedQuote;
+        let latestOwnedAt;
+        let foundUnparsableDate = false;
         for (const candidate of this.quotes) {
             if (!candidate.Index || String(candidate.Submitter || "").toLowerCase() !== normalizedSubmitter) {
                 continue;
             }
             const submittedAt = parseQuoteTimestamp(candidate.Date);
-            if (!submittedAt || !this.isQuoteUndoable(submittedAt, nowDateTime)) {
+            if (!submittedAt) {
+                foundUnparsableDate = true;
                 continue;
             }
-            if (!latestSubmittedAt || submittedAt.toMillis() > latestSubmittedAt.toMillis()) {
-                latestQuote = candidate;
-                latestSubmittedAt = submittedAt;
+            if (!latestOwnedAt || submittedAt.toMillis() >= latestOwnedAt.toMillis()) {
+                latestOwnedQuote = candidate;
+                latestOwnedAt = submittedAt;
+            }
+            if (!this.isQuoteUndoable(submittedAt, nowDateTime)) {
+                continue;
+            }
+            if (!latestEligibleAt || submittedAt.toMillis() >= latestEligibleAt.toMillis()) {
+                latestEligibleQuote = candidate;
+                latestEligibleAt = submittedAt;
             }
         }
 
-        return latestQuote ? this.remove(latestQuote.Index) : undefined;
+        if (latestEligibleQuote) {
+            const removedQuote = this.remove(latestEligibleQuote.Index);
+            return removedQuote ? { status: "removed", quote: removedQuote } : { status: "not-found" };
+        }
+        if (foundUnparsableDate) {
+            return { status: "unparsable-date" };
+        }
+        if (latestOwnedQuote) {
+            return { status: "expired" };
+        }
+        return { status: "not-found" };
     }
 
     /**
      * @param { Quote | undefined } quote
      * @param { string } normalizedSubmitter
      * @param { import("luxon").DateTime } nowDateTime
-     * @returns { Quote | undefined }
+     * @returns { UndoAddResult }
      */
     removeUndoableQuote(quote, normalizedSubmitter, nowDateTime) {
-        if (!quote || String(quote.Submitter || "").toLowerCase() !== normalizedSubmitter) {
-            return undefined;
+        if (!quote) {
+            return { status: "not-found" };
+        }
+        if (String(quote.Submitter || "").toLowerCase() !== normalizedSubmitter) {
+            return { status: "not-owner" };
         }
         const submittedAt = parseQuoteTimestamp(quote.Date);
-        if (!submittedAt || !this.isQuoteUndoable(submittedAt, nowDateTime)) {
-            return undefined;
+        if (!submittedAt) {
+            return { status: "unparsable-date" };
         }
-        return this.remove(quote.Index);
+        if (!this.isQuoteUndoable(submittedAt, nowDateTime)) {
+            return { status: "expired" };
+        }
+        const removedQuote = this.remove(quote.Index);
+        return removedQuote ? { status: "removed", quote: removedQuote } : { status: "not-found" };
     }
 
     /**
@@ -368,7 +449,7 @@ export default class QuoteHelper {
             Quote_Text: trashEntry.Quote_Text,
             Submitter: trashEntry.Submitter,
             Category: trashEntry.Category,
-            Date: trashEntry.Date,
+            Date: trashEntry.Original_Date ?? trashEntry.Date,
         };
         this.quotes.push(restoredQuote);
 

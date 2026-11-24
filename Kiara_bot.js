@@ -1787,14 +1787,29 @@ async function messageHandler(tags) {
         if (allow_List.includes(channel) || ismod === true || isvip === true) {
             if (args.length <= 2 && (args.length === 1 || /^\d+$/.test(args[1]))) {
                 const quoteId = args.length === 2 ? args[1] : null;
-                const undoneQuote = quoteData.undoAdd(channel, quoteId);
-                if (undoneQuote) {
+                const result = quoteData.undoAdd(channel, quoteId);
+                if (result.status === "removed") {
                     postMessage(
                         botID,
-                        `Undid Quote #${undoneQuote.Index} and moved it to trash #${undoneQuote.Trash_ID}.`
+                        `Undid Quote #${result.quote.Index} and moved it to trash #${result.quote.Trash_ID}.`
                     );
-                } else {
-                    postMessage(botID, `No quote added by ${channel} within the last 24 hours can be undone.`);
+                } else if (result.status === "not-found") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} was not found.`
+                        : `You do not have any quote that can be undone.`;
+                    postMessage(botID, message);
+                } else if (result.status === "not-owner") {
+                    postMessage(botID, `Quote #${quoteId} was not added by you and cannot be undone.`);
+                } else if (result.status === "expired") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} was not added within the last 24 hours and cannot be undone.`
+                        : `No quote added by you within the last 24 hours can be undone.`;
+                    postMessage(botID, message);
+                } else if (result.status === "unparsable-date") {
+                    const message = quoteId
+                        ? `Quote #${quoteId} has an unsupported creation timestamp and cannot be undone.`
+                        : `One of your quotes has an unsupported creation timestamp and cannot be undone.`;
+                    postMessage(botID, message);
                 }
             } else {
                 postMessage(botID, `Usage: !undoaddquote [quote number]`);

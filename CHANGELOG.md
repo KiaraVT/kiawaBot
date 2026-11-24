@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added recoverable quote trash with broadcaster-only `!restorequote` and `!clearquotetrash` commands.
+- Added recoverable quote trash with 30-day retention and broadcaster-only `!restorequote` and `!clearquotetrash` commands.
 - Added `!undoaddquote` for eligible quote submitters to move their own quotes from the last 24 hours to trash.
 
 ### Security
