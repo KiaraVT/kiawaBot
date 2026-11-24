@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import QuoteHelper, { castIdToNumber, castIdToString } from "../../QuoteHelper.js";
+import { formatQuoteTimestamp } from "../../timeUtils.js";
 
 test("QuoteHelper - castIdToNumber parses valid positive integers", () => {
     assert.equal(castIdToNumber("42"), 42);
@@ -423,7 +424,50 @@ test("QuoteHelper - restore normalizes legacy Date records and permits empty fre
     }
 });
 
-test("QuoteHelper - getMaxTrashIndex does not rewrite an unchanged metadata-only trash file", () => {
+test("Kiara_bot - !undoaddquote uses the message sender identity", async () => {
+    const { messageHandler } = await import("../../Kiara_bot.js");
+    assert.equal(messageHandler.length, 2, "messageHandler must accept injectable command dependencies");
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-command-test-"));
+    const quotesPath = path.join(tempDir, "quotes.json");
+    const trashPath = path.join(tempDir, "quotes-trash.json");
+    const quote = {
+        Index: "1",
+        Quote_Text: "Sender quote",
+        Submitter: "itsjustatank",
+        Category: "Chat",
+        Date: formatQuoteTimestamp()
+    };
+    fs.writeFileSync(quotesPath, JSON.stringify([{ Quote_Count: "1" }, quote], null, 2));
+    const writeJson = (filePath, data) => {
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    };
+    const helper = new QuoteHelper(quotesPath, writeJson, trashPath);
+    const sentMessages = [];
+
+    try {
+        await messageHandler({
+            message: { text: "!undoaddquote" },
+            "display-name": "itsjustatank",
+            chatter_user_name: "Different Display Name",
+            chatter_user_login: "kiawa_bot",
+            badges: []
+        }, {
+            quoteData: helper,
+            postMessage: (userId, message) => sentMessages.push(message)
+        });
+
+        assert.ok(sentMessages.some(message => message.includes("Undid Quote #1")));
+        const activeQuotes = JSON.parse(fs.readFileSync(quotesPath, "utf8"));
+        assert.equal(activeQuotes.length, 1);
+        const trash = JSON.parse(fs.readFileSync(trashPath, "utf8"));
+        assert.equal(trash[0].Quote_Text, "Sender quote");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - getMaxTrashIndex does not rewrite or serialize an unchanged metadata-only trash file", (t) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-trash-write-test-"));
     const quotesPath = path.join(tempDir, "quotes.json");
     const trashPath = path.join(tempDir, "quotes-trash.json");
@@ -435,10 +479,17 @@ test("QuoteHelper - getMaxTrashIndex does not rewrite an unchanged metadata-only
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
     };
     const helper = new QuoteHelper(quotesPath, writeJson, trashPath);
+    const originalStringify = JSON.stringify;
+    let stringifyCount = 0;
+    t.mock.method(JSON, "stringify", (...args) => {
+        stringifyCount += 1;
+        return originalStringify(...args);
+    });
     try {
         assert.equal(helper.getMaxTrashIndex(), 7);
         assert.equal(helper.getMaxTrashIndex(), 7);
         assert.equal(writeCount, 0);
+        assert.equal(stringifyCount, 0);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

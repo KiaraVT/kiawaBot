@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
 - Hardened quote trash loading to discard malformed entries and fail closed on invalid retention reference times.
 - Rejected empty quote text and preserved quote creation ordering across trash restoration.
+- Routed quote ownership through the message sender and removed full trash serialization from unchanged-file detection.
 - Pinned the CI Node.js runtime to 26.13.1 to match the container runtime.
 - Pull request review workflows now run for every CI outcome and group concurrency by the resolved pull request number.
 - Superseded CI events skip before review dispatch, and removing `safe-to-review` cancels active fork reviews.

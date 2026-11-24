@@ -120,13 +120,25 @@ export default class QuoteHelper {
                 throw new Error("Quote trash data must be an array");
             }
 
-            const validEntries = trashQuotes
-                .filter(quote => this.isValidTrashEntry(quote))
-                .map(quote => this.normalizeTrashEntry(quote));
-            const validMetadata = trashQuotes.filter(quote => this.isValidTrashMetadata(quote));
-            const droppedEntries = trashQuotes.filter(quote => (
-                !this.isValidTrashEntry(quote) && !this.isValidTrashMetadata(quote)
-            ));
+            const classifiedEntries = trashQuotes.map(entry => {
+                if (this.isValidTrashEntry(entry)) {
+                    const normalized = this.normalizeTrashEntry(entry);
+                    return { type: "entry", entry: normalized.entry, changed: normalized.changed };
+                }
+                if (this.isValidTrashMetadata(entry)) {
+                    return { type: "metadata", entry, changed: false };
+                }
+                return { type: "dropped", entry, changed: true };
+            });
+            const validEntries = classifiedEntries
+                .filter(classified => classified.type === "entry")
+                .map(classified => classified.entry);
+            const validMetadata = classifiedEntries
+                .filter(classified => classified.type === "metadata")
+                .map(classified => classified.entry);
+            const droppedEntries = classifiedEntries
+                .filter(classified => classified.type === "dropped")
+                .map(classified => classified.entry);
             const maxSeenTrashId = this.calculateMaxTrashIndex(trashQuotes);
             const retainedEntries = [];
             const futureDatedEntries = [];
@@ -142,17 +154,21 @@ export default class QuoteHelper {
                     retainedEntries.push(entry);
                 }
             }
-            const prunedEntries = [...futureDatedEntries, ...expiredEntries];
-            const maxRetainedEntryId = this.calculateMaxTrashIndex(retainedEntries);
-            const prunedEntryCount = prunedEntries.length;
+            const prunedEntryCount = futureDatedEntries.length + expiredEntries.length;
             const droppedEntryCount = droppedEntries.length;
+            const maxRetainedEntryId = this.calculateMaxTrashIndex(retainedEntries);
             const needsLastTrashId = maxSeenTrashId > maxRetainedEntryId;
+            const hasMatchingLastTrashId = validMetadata.some(metadata => (
+                castIdToNumber(metadata.Last_Trash_ID) === maxSeenTrashId
+            ));
+            let trashChanged = classifiedEntries.some(classified => classified.changed);
 
-            if (needsLastTrashId) {
+            if (needsLastTrashId && !hasMatchingLastTrashId) {
                 this.trashQuotes = [
                     { Last_Trash_ID: String(maxSeenTrashId) },
                     ...retainedEntries,
                 ];
+                trashChanged = true;
             } else {
                 this.trashQuotes = [...validMetadata, ...retainedEntries];
             }
@@ -175,7 +191,10 @@ export default class QuoteHelper {
                     `[QuoteHelper] Pruned ${expiredEntries.length} expired quote trash entries: ${expiredIds.join(", ")}`
                 );
             }
-            if (JSON.stringify(trashQuotes) !== JSON.stringify(this.trashQuotes)) {
+            if (prunedEntryCount > 0) {
+                trashChanged = true;
+            }
+            if (trashChanged) {
                 this.saveTrash();
             }
             return prunedEntryCount;
@@ -418,9 +437,14 @@ export default class QuoteHelper {
 
     /**
      * @param { TrashedQuote } entry
-     * @returns { TrashedQuote }
+     * @returns {{ entry: TrashedQuote, changed: boolean }}
      */
     normalizeTrashEntry(entry) {
+        const changed = Object.prototype.hasOwnProperty.call(entry, "Date") ||
+            entry.Original_Date === undefined ||
+            entry.Quote_Text === undefined ||
+            entry.Submitter === undefined ||
+            entry.Category === undefined;
         const normalizedEntry = {
             ...entry,
             Original_Date: entry.Original_Date ?? entry.Date,
@@ -429,7 +453,7 @@ export default class QuoteHelper {
             Category: entry.Category ?? "",
         };
         delete normalizedEntry.Date;
-        return normalizedEntry;
+        return { entry: normalizedEntry, changed };
     }
 
     /**

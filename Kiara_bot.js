@@ -1604,11 +1604,33 @@ if (isMainModule) {
 //increment to next array index, if at max loop back to start
 
 
+export function getMessageSender(tags) {
+    if (!tags || typeof tags !== "object") {
+        return "";
+    }
+    const senderCandidates = [
+        tags["display-name"],
+        tags.username,
+        tags["chatter_user_name"],
+        tags["chatter_user_login"],
+    ];
+    for (const candidate of senderCandidates) {
+        if (typeof candidate === "string" && candidate.trim()) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
 //message handler
-async function messageHandler(tags) {
+async function messageHandler(tags, options) {
+            const commandOptions = options && typeof options === "object" ? options : {};
+            const activeQuoteData = commandOptions.quoteData ?? quoteData;
+            const sendQuoteMessage = commandOptions.postMessage ?? postMessage;
             const user_id=tags["chatter_user_id"];
             const message=tags.message.text;
             const channel=tags["chatter_user_name"];
+            const sender=getMessageSender(tags);
             //determine if chat activity in last ten minutes
             if (tags.chatter_user_login != "kiawa_bot") {
                 activityDetection = true;
@@ -1819,10 +1841,10 @@ async function messageHandler(tags) {
         /** @type Quote */
         let quote;
         if (id > 0) {
-            quote = quoteData.findByIndex(id);
+            quote = activeQuoteData.findByIndex(id);
         }
         else {
-            quote = quoteData.findRandom();
+            quote = activeQuoteData.findRandom();
         }
         
         if (quote) {
@@ -1831,14 +1853,14 @@ async function messageHandler(tags) {
             postMessage(botID, message);
         }
         else {
-            const maxIndex = quoteData.getMaxIndex();
+            const maxIndex = activeQuoteData.getMaxIndex();
             postMessage(botID, `Number Provided out of range! The highest number is ${maxIndex}`);
         }
     }
     
     if (command === "!addquote") {
         //check if user is a mod or VIP allow_List.includes(tags.username) ||
-        if (allow_List.includes(channel) || ismod === true || isvip === true) {
+        if (allow_List.includes(sender) || ismod === true || isvip === true) {
             
             //the remainder of the text is separated from the command, this is the quote text
             const textToAdd = args.slice(1).join(" ");
@@ -1854,7 +1876,7 @@ async function messageHandler(tags) {
                 console.error('[Quote] Failed to get category info for quote:', formatAxiosError(err));
             }
             
-            const addedQuote = quoteData.add(textToAdd, channel, categoryToAdd);
+            const addedQuote = activeQuoteData.add(textToAdd, sender, categoryToAdd);
             
             if (addedQuote) {
                 postMessage(botID, `Added Quote #${addedQuote.Index} ${addedQuote.Quote_Text} [${addedQuote.Category}] [${addedQuote.Date}]`);
@@ -1866,12 +1888,12 @@ async function messageHandler(tags) {
     }
     
     if (command === "!undoaddquote") {
-        if (allow_List.includes(channel) || ismod === true || isvip === true) {
+        if (allow_List.includes(sender) || ismod === true || isvip === true) {
             if (args.length <= 2 && (args.length === 1 || /^\d+$/.test(args[1]))) {
                 const quoteId = args.length === 2 ? args[1] : null;
-                const result = quoteData.undoAdd(channel, quoteId);
+                const result = activeQuoteData.undoAdd(sender, quoteId);
                 if (result.status === "removed") {
-                    postMessage(
+                    sendQuoteMessage(
                         botID,
                         `Undid Quote #${result.quote.Index} and moved it to trash #${result.quote.Trash_ID}.`
                     );
@@ -1879,24 +1901,24 @@ async function messageHandler(tags) {
                     const message = quoteId
                         ? `Quote #${quoteId} was not found.`
                         : `You do not have any quote that can be undone.`;
-                    postMessage(botID, message);
+                    sendQuoteMessage(botID, message);
                 } else if (result.status === "not-owner") {
-                    postMessage(botID, `Quote #${quoteId} was not added by you and cannot be undone.`);
+                    sendQuoteMessage(botID, `Quote #${quoteId} was not added by you and cannot be undone.`);
                 } else if (result.status === "expired") {
                     const message = quoteId
                         ? `Quote #${quoteId} was not added within the last 24 hours and cannot be undone.`
                         : `No quote added by you within the last 24 hours can be undone.`;
-                    postMessage(botID, message);
+                    sendQuoteMessage(botID, message);
                 } else if (result.status === "unparsable-date") {
                     const message = quoteId
                         ? `Quote #${quoteId} has an unsupported creation timestamp and cannot be undone.`
                         : `One of your quotes has an unsupported creation timestamp and cannot be undone.`;
-                    postMessage(botID, message);
+                    sendQuoteMessage(botID, message);
                 } else if (result.status === "invalid-reference-time") {
-                    postMessage(botID, `Unable to evaluate quote eligibility because the reference time is invalid.`);
+                    sendQuoteMessage(botID, `Unable to evaluate quote eligibility because the reference time is invalid.`);
                 }
             } else {
-                postMessage(botID, `Usage: !undoaddquote [quote number]`);
+                sendQuoteMessage(botID, `Usage: !undoaddquote [quote number]`);
             }
         }
     }
@@ -1904,7 +1926,7 @@ async function messageHandler(tags) {
     if (command === "!removequote") {
         if (isbroadcaster === true) {
             if (args.length === 2 && /^\d+$/.test(args[1])) {
-                const removedQuote = quoteData.remove(args[1]);
+                const removedQuote = activeQuoteData.remove(args[1]);
                 if (removedQuote) {
                     const trashId = removedQuote.Trash_ID;
                     postMessage(
@@ -1924,7 +1946,7 @@ async function messageHandler(tags) {
     if (command === "!restorequote") {
         if (isbroadcaster === true) {
             if (args.length === 2 && /^\d+$/.test(args[1])) {
-                const restoredQuote = quoteData.restore(args[1]);
+                const restoredQuote = activeQuoteData.restore(args[1]);
                 if (restoredQuote) {
                     postMessage(botID, `Restored Quote #${restoredQuote.Index}: ${restoredQuote.Quote_Text}`);
                 } else {
@@ -1939,7 +1961,7 @@ async function messageHandler(tags) {
     if (command === "!clearquotetrash") {
         if (isbroadcaster === true) {
             if (args.length === 1) {
-                const clearedCount = quoteData.clearTrash();
+                const clearedCount = activeQuoteData.clearTrash();
                 postMessage(botID, `Cleared ${clearedCount} quote(s) from trash.`);
             } else {
                 postMessage(botID, `Usage: !clearquotetrash`);
@@ -1958,14 +1980,14 @@ async function messageHandler(tags) {
             const textToUpdate = args.slice(2).join(" ");
             
             //update the quote
-            const updatedQuote = quoteData.edit(idToUpdate, textToUpdate);
+            const updatedQuote = activeQuoteData.edit(idToUpdate, textToUpdate);
             
             if (updatedQuote) {
                 postMessage(botID, `Updated Quote #${updatedQuote.Index} ${updatedQuote.Quote_Text}`);
             }
             else {
                 //Grab the highest quote ID
-                const maxIndex = quoteData.getMaxIndex();
+                const maxIndex = activeQuoteData.getMaxIndex();
                 postMessage(botID, `Number Provided out of range! The highest number is ${maxIndex}`);
             }
             
