@@ -106,6 +106,10 @@ export default class QuoteHelper {
         }
 
         this.loadTrash = (now = getUtcNowIsoString()) => {
+            const nowDateTime = parseIsoDateTime(now);
+            if (!nowDateTime) {
+                throw new Error("Quote trash reference time must be a valid UTC timestamp");
+            }
             if (!fs.existsSync(this.trashDataPath)) {
                 this.trashQuotes = [];
                 return 0;
@@ -115,34 +119,30 @@ export default class QuoteHelper {
                 throw new Error("Quote trash data must be an array");
             }
 
-            const nowDateTime = parseIsoDateTime(now);
-            if (!nowDateTime) {
-                this.trashQuotes = trashQuotes;
-                return 0;
-            }
-
-            const retainedQuotes = trashQuotes.filter(quote => {
-                if (!quote.Trash_ID) {
-                    return true;
-                }
-                const deletedAt = parseIsoDateTime(quote.Deleted_At);
-                if (!deletedAt) {
-                    return true;
-                }
+            const validEntries = trashQuotes.filter(quote => this.isValidTrashEntry(quote));
+            const validMetadata = trashQuotes.filter(quote => this.isValidTrashMetadata(quote));
+            const maxSeenTrashId = this.calculateMaxTrashIndex(trashQuotes);
+            const retainedEntries = validEntries.filter(entry => {
+                const deletedAt = parseIsoDateTime(entry.Deleted_At);
                 const entryAgeMs = nowDateTime.diff(deletedAt).as("milliseconds");
                 return entryAgeMs < QUOTE_TRASH_RETENTION_MS;
             });
+            const maxRetainedEntryId = this.calculateMaxTrashIndex(retainedEntries);
+            const prunedEntryCount = validEntries.length - retainedEntries.length;
+            const droppedEntryCount = trashQuotes.length - validEntries.length - validMetadata.length;
+            const needsLastTrashId = maxSeenTrashId > maxRetainedEntryId;
 
-            const originalEntryCount = trashQuotes.filter(quote => quote.Trash_ID).length;
-            const retainedEntryCount = retainedQuotes.filter(quote => quote.Trash_ID).length;
-            const prunedEntryCount = originalEntryCount - retainedEntryCount;
-            if (prunedEntryCount > 0) {
-                const lastTrashId = this.calculateMaxTrashIndex(trashQuotes);
-                const retainedEntries = retainedQuotes.filter(quote => quote.Trash_ID);
-                this.trashQuotes = [{ Last_Trash_ID: String(lastTrashId) }, ...retainedEntries];
-                this.saveTrash();
+            if (needsLastTrashId) {
+                this.trashQuotes = [
+                    { Last_Trash_ID: String(maxSeenTrashId) },
+                    ...retainedEntries,
+                ];
             } else {
-                this.trashQuotes = retainedQuotes;
+                this.trashQuotes = [...validMetadata, ...retainedEntries];
+            }
+
+            if (droppedEntryCount > 0 || prunedEntryCount > 0 || needsLastTrashId) {
+                this.saveTrash();
             }
             return prunedEntryCount;
         }
@@ -308,6 +308,42 @@ export default class QuoteHelper {
     }
 
     /**
+     * @param { any } entry
+     * @returns { boolean }
+     */
+    isValidTrashEntry(entry) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return false;
+        }
+        const requiredFields = [
+            "Trash_ID",
+            "Quote_Text",
+            "Submitter",
+            "Category",
+            "Original_Date",
+            "Deleted_At",
+        ];
+        const hasRequiredFields = requiredFields.every(field => (
+            typeof entry[field] === "string" && Boolean(entry[field].trim())
+        ));
+        if (!hasRequiredFields || castIdToNumber(entry.Trash_ID) <= 0) {
+            return false;
+        }
+        return Boolean(parseIsoDateTime(entry.Deleted_At));
+    }
+
+    /**
+     * @param { any } entry
+     * @returns { boolean }
+     */
+    isValidTrashMetadata(entry) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry) || entry.Trash_ID) {
+            return false;
+        }
+        return typeof entry.Last_Trash_ID === "string" && /^\d+$/.test(entry.Last_Trash_ID);
+    }
+
+    /**
      * @param { string } [now]
      * @returns {number} the number of expired trash entries removed
      */
@@ -449,7 +485,7 @@ export default class QuoteHelper {
             Quote_Text: trashEntry.Quote_Text,
             Submitter: trashEntry.Submitter,
             Category: trashEntry.Category,
-            Date: trashEntry.Original_Date ?? trashEntry.Date,
+            Date: trashEntry.Original_Date,
         };
         this.quotes.push(restoredQuote);
 

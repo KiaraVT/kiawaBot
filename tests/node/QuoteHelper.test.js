@@ -271,13 +271,62 @@ test("QuoteHelper - getMaxTrashIndex handles large trash files without argument 
     }
 });
 
+test("QuoteHelper - loadTrash drops malformed entries and preserves the maximum seen trash ID", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        const validEntry = {
+            Trash_ID: "1",
+            Quote_Text: "Valid",
+            Submitter: "Alice",
+            Category: "Chat",
+            Original_Date: "2026-11-23 00:00:00",
+            Deleted_At: "2026-11-23T00:00:00.000Z"
+        };
+        const malformedEntries = [
+            { ...validEntry, Trash_ID: "2", Quote_Text: "" },
+            { ...validEntry, Trash_ID: "3", Submitter: "" },
+            { ...validEntry, Trash_ID: "4", Category: "" },
+            { ...validEntry, Trash_ID: "5", Original_Date: "" },
+            { ...validEntry, Trash_ID: "6", Deleted_At: "" },
+            { ...validEntry, Trash_ID: undefined }
+        ];
+        fs.writeFileSync(fixture.trashPath, JSON.stringify([validEntry, ...malformedEntries], null, 2));
+
+        fixture.helper.pruneExpiredTrash(now);
+        const trash = JSON.parse(fs.readFileSync(fixture.trashPath, "utf8"));
+        assert.deepEqual(
+            trash.filter(entry => entry.Trash_ID).map(entry => entry.Trash_ID),
+            ["1"]
+        );
+        assert.equal(trash.find(entry => entry.Last_Trash_ID)?.Last_Trash_ID, "6");
+
+        const removedQuote = fixture.helper.remove("1");
+        assert.equal(removedQuote?.Trash_ID, "7");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - pruneExpiredTrash rejects an invalid reference time", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    try {
+        assert.throws(
+            () => fixture.helper.pruneExpiredTrash("not-a-date"),
+            /valid UTC timestamp/
+        );
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
 test("QuoteHelper - pruneExpiredTrash removes old entries and preserves the last trash ID", () => {
     const fixture = createUndoQuoteFixture(createUndoQuotes());
     const now = "2026-11-23T12:00:00Z";
     try {
         fs.writeFileSync(fixture.trashPath, JSON.stringify([
-            { Trash_ID: "1", Quote_Text: "Old", Original_Date: "2026-10-01 00:00:00", Deleted_At: "2026-10-01T00:00:00.000Z" },
-            { Trash_ID: "2", Quote_Text: "Recent", Original_Date: "2026-11-22 00:00:00", Deleted_At: "2026-11-22T00:00:00.000Z" }
+            { Trash_ID: "2", Quote_Text: "Old", Submitter: "Alice", Category: "Chat", Original_Date: "2026-10-01 00:00:00", Deleted_At: "2026-10-01T00:00:00.000Z" },
+            { Trash_ID: "1", Quote_Text: "Recent", Submitter: "Alice", Category: "Chat", Original_Date: "2026-11-22 00:00:00", Deleted_At: "2026-11-22T00:00:00.000Z" }
         ], null, 2));
 
         assert.equal(fixture.helper.pruneExpiredTrash(now), 1);
