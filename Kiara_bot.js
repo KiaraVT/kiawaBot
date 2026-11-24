@@ -218,6 +218,53 @@ function ensureAuthListener(options = {}) {
     return authServerInstance;
 }
 
+/**
+ * Close the OAuth callback listener when it is active.
+ *
+ * @returns {Promise<void>}
+ */
+function closeAuthListener() {
+    const currentAuthServer = authServerInstance;
+    if (!currentAuthServer || typeof currentAuthServer.close !== "function") {
+        return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+        const clearCurrentServer = () => {
+            if (authServerInstance === currentAuthServer) {
+                authServerInstance = null;
+            }
+        };
+        const closeServer = () => {
+            if (typeof currentAuthServer.closeAllConnections === "function") {
+                currentAuthServer.closeAllConnections();
+            }
+            currentAuthServer.close((error) => {
+                clearCurrentServer();
+                if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
+                    reject(error);
+                    return;
+                }
+                resolve();
+            });
+        };
+        if (currentAuthServer.listening) {
+            closeServer();
+            return;
+        }
+        const handleListening = () => {
+            currentAuthServer.removeListener("error", handleError);
+            closeServer();
+        };
+        const handleError = (error) => {
+            currentAuthServer.removeListener("listening", handleListening);
+            clearCurrentServer();
+            reject(error);
+        };
+        currentAuthServer.once("listening", handleListening);
+        currentAuthServer.once("error", handleError);
+    });
+}
+
 async function notifyAuthRequired(reason, authUrl) {
     const webhookUrl = process.env.AUTH_WEBHOOK_URL;
     if (webhookUrl) {
@@ -449,6 +496,7 @@ export {
     ensureBroadcasterAuth,
     ensureBotAuth,
     ensureAuthListener,
+    closeAuthListener,
     configureAuthRoutes,
     performGracefulExit,
     startValidationTicker,

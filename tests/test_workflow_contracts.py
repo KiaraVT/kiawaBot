@@ -156,6 +156,70 @@ class WorkflowContractsTestCase(unittest.TestCase):
                     ),
                 )
 
+    def test_ci_pins_node_version_and_bounds_node_tests(self) -> None:
+        """CI must use a reproducible Node version and bound the test step."""
+        workflow_file = self.workflows_dir / "ci.yml"
+        content = workflow_file.read_text(encoding="utf-8")
+
+        self.assertIn('node-version: "22.23.5"', content)
+        self.assertIn(
+            "- name: Run Node.js unit tests\n        timeout-minutes: 2\n        run: npm test",
+            content,
+        )
+
+    def test_review_resolvers_require_successful_pull_request_ci(self) -> None:
+        """Review jobs must not start after failed or canceled CI runs."""
+        workflow_files = [
+            self.workflows_dir / "quality-review-pr.yml",
+            self.workflows_dir / "security-review-pr.yml",
+        ]
+        for workflow_file in workflow_files:
+            content = workflow_file.read_text(encoding="utf-8")
+            self.assertIn(
+                "github.event.workflow_run.event == 'pull_request'",
+                content,
+            )
+            self.assertIn(
+                "github.event.workflow_run.conclusion == 'success'",
+                content,
+            )
+
+    def test_review_concurrency_groups_use_pull_request_branch_identity(self) -> None:
+        """Review concurrency must cancel obsolete runs for the same PR branch."""
+        workflow_files = [
+            self.workflows_dir / "quality-review-pr.yml",
+            self.workflows_dir / "security-review-pr.yml",
+        ]
+        for workflow_file in workflow_files:
+            content = workflow_file.read_text(encoding="utf-8")
+            self.assertIn(
+                "github.event.workflow_run.head_repository.full_name",
+                content,
+            )
+            self.assertIn(
+                "github.event.workflow_run.head_branch",
+                content,
+            )
+            self.assertNotIn(
+                "group: quality-review-${{ github.event.workflow_run.head_sha }}",
+                content,
+            )
+            self.assertNotIn(
+                "group: security-review-${{ github.event.workflow_run.head_sha }}",
+                content,
+            )
+
+    def test_security_review_treats_missing_pull_request_as_skipped(self) -> None:
+        """A stale workflow run must not fail when no current PR matches."""
+        workflow_file = self.workflows_dir / "security-review-pr.yml"
+        content = workflow_file.read_text(encoding="utf-8")
+
+        self.assertIn("if (candidates.length !== 1)", content)
+        self.assertNotIn(
+            "expected one pull request for workflow run head",
+            content,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

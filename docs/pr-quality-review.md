@@ -12,10 +12,10 @@ The PR quality reviewer applies `QUALITY.md` to pull requests. The reviewer prod
 ## Wiring and Lifecycle
 
 - `.github/workflows/quality-review-pr.yml` runs the caller workflow.
-- Trigger: fires on completion of `ci` (`workflow_run` event).
-- Concurrency: grouped by `quality-review-${{ head_sha }}` with `cancel-in-progress: true`.
+- Trigger: fires on completion of `ci` (`workflow_run` event). The resolver runs only when the source CI event was a pull request and the CI conclusion was `success`. Failed or canceled CI runs do not allocate review jobs.
+- Concurrency: grouped by the source repository and pull request branch with `cancel-in-progress: true`. A newer review cancels an obsolete review for the same pull request branch.
 - Permissions: workflow and caller jobs declare `actions: read`, `checks: write`, `contents: read`, and `pull-requests: write`. The `actions: read` permission enables the reusable workflow to access and download workflow run artifacts.
-- Resolution (`resolve` job): matches `head_sha` against open pull requests, verifies same-repository origin, queries current labels via GitHub API, and strips carriage returns and ASCII control characters from pull request titles and descriptions. Fails closed if label queries fail.
+- Resolution (`resolve` job): matches `head_sha` against open pull requests, verifies same-repository origin, queries current labels via GitHub API, and strips carriage returns and ASCII control characters from pull request titles and descriptions. A stale revision with no matching open pull request exits without a review. Label query failures still fail closed.
 - Same-repository review (`review` job): calls `quality-review.yml` with default inputs (omitting `fork_review`), mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}` to secret `MODEL_API_KEY`.
 - Approved fork review (`review-fork` job): calls `quality-review.yml` with `fork_review: true` in the protected `fork-review` environment, mapping environment secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
 - Unapproved fork skip (`fork-skip` job): executes when a fork PR lacks `safe-to-review`, publishing a GitHub Check Run with status `completed` and conclusion `skipped`.

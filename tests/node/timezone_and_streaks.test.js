@@ -14,6 +14,22 @@ import {
     safeRotateIndex
 } from "../../timeUtils.js";
 
+const originalAutoStartAuthListener = process.env.AUTO_START_AUTH_LISTENER;
+process.env.AUTO_START_AUTH_LISTENER = "false";
+
+test.after(async () => {
+    const { closeAuthListener } = await import("../../Kiara_bot.js");
+    try {
+        await closeAuthListener();
+    } finally {
+        if (originalAutoStartAuthListener === undefined) {
+            delete process.env.AUTO_START_AUTH_LISTENER;
+        } else {
+            process.env.AUTO_START_AUTH_LISTENER = originalAutoStartAuthListener;
+        }
+    }
+});
+
 test("Timezone - normalizeTimezone handles bare offsets, GMT aliases, and IANA identifiers", () => {
     assert.equal(normalizeTimezone("America/Chicago"), "America/Chicago");
     assert.equal(normalizeTimezone("Asia/Tokyo"), "Asia/Tokyo");
@@ -185,6 +201,23 @@ test("Kiara_bot - exports streamAttendanceTracker, updateStreaks, handleTimedCom
     assert.equal(typeof kiaraBot.updateStreaks, "function");
     assert.equal(typeof kiaraBot.handleTimedCommandsInterval, "function");
     assert.equal(typeof kiaraBot.messageHandler, "function");
+});
+
+test("Kiara_bot - closeAuthListener closes the OAuth listener", async () => {
+    const { closeAuthListener, ensureAuthListener } = await import("../../Kiara_bot.js");
+    process.env.AUTO_START_AUTH_LISTENER = "true";
+    try {
+        const authServer = ensureAuthListener();
+        assert.ok(authServer, "OAuth listener should start when explicitly enabled");
+        if (!authServer.listening) {
+            await new Promise((resolve) => authServer.once("listening", resolve));
+        }
+        await closeAuthListener();
+        assert.equal(authServer.listening, false, "OAuth listener should close during test cleanup");
+    } finally {
+        await closeAuthListener();
+        process.env.AUTO_START_AUTH_LISTENER = "false";
+    }
 });
 
 test("Security - messageHandler cleanly separates !timezone (display only) and !settimezone (update)", async () => {
