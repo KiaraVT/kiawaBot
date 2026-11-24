@@ -6,6 +6,7 @@ import os from "node:os";
 import { URLSearchParams } from "node:url";
 import { formatAxiosError, redactSensitiveUrl, sanitizeAxiosConfig, redactSensitiveData } from "../../errorUtils.js";
 import AuthDataHelper from "../../AuthDataHelper.js";
+import { getMonotonicMs } from "../../timeUtils.js";
 import {
     createSingleFlightMutex,
     createSequentialLock,
@@ -1145,7 +1146,7 @@ test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth throttle via 
 
     pipeline.broadcasterAuthReady = false;
     pipeline.botAuthReady = false;
-    const beforeAttempt = Date.now();
+    const beforeAttempt = getMonotonicMs();
 
     // Concurrent calls should be deduplicated by singleFlight
     const [res1, res2] = await Promise.all([
@@ -1171,7 +1172,7 @@ test("TwitchAuthPipeline - ensureBroadcasterAuth and ensureBotAuth throttle via 
         err.response = { status: 400 };
         throw err;
     };
-    const beforeBotAttempt = Date.now();
+    const beforeBotAttempt = getMonotonicMs();
     const [botRes1, botRes2] = await Promise.all([
         pipeline.ensureBotAuth(),
         pipeline.ensureBotAuth()

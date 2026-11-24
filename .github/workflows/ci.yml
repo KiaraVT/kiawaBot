@@ -50,7 +50,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "26.13.1"
           cache: "npm"
 
       - name: Validate JavaScript syntax
@@ -79,6 +79,7 @@ jobs:
         run: npm run lint
 
       - name: Run Node.js unit tests
+        timeout-minutes: 2
         run: npm test
 
       - name: Run Python unit tests

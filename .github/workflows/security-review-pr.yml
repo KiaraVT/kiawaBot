@@ -5,10 +5,6 @@ on:
     workflows: [ci]
     types: [completed]
 
-concurrency:
-  group: security-review-${{ github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
-
 permissions:
   actions: read
   checks: write
@@ -37,11 +33,44 @@ jobs:
           script: |
             const workflowRun = context.payload.workflow_run;
             const headSha = workflowRun?.head_sha;
-            if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+            const setEmptyOutputs = () => {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
               core.setOutput("safe_to_review", "false");
+              core.setOutput("already_reviewed", "false");
+              core.setOutput("pr_number", "");
+              core.setOutput("base_sha", "");
+              core.setOutput("head_sha", "");
+              core.setOutput("head_repo_url", "");
+              core.setOutput("head_repo_full_name", "");
+            };
+            if (!/^[0-9a-f]{40}$/.test(headSha || "")) {
+              setEmptyOutputs();
               core.setFailed("workflow run head SHA is invalid");
+              return;
+            }
+            const sourceRunId = Number(workflowRun?.id);
+            if (!Number.isSafeInteger(sourceRunId) || sourceRunId <= 0) {
+              setEmptyOutputs();
+              core.setFailed("workflow run id is invalid");
+              return;
+            }
+            // Ignore delayed workflow_run events for superseded CI runs.
+            const { data: ciRuns } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "ci.yml",
+              head_sha: headSha,
+              event: "pull_request",
+              status: "completed",
+              per_page: 100,
+            });
+            const latestCiRunId = ciRuns.workflow_runs.reduce(
+              (latestId, run) => Math.max(latestId, Number(run.id) || 0),
+              0,
+            );
+            if (sourceRunId < latestCiRunId) {
+              setEmptyOutputs();
               return;
             }
 
@@ -60,10 +89,28 @@ jobs:
               baseRepository.toLowerCase() &&
               pullRequest.head?.sha?.toLowerCase() === headSha.toLowerCase()
             );
-            if (candidates.length !== 1) {
+            if (candidates.length === 0) {
               core.setOutput("found", "false");
               core.setOutput("same_repo", "false");
               core.setOutput("safe_to_review", "false");
+              core.setOutput("already_reviewed", "false");
+              core.setOutput("pr_number", "");
+              core.setOutput("base_sha", "");
+              core.setOutput("head_sha", "");
+              core.setOutput("head_repo_url", "");
+              core.setOutput("head_repo_full_name", "");
+              return;
+            }
+            if (candidates.length > 1) {
+              core.setOutput("found", "false");
+              core.setOutput("same_repo", "false");
+              core.setOutput("safe_to_review", "false");
+              core.setOutput("already_reviewed", "false");
+              core.setOutput("pr_number", "");
+              core.setOutput("base_sha", "");
+              core.setOutput("head_sha", "");
+              core.setOutput("head_repo_url", "");
+              core.setOutput("head_repo_full_name", "");
               core.setFailed(
                 `expected one pull request for workflow run head, found ${candidates.length}`,
               );
@@ -214,6 +261,9 @@ jobs:
       needs.resolve-pr.outputs.found == 'true' &&
       needs.resolve-pr.outputs.same_repo == 'true' &&
       needs.resolve-pr.outputs.already_reviewed != 'true'
+    concurrency:
+      group: security-review-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
     uses: abuzucom/foucault/.github/workflows/security-review.yml@9ec9681131841bae8bd80bdffdfcb673b36a6289
     with:
       audit_ref: "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
@@ -236,6 +286,9 @@ jobs:
       needs.resolve-pr.outputs.same_repo == 'false' &&
       needs.resolve-pr.outputs.safe_to_review == 'true' &&
       needs.resolve-pr.outputs.already_reviewed != 'true'
+    concurrency:
+      group: security-review-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
     # Upstream reusable workflow activates the fork-review environment gate
     # when fork_review is true. Caller jobs cannot declare environment directly.
     uses: abuzucom/foucault/.github/workflows/security-review.yml@9ec9681131841bae8bd80bdffdfcb673b36a6289
@@ -261,6 +314,9 @@ jobs:
       needs.resolve-pr.outputs.found == 'true' &&
       needs.resolve-pr.outputs.same_repo == 'false' &&
       needs.resolve-pr.outputs.safe_to_review != 'true'
+    concurrency:
+      group: security-review-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       checks: write
