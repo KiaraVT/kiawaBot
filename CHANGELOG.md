@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
 - Pinned the CI Node.js runtime to 26.13.1 to match the container runtime.
 - Pull request review workflows now run for every CI outcome and group concurrency by the resolved pull request number.
+- Superseded CI events skip before review dispatch, and removing `safe-to-review` cancels active fork reviews.
 - Stale pull request revisions skip without failing, while ambiguous revisions fail visibly.
 
 ### Fixed

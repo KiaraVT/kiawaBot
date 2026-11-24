@@ -185,7 +185,7 @@ class WorkflowContractsTestCase(unittest.TestCase):
             )
 
     def test_review_concurrency_groups_use_resolved_pull_request_number(self) -> None:
-        """Review concurrency must cancel obsolete runs for the same PR."""
+        """Review concurrency must cancel obsolete and label-revoked runs."""
         workflow_files = [
             self.workflows_dir / "quality-review-pr.yml",
             self.workflows_dir / "security-review-pr.yml",
@@ -194,10 +194,14 @@ class WorkflowContractsTestCase(unittest.TestCase):
             "quality-review-pr.yml": "needs.resolve.outputs.number",
             "security-review-pr.yml": "needs.resolve-pr.outputs.pr_number",
         }
+        expected_skip_job = {
+            "quality-review-pr.yml": "fork-skip",
+            "security-review-pr.yml": "fork-review-skipped",
+        }
         for workflow_file in workflow_files:
             content = workflow_file.read_text(encoding="utf-8")
             jobs = extract_workflow_jobs(content)
-            for job_name in ("review", "review-fork"):
+            for job_name in ("review", "review-fork", expected_skip_job[workflow_file.name]):
                 self.assertIn(
                     expected_output[workflow_file.name],
                     jobs[job_name],
@@ -210,6 +214,23 @@ class WorkflowContractsTestCase(unittest.TestCase):
             self.assertNotIn(
                 "github.event.workflow_run.head_branch",
                 content,
+            )
+
+    def test_review_resolvers_ignore_older_ci_run_events(self) -> None:
+        """Only the latest completed CI event may dispatch a review."""
+        workflow_files = [
+            self.workflows_dir / "quality-review-pr.yml",
+            self.workflows_dir / "security-review-pr.yml",
+        ]
+        for workflow_file in workflow_files:
+            content = workflow_file.read_text(encoding="utf-8")
+            self.assertIn("actions.listWorkflowRuns", content)
+            self.assertIn("ci.yml", content)
+            self.assertIn("latestCiRunId", content)
+            self.assertIn("sourceRunId", content)
+            self.assertLess(
+                content.index("actions.listWorkflowRuns"),
+                content.index("github.rest.pulls.list"),
             )
 
     def test_review_resolvers_distinguish_stale_and_ambiguous_heads(self) -> None:
