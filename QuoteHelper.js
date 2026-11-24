@@ -43,6 +43,7 @@ import {
  * @property { string } Original_Date - Original quote creation timestamp in UTC quote format.
  * @property { string } [Creation_Sequence] - Monotonic creation order used for same-second tie-breaking.
  * @property { string } Deleted_At - UTC ISO-8601 timestamp for the trash event.
+ * @property { string } [Pending_Remove] - Marks an interrupted removal for reconciliation.
  * @property { string } [Date] - Legacy input field normalized to Original_Date when loaded.
  * @property { string } [Restored_At] - UTC ISO-8601 timestamp for the restore event.
  * @property { string } [Restored_Index]
@@ -98,6 +99,7 @@ export default class QuoteHelper {
         // defined in the constructor just to avoid extra instance variables for dataPath.
         this.load = () => {
             this.quotes = jsonfile.readFileSync(dataPath);
+            this.reconcilePendingRemovals();
         }
 
         // use the provided write function to save updated quotes.
@@ -109,7 +111,7 @@ export default class QuoteHelper {
         this.loadTrash = (now = getUtcNowIsoString()) => {
             const nowDateTime = parseIsoDateTime(now);
             if (!nowDateTime) {
-                throw new Error("Quote trash reference time must be a valid UTC timestamp");
+                console.warn("[QuoteHelper] Invalid trash reference time; skipping retention pruning");
             }
             if (!fs.existsSync(this.trashDataPath)) {
                 this.trashQuotes = [];
@@ -144,6 +146,10 @@ export default class QuoteHelper {
             const futureDatedEntries = [];
             const expiredEntries = [];
             for (const entry of validEntries) {
+                if (!nowDateTime) {
+                    retainedEntries.push(entry);
+                    continue;
+                }
                 const deletedAt = parseIsoDateTime(entry.Deleted_At);
                 const entryAgeMs = nowDateTime.diff(deletedAt).as("milliseconds");
                 if (entryAgeMs < 0) {
@@ -236,18 +242,23 @@ export default class QuoteHelper {
 
     /**
      * Assigns stable creation sequences to legacy quotes that lack them.
+     * Callers must persist the collection after a change.
      * @returns {boolean} whether any sequence changed
      */
     ensureCreationSequences() {
         const usedSequences = new Set(
             this.quotes
+                .filter(quote => quote.Index)
                 .map(quote => castIdToNumber(quote.Creation_Sequence))
                 .filter(sequence => sequence > 0)
         );
         let nextSequence = 1;
         let changed = false;
         for (const quote of this.quotes) {
-            if (!quote.Index || quote.Creation_Sequence) {
+            if (quote.Quote_Count !== undefined || !quote.Index) {
+                continue;
+            }
+            if (castIdToNumber(quote.Creation_Sequence) > 0) {
                 continue;
             }
             while (usedSequences.has(nextSequence)) {
@@ -259,6 +270,63 @@ export default class QuoteHelper {
             changed = true;
         }
         return changed;
+    }
+
+    /**
+     * Reindexes active quotes into contiguous order.
+     * @returns {number} the highest active quote index
+     */
+    reindexActiveQuotes() {
+        let nextIndex = 1;
+        for (const quote of this.quotes) {
+            if (quote.Index === undefined) {
+                continue;
+            }
+            quote.Index = String(nextIndex);
+            nextIndex += 1;
+        }
+        const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
+        if (metadataElement) {
+            metadataElement.Quote_Count = String(nextIndex - 1);
+        }
+        return nextIndex - 1;
+    }
+
+    /**
+     * Completes removals interrupted after the trash write but before the active write.
+     */
+    reconcilePendingRemovals() {
+        if (!fs.existsSync(this.trashDataPath)) {
+            return;
+        }
+        const trashQuotes = jsonfile.readFileSync(this.trashDataPath);
+        if (!Array.isArray(trashQuotes)) {
+            return;
+        }
+        const pendingEntries = trashQuotes.filter(entry => entry.Pending_Remove === "true");
+        if (pendingEntries.length === 0) {
+            return;
+        }
+
+        let activeQuotesChanged = false;
+        for (const pendingEntry of pendingEntries) {
+            const quoteIndex = this.quotes.findIndex(quote => (
+                quote.Index === pendingEntry.Original_Index &&
+                quote.Quote_Text === pendingEntry.Quote_Text
+            ));
+            if (quoteIndex !== -1) {
+                this.quotes.splice(quoteIndex, 1);
+                this.reindexActiveQuotes();
+                activeQuotesChanged = true;
+            }
+            delete pendingEntry.Pending_Remove;
+        }
+
+        if (activeQuotesChanged) {
+            this.save();
+        }
+        this.trashQuotes = trashQuotes;
+        this.saveTrash();
     }
 
     /**
@@ -353,6 +421,8 @@ export default class QuoteHelper {
             if (quoteIndex !== -1) {
                 this.ensureCreationSequences();
                 const removedQuote = this.quotes[quoteIndex];
+                const activeQuotesSnapshot = this.quotes.map(quote => ({ ...quote }));
+                const trashQuotesSnapshot = this.trashQuotes.map(entry => ({ ...entry }));
                 const trashId = this.getMaxTrashIndex() + 1;
                 const trashEntry = {
                     Trash_ID: String(trashId),
@@ -363,29 +433,33 @@ export default class QuoteHelper {
                     Original_Date: removedQuote.Date,
                     Creation_Sequence: removedQuote.Creation_Sequence,
                     Deleted_At: getUtcNowIsoString(),
+                    Pending_Remove: "true",
                 };
 
-                // Save the recoverable copy before changing the active collection.
+                // Write ahead so an interrupted removal retains a recoverable copy.
                 this.trashQuotes.push(trashEntry);
                 this.saveTrash();
-                this.quotes.splice(quoteIndex, 1);
-
-                // Atomically re-index all quotes to perfectly sequential numbering
-                let newId = 1;
-                for (let i = 0; i < this.quotes.length; i++) {
-                    if (this.quotes[i].Index !== undefined) { // Skip metadata element
-                        this.quotes[i].Index = String(newId);
-                        newId++;
+                try {
+                    this.quotes.splice(quoteIndex, 1);
+                    this.reindexActiveQuotes();
+                    this.save();
+                } catch (error) {
+                    this.quotes = activeQuotesSnapshot;
+                    this.trashQuotes = trashQuotesSnapshot;
+                    try {
+                        this.saveTrash();
+                    } catch (rollbackError) {
+                        console.error("[QuoteHelper] Failed to roll back quote trash state:", rollbackError);
                     }
+                    throw error;
                 }
 
-                // Update the Quote_Count metadata element
-                const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
-                if (metadataElement) {
-                    metadataElement.Quote_Count = String(newId - 1);
+                delete trashEntry.Pending_Remove;
+                try {
+                    this.saveTrash();
+                } catch (error) {
+                    console.warn("[QuoteHelper] Failed to finalize quote trash transaction; reconciliation will retry", error);
                 }
-
-                this.save();
                 return { ...removedQuote, Trash_ID: trashEntry.Trash_ID };
             }
         }
@@ -514,6 +588,9 @@ export default class QuoteHelper {
 
         const normalizedSubmitter = String(submitter || "").toLowerCase();
         this.load();
+        if (this.ensureCreationSequences()) {
+            this.save();
+        }
         if (id !== null && id !== undefined && id !== "") {
             const quoteId = castIdToString(id);
             const quote = this.quotes.find(candidate => candidate.Index === quoteId);
@@ -566,11 +643,11 @@ export default class QuoteHelper {
             const removedQuote = this.remove(latestEligibleQuote.Index);
             return removedQuote ? { status: "removed", quote: removedQuote } : { status: "not-found" };
         }
-        if (foundUnparsableDate) {
-            return { status: "unparsable-date" };
-        }
         if (latestOwnedQuote) {
             return { status: "expired" };
+        }
+        if (foundUnparsableDate) {
+            return { status: "unparsable-date" };
         }
         return { status: "not-found" };
     }
@@ -646,6 +723,9 @@ export default class QuoteHelper {
         }
 
         const trashEntry = this.trashQuotes[trashIndex];
+        if (!parseQuoteTimestamp(trashEntry.Original_Date)) {
+            return undefined;
+        }
         this.load();
         this.ensureCreationSequences();
         const restoredSequence = castIdToNumber(trashEntry.Creation_Sequence) || this.getNextCreationSequence();
@@ -661,11 +741,7 @@ export default class QuoteHelper {
             Creation_Sequence: String(restoredSequence),
         };
         this.quotes.push(restoredQuote);
-
-        const metadataElement = this.quotes.find(quote => quote.Quote_Count !== undefined);
-        if (metadataElement) {
-            metadataElement.Quote_Count = restoredQuote.Index;
-        }
+        this.reindexActiveQuotes();
 
         // Save the active quote before marking the trash entry to avoid data loss.
         this.save();

@@ -237,6 +237,15 @@ test("Rotation - safeRotateIndex protects against empty collections and wraps pr
     assert.equal(safeRotateIndex(0, NaN), 0);
 });
 
+test("Kiara_bot - canManageQuotes includes the broadcaster", async () => {
+    const { canManageQuotes } = await import("../../Kiara_bot.js");
+    assert.equal(canManageQuotes("Broadcaster", { isBroadcaster: true }), true);
+    assert.equal(canManageQuotes("Mod", { isMod: true }), true);
+    assert.equal(canManageQuotes("Vip", { isVip: true }), true);
+    assert.equal(canManageQuotes("itsjustatank", {}), true);
+    assert.equal(canManageQuotes("Viewer", {}), false);
+});
+
 test("Kiara_bot - getMessageSender resolves the actual chat sender", async () => {
     const { getMessageSender } = await import("../../Kiara_bot.js");
     assert.equal(getMessageSender({ "display-name": "Display Name" }), "Display Name");

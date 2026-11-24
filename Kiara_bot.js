@@ -1604,6 +1604,13 @@ if (isMainModule) {
 //increment to next array index, if at max loop back to start
 
 
+export function canManageQuotes(sender, roles = {}) {
+    return allow_List.includes(sender) ||
+        roles.isMod === true ||
+        roles.isVip === true ||
+        roles.isBroadcaster === true;
+}
+
 export function getMessageSender(tags) {
     if (!tags || typeof tags !== "object") {
         return "";
@@ -1860,7 +1867,11 @@ async function messageHandler(tags, options) {
     
     if (command === "!addquote") {
         //check if user is a mod or VIP allow_List.includes(tags.username) ||
-        if (allow_List.includes(sender) || ismod === true || isvip === true) {
+        if (canManageQuotes(sender, {
+            isMod: ismod,
+            isVip: isvip,
+            isBroadcaster: isbroadcaster
+        })) {
             
             //the remainder of the text is separated from the command, this is the quote text
             const textToAdd = args.slice(1).join(" ");
@@ -1888,7 +1899,11 @@ async function messageHandler(tags, options) {
     }
     
     if (command === "!undoaddquote") {
-        if (allow_List.includes(sender) || ismod === true || isvip === true) {
+        if (canManageQuotes(sender, {
+            isMod: ismod,
+            isVip: isvip,
+            isBroadcaster: isbroadcaster
+        })) {
             if (args.length <= 2 && (args.length === 1 || /^\d+$/.test(args[1]))) {
                 const quoteId = args.length === 2 ? args[1] : null;
                 const result = activeQuoteData.undoAdd(sender, quoteId);

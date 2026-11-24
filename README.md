@@ -66,8 +66,8 @@ KiaraBot supports built-in and user-defined chat commands:
 | Command | Arguments | Permissions | Description |
 |---|---|---|---|
 | `!quote` | `[id]` | Everyone | Retrieves a random quote, or a specific quote by numerical ID. |
-| `!addquote` | `<text>` | Allow list / Mods / VIPs | Adds a new quote to the database with an auto-incrementing ID. |
-| `!undoaddquote` | `[id]` | Allow list / Mods / VIPs | Moves the caller's latest eligible quote, or a specified eligible quote, to trash. Only quotes added within 24 hours are eligible. |
+| `!addquote` | `<text>` | Allow list / Mods / VIPs / Broadcaster | Adds a new quote to the database with an auto-incrementing ID. |
+| `!undoaddquote` | `[id]` | Allow list / Mods / VIPs / Broadcaster | Moves the caller's latest eligible quote, or a specified eligible quote, to trash. Only quotes added within 24 hours are eligible. |
 | `!editquote` | `<id> <text>` | Allow list / Mods / VIPs | Updates the text of an existing quote by ID. |
 | `!removequote` | `<id>` | Broadcaster | Moves a quote to recoverable trash. |
 | `!restorequote` | `<trash id>` | Broadcaster | Restores a quote from trash with a new active ID. |
@@ -82,11 +82,13 @@ KiaraBot supports built-in and user-defined chat commands:
 ### Quote retention and timestamps
 
 - Quote trash entries expire automatically after 30 days when the trash file is loaded. Future-dated deletion timestamps are pruned as unusable, and malformed entries are discarded with a warning while the last trash ID remains preserved.
+- An invalid retention reference time skips pruning instead of interrupting quote operations.
+- Interrupted removals reconcile from their pending trash record when the active quote file loads.
 - The last assigned trash ID remains preserved after expiry or `!clearquotetrash`, so trash IDs are never reused.
-- A quote's `Date` value always records its original creation time. Restoring a quote assigns a new active quote ID but preserves the original creation timestamp and creation sequence.
+- A quote's `Date` value always records its original creation time. Restoring a quote preserves the original creation timestamp and creation sequence while reindexing the active collection.
 - `!undoaddquote` uses the original creation timestamp for its 24-hour eligibility window. Quotes created in the same second are ordered by their creation sequence, including after restoration.
 - Empty quote text is rejected when a quote is added.
-- Legacy trash records use the original `Date` field and are normalized to `Original_Date` when loaded. Legacy or unsupported active quote timestamps fail closed and receive a distinct error message.
+- Legacy trash records use the original `Date` field and are normalized to `Original_Date` when loaded. Unsupported legacy timestamps remain in trash but cannot be restored, and unsupported active quote timestamps fail closed with a distinct error message.
 
 ---
 
