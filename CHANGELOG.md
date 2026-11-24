@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Updated Axios to 1.21.1 and ws to 8.23.0 to include upstream security fixes.
+- Downgraded Nodemon to 3.1.11 to avoid the vulnerable Minimatch 10 dependency range.
+
+### Changed
+- Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
+
 ## [2.4.0] - 2026-10-09
 
 ### Added
