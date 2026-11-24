@@ -1810,6 +1810,8 @@ async function messageHandler(tags) {
                         ? `Quote #${quoteId} has an unsupported creation timestamp and cannot be undone.`
                         : `One of your quotes has an unsupported creation timestamp and cannot be undone.`;
                     postMessage(botID, message);
+                } else if (result.status === "invalid-reference-time") {
+                    postMessage(botID, `Unable to evaluate quote eligibility because the reference time is invalid.`);
                 }
             } else {
                 postMessage(botID, `Usage: !undoaddquote [quote number]`);

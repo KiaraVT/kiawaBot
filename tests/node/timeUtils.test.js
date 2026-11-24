@@ -16,6 +16,9 @@ import {
     delayMilliseconds,
     StreamAttendanceSessionTracker,
     FIVE_HOURS_MS,
+    QUOTE_UNDO_WINDOW_MS,
+    QUOTE_TRASH_RETENTION_DAYS,
+    QUOTE_TRASH_RETENTION_MS,
     normalizeTimezone,
     isValidTimezone,
     getStreamerTimezone,
@@ -27,6 +30,12 @@ import {
     scheduleCompensatedInterval
 } from "../../timeUtils.js";
 import { TwitchAuthPipeline } from "../../pipelineUtils.js";
+
+test("timeUtils - quote time windows use centralized exclusive boundaries", () => {
+    assert.equal(QUOTE_UNDO_WINDOW_MS, 24 * 60 * 60 * 1000);
+    assert.equal(QUOTE_TRASH_RETENTION_DAYS, 30);
+    assert.equal(QUOTE_TRASH_RETENTION_MS, QUOTE_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+});
 
 test("timeUtils - parseIsoDateTime parses valid ISO-8601 strings and rejects invalid values", () => {
     const valid = parseIsoDateTime("2026-10-09T08:00:00Z");

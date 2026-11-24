@@ -490,6 +490,9 @@ This section serves as a manual page reference for every exported constant, func
 
 - **`FIVE_HOURS_MS`** (`number` = `18000000`): 5 hours in milliseconds. Primary window to evaluate whether a stream reconnection is a continuation.
 - **`TEN_MINUTES_MS`** (`number` = `600000`): 10 minutes in milliseconds. Used for authorization state expiration and short timeouts.
+- **`QUOTE_UNDO_WINDOW_MS`** (`number` = `86400000`): 24 hours in milliseconds. Exclusive upper bound for quote undo eligibility. A quote exactly 24 hours old is not eligible.
+- **`QUOTE_TRASH_RETENTION_DAYS`** (`number` = `30`): Number of days retained in quote trash.
+- **`QUOTE_TRASH_RETENTION_MS`** (`number` = `2592000000`): Quote trash retention period in milliseconds. Exclusive upper bound for trash entry age.
 - **`QUOTE_DATE_FORMAT`** (`string` = `"yyyy-MM-dd HH:mm:ss"`): 24-hour quote creation timestamp format with seconds. `parseQuoteTimestamp()` interprets this format explicitly as UTC. Legacy local-time values without a UTC marker are rejected instead of being interpreted using the host timezone.
 - **`DEFAULT_STREAMER_TIMEZONE`** (`string` = `"America/Los_Angeles"`): Primary fallback IANA timezone for broadcast day calculations.
 

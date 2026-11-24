@@ -21,6 +21,26 @@ export const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 export const TEN_MINUTES_MS = 10 * 60 * 1000;
 
 /**
+ * 24 hours in milliseconds.
+ * Exclusive upper bound for quote undo eligibility.
+ * @type {number}
+ */
+export const QUOTE_UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Number of days retained in quote trash.
+ * @type {number}
+ */
+export const QUOTE_TRASH_RETENTION_DAYS = 30;
+
+/**
+ * Quote trash retention period in milliseconds.
+ * Exclusive upper bound for trash entry age.
+ * @type {number}
+ */
+export const QUOTE_TRASH_RETENTION_MS = QUOTE_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+/**
  * Format string for quotes: 24-hour UTC ISO format with seconds.
  * Example output: "2026-10-09 12:30:45".
  * @type {string}

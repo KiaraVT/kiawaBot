@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
 - Hardened quote trash loading to discard malformed entries and fail closed on invalid retention reference times.
+- Rejected empty quote text and preserved quote creation ordering across trash restoration.
 
 ## [2.4.0] - 2026-10-09
 

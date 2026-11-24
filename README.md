@@ -81,11 +81,12 @@ KiaraBot supports built-in and user-defined chat commands:
 
 ### Quote retention and timestamps
 
-- Quote trash entries expire automatically after 30 days when the trash file is loaded. Malformed entries are discarded while the last trash ID remains preserved.
+- Quote trash entries expire automatically after 30 days when the trash file is loaded. Future-dated deletion timestamps are pruned as unusable, and malformed entries are discarded with a warning while the last trash ID remains preserved.
 - The last assigned trash ID remains preserved after expiry or `!clearquotetrash`, so trash IDs are never reused.
-- A quote's `Date` value always records its original creation time. Restoring a quote assigns a new active quote ID but preserves the original creation timestamp.
-- `!undoaddquote` uses the original creation timestamp for its 24-hour eligibility window.
-- Legacy or unsupported creation timestamps fail closed and receive a distinct error message.
+- A quote's `Date` value always records its original creation time. Restoring a quote assigns a new active quote ID but preserves the original creation timestamp and creation sequence.
+- `!undoaddquote` uses the original creation timestamp for its 24-hour eligibility window. Quotes created in the same second are ordered by their creation sequence, including after restoration.
+- Empty quote text is rejected when a quote is added.
+- Legacy trash records use the original `Date` field and are normalized to `Original_Date` when loaded. Legacy or unsupported active quote timestamps fail closed and receive a distinct error message.
 
 ---
 

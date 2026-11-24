@@ -32,6 +32,18 @@ test("QuoteHelper - castIdToString returns empty string for invalid inputs", () 
     assert.equal(castIdToString("invalid"), "");
 });
 
+test("QuoteHelper - add rejects empty quote text", () => {
+    const fixture = createQuoteHelperFixture();
+    try {
+        assert.equal(fixture.helper.add("", "viewer", "Chat"), undefined);
+        assert.equal(fixture.helper.add("   ", "viewer", "Chat"), undefined);
+        const activeQuotes = JSON.parse(fs.readFileSync(fixture.quotesPath, "utf8"));
+        assert.equal(activeQuotes.length, 4);
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
 function createQuoteHelperFixture() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-trash-test-"));
     const quotesPath = path.join(tempDir, "quotes.json");
@@ -206,6 +218,25 @@ test("QuoteHelper - undoAdd breaks same-second timestamp ties by insertion order
     }
 });
 
+test("QuoteHelper - undoAdd preserves creation ordering after a quote is restored", () => {
+    const quotes = [
+        { Index: "1", Quote_Text: "First", Submitter: "Alice", Category: "Chat", Date: "2026-11-23 11:59:00" },
+        { Index: "2", Quote_Text: "Second", Submitter: "Alice", Category: "Chat", Date: "2026-11-23 11:59:00" }
+    ];
+    const fixture = createUndoQuoteFixture(quotes);
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        fixture.helper.remove("1");
+        fixture.helper.restore("1");
+        const result = fixture.helper.undoAdd("alice", null, now);
+        assert.equal(result.status, "removed");
+        assert.equal(result.quote?.Index, "1");
+        assert.equal(result.quote?.Quote_Text, "Second");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
 test("QuoteHelper - undoAdd reports distinct ownership, existence, and age failures", () => {
     const fixture = createUndoQuoteFixture(createUndoQuotes());
     const now = "2026-11-23T12:00:00Z";
@@ -226,6 +257,16 @@ test("QuoteHelper - undoAdd rejects a quote exactly 24 hours old", () => {
     const now = "2026-11-23T12:00:00Z";
     try {
         assert.equal(fixture.helper.undoAdd("alice", "1", now).status, "expired");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - undoAdd reports an invalid reference time distinctly", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    try {
+        const result = fixture.helper.undoAdd("alice", "1", "not-a-date");
+        assert.equal(result.status, "invalid-reference-time");
     } finally {
         fs.rmSync(fixture.tempDir, { recursive: true, force: true });
     }
@@ -271,7 +312,8 @@ test("QuoteHelper - getMaxTrashIndex handles large trash files without argument 
     }
 });
 
-test("QuoteHelper - loadTrash drops malformed entries and preserves the maximum seen trash ID", () => {
+test("QuoteHelper - loadTrash drops unusable entries and preserves the maximum seen trash ID", (t) => {
+    const warnMock = t.mock.method(console, "warn", () => {});
     const fixture = createUndoQuoteFixture(createUndoQuotes());
     const now = "2026-11-23T12:00:00Z";
     try {
@@ -283,26 +325,35 @@ test("QuoteHelper - loadTrash drops malformed entries and preserves the maximum 
             Original_Date: "2026-11-23 00:00:00",
             Deleted_At: "2026-11-23T00:00:00.000Z"
         };
+        const emptyFreeTextEntry = {
+            ...validEntry,
+            Trash_ID: "2",
+            Quote_Text: "",
+            Category: ""
+        };
         const malformedEntries = [
-            { ...validEntry, Trash_ID: "2", Quote_Text: "" },
-            { ...validEntry, Trash_ID: "3", Submitter: "" },
-            { ...validEntry, Trash_ID: "4", Category: "" },
-            { ...validEntry, Trash_ID: "5", Original_Date: "" },
-            { ...validEntry, Trash_ID: "6", Deleted_At: "" },
+            { ...validEntry, Trash_ID: "3", Deleted_At: "" },
+            { ...validEntry, Trash_ID: "4", Original_Date: "" },
+            { ...validEntry, Trash_ID: "5", Deleted_At: "not-a-date" },
             { ...validEntry, Trash_ID: undefined }
         ];
-        fs.writeFileSync(fixture.trashPath, JSON.stringify([validEntry, ...malformedEntries], null, 2));
+        fs.writeFileSync(fixture.trashPath, JSON.stringify([
+            validEntry,
+            emptyFreeTextEntry,
+            ...malformedEntries
+        ], null, 2));
 
         fixture.helper.pruneExpiredTrash(now);
         const trash = JSON.parse(fs.readFileSync(fixture.trashPath, "utf8"));
         assert.deepEqual(
             trash.filter(entry => entry.Trash_ID).map(entry => entry.Trash_ID),
-            ["1"]
+            ["1", "2"]
         );
-        assert.equal(trash.find(entry => entry.Last_Trash_ID)?.Last_Trash_ID, "6");
+        assert.equal(trash.find(entry => entry.Last_Trash_ID)?.Last_Trash_ID, "5");
+        assert.ok(warnMock.mock.calls.length > 0);
 
         const removedQuote = fixture.helper.remove("1");
-        assert.equal(removedQuote?.Trash_ID, "7");
+        assert.equal(removedQuote?.Trash_ID, "6");
     } finally {
         fs.rmSync(fixture.tempDir, { recursive: true, force: true });
     }
@@ -317,6 +368,79 @@ test("QuoteHelper - pruneExpiredTrash rejects an invalid reference time", () => 
         );
     } finally {
         fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - pruneExpiredTrash removes future-dated entries and reports the affected ID", (t) => {
+    const warnMock = t.mock.method(console, "warn", () => {});
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    const now = "2026-11-23T12:00:00Z";
+    try {
+        fs.writeFileSync(fixture.trashPath, JSON.stringify([
+            {
+                Trash_ID: "9",
+                Quote_Text: "Future",
+                Submitter: "Alice",
+                Category: "Chat",
+                Original_Date: "2026-11-23 00:00:00",
+                Deleted_At: "2099-11-23T00:00:00.000Z"
+            }
+        ], null, 2));
+
+        assert.equal(fixture.helper.pruneExpiredTrash(now), 1);
+        const trash = JSON.parse(fs.readFileSync(fixture.trashPath, "utf8"));
+        assert.equal(trash.filter(entry => entry.Trash_ID).length, 0);
+        assert.equal(trash.find(entry => entry.Last_Trash_ID)?.Last_Trash_ID, "9");
+        assert.ok(warnMock.mock.calls.some(call => (
+            call.arguments.some(argument => String(argument).includes("9"))
+        )));
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - restore normalizes legacy Date records and permits empty free text", () => {
+    const fixture = createUndoQuoteFixture(createUndoQuotes());
+    try {
+        fs.writeFileSync(fixture.trashPath, JSON.stringify([
+            {
+                Trash_ID: "1",
+                Quote_Text: "",
+                Submitter: "",
+                Category: "",
+                Date: "2026/10/9 1:30 PM",
+                Deleted_At: "2026-11-23T00:00:00.000Z"
+            }
+        ], null, 2));
+
+        const restoredQuote = fixture.helper.restore("1");
+        assert.equal(restoredQuote?.Quote_Text, "");
+        assert.equal(restoredQuote?.Submitter, "");
+        assert.equal(restoredQuote?.Category, "");
+        assert.equal(restoredQuote?.Date, "2026/10/9 1:30 PM");
+    } finally {
+        fs.rmSync(fixture.tempDir, { recursive: true, force: true });
+    }
+});
+
+test("QuoteHelper - getMaxTrashIndex does not rewrite an unchanged metadata-only trash file", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-trash-write-test-"));
+    const quotesPath = path.join(tempDir, "quotes.json");
+    const trashPath = path.join(tempDir, "quotes-trash.json");
+    fs.writeFileSync(quotesPath, JSON.stringify([{ Quote_Count: "0" }]));
+    fs.writeFileSync(trashPath, JSON.stringify([{ Last_Trash_ID: "7" }]));
+    let writeCount = 0;
+    const writeJson = (filePath, data) => {
+        writeCount += 1;
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    };
+    const helper = new QuoteHelper(quotesPath, writeJson, trashPath);
+    try {
+        assert.equal(helper.getMaxTrashIndex(), 7);
+        assert.equal(helper.getMaxTrashIndex(), 7);
+        assert.equal(writeCount, 0);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
 
