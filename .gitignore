@@ -148,3 +148,7 @@ data/
 
 # Auth data
 auth-data.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
