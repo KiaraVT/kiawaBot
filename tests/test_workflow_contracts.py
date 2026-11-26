@@ -31,6 +31,8 @@ PERSONAS = (
      "docs/pr-privacy-review.md"),
 )
 POLICY_DOCUMENTS = tuple(document for _persona, _wrapper, _check, _label, document in PERSONAS)
+ALWAYS_ON_PERSONAS = ("foucault", "euler")
+LABEL_PERSONAS = ("generay", "adorno", "havel")
 
 
 def extract_workflow_jobs(content: str) -> dict[str, str]:
@@ -201,10 +203,12 @@ class WorkflowContractsTestCase(unittest.TestCase):
 
     def test_review_jobs_support_ollama_and_model_api_keys(self) -> None:
         """Every persona job must support OLLAMA_API_KEY."""
-        for jobs in (self.persona_jobs, self.label_jobs):
-            for job_name, job_body in jobs.items():
-                if job_name == "annotate":
-                    continue
+        for jobs, job_names in (
+            (self.persona_jobs, ALWAYS_ON_PERSONAS),
+            (self.label_jobs, LABEL_PERSONAS),
+        ):
+            for job_name in job_names:
+                job_body = jobs[job_name]
                 self.assertIn(
                     "secrets.OLLAMA_API_KEY",
                     job_body,
@@ -224,10 +228,12 @@ class WorkflowContractsTestCase(unittest.TestCase):
 
     def test_persona_jobs_route_reviews_through_the_fork_review_environment(self) -> None:
         """Every persona job must opt into the protected fork-review path."""
-        for jobs in (self.persona_jobs, self.label_jobs):
-            for job_name, job_body in jobs.items():
-                if job_name == "annotate":
-                    continue
+        for jobs, job_names in (
+            (self.persona_jobs, ALWAYS_ON_PERSONAS),
+            (self.label_jobs, LABEL_PERSONAS),
+        ):
+            for job_name in job_names:
+                job_body = jobs[job_name]
                 self.assertIn(
                     "fork_review: true",
                     job_body,
@@ -255,13 +261,75 @@ class WorkflowContractsTestCase(unittest.TestCase):
         """The annotate job must survive a skipped persona job."""
         job_body = self.persona_jobs["annotate"]
         self.assertIn("!cancelled()", job_body)
-        self.assertIn("needs: [foucault, euler]", job_body)
+        self.assertIn("needs: [resolve, foucault, euler]", job_body)
 
-    def test_annotate_job_resolves_the_pull_request_number(self) -> None:
-        """The annotate job must resolve the number from the workflow run head."""
+    def test_annotate_job_runs_when_either_persona_produced_a_result(self) -> None:
+        """One skipped persona must not cost the other persona its annotation."""
+        condition = " ".join(self.persona_jobs["annotate"].split())
+        self.assertIn(
+            "(needs.foucault.result == 'success' || needs.foucault.result == 'failure' || "
+            "needs.euler.result == 'success' || needs.euler.result == 'failure')",
+            condition,
+        )
+
+    def test_annotate_job_gates_each_step_on_its_own_persona(self) -> None:
+        """Each annotation step must run for its own persona only."""
         job_body = self.persona_jobs["annotate"]
+        self.assertIn(
+            "if: needs.euler.result == 'success' || needs.euler.result == 'failure'",
+            job_body,
+        )
+        self.assertIn(
+            "if: needs.foucault.result == 'success' || needs.foucault.result == 'failure'",
+            job_body,
+        )
+
+    def test_resolve_job_matches_the_head_against_open_pull_requests(self) -> None:
+        """The caller must resolve the pull request from the open pull requests."""
+        job_body = self.persona_jobs["resolve"]
         self.assertIn("github.rest.pulls.list", job_body)
         self.assertIn("github.event.workflow_run.head_sha", job_body)
+        self.assertNotIn(
+            "listPullRequestsAssociatedWithCommit",
+            self.persona_content,
+            "The caller must not rely on the commit association API. It returns "
+            "an empty candidate list for a fork head.",
+        )
+
+    def test_resolve_job_fails_visibly_on_an_ambiguous_head(self) -> None:
+        """Several pull requests on one head must fail visibly."""
+        job_body = self.persona_jobs["resolve"]
+        self.assertIn("expected one pull request for workflow run head", job_body)
+        self.assertIn("core.setFailed", job_body)
+
+    def test_resolve_job_skips_a_stale_head_without_failing(self) -> None:
+        """A revision with no open pull request must not fail the run."""
+        job_body = self.persona_jobs["resolve"]
+        self.assertIn("if (matches.length === 0)", job_body)
+        self.assertIn("core.setOutput('found', 'false')", job_body)
+
+    def test_persona_jobs_receive_the_resolved_metadata(self) -> None:
+        """The engine must receive the resolved pull request metadata."""
+        for job_name in ("foucault", "euler"):
+            job_body = self.persona_jobs[job_name]
+            self.assertIn("needs: resolve", job_body)
+            for output in (
+                "pr_number",
+                "base_sha",
+                "head_sha",
+                "head_repo_url",
+                "head_repo_full_name",
+            ):
+                self.assertIn(
+                    f"${{{{ needs.resolve.outputs.{output} }}}}",
+                    job_body,
+                    f"Job '{job_name}' must pass {output} to the engine.",
+                )
+
+    def test_annotate_job_uses_the_resolved_pull_request_number(self) -> None:
+        """The annotation must target the resolved pull request."""
+        job_body = self.persona_jobs["annotate"]
+        self.assertIn("${{ needs.resolve.outputs.pr_number }}", job_body)
 
     def test_annotate_job_uses_the_engine_comment_markers(self) -> None:
         """The annotation must match the comment markers the engine writes."""

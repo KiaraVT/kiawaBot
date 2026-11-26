@@ -10,7 +10,7 @@ name: persona-review
 # `uses:` pin and the `personas_ref` input carry the same full commit SHA.
 #
 # Both personas run through the protected fork-review environment, so a
-# maintainer approves every review before the provider key reaches a job.
+# maintainer approves every model review before the provider key reaches a job.
 #
 # The `paths` filter skips pull requests that touch only the changelog, the
 # readme, or the documentation. The `euler-scan-requested` and
@@ -30,10 +30,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve:
+    # The engine resolves the pull request through the commit association API.
+    # That API returns an empty candidate list for a fork head, so the caller
+    # resolves the pull request and passes the metadata to the engine.
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      found: ${{ steps.resolve.outputs.found }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      head_repo_url: ${{ steps.resolve.outputs.head_repo_url }}
+      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
+    steps:
+      - name: Resolve pull request from the workflow run head
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        with:
+          script: |
+            const headSha = (process.env.HEAD_SHA || '').toLowerCase();
+            const setEmptyOutputs = () => {
+              core.setOutput('found', 'false');
+              core.setOutput('pr_number', '');
+              core.setOutput('base_sha', '');
+              core.setOutput('head_sha', '');
+              core.setOutput('head_repo_url', '');
+              core.setOutput('head_repo_full_name', '');
+            };
+            if (!/^[0-9a-f]{40}$/.test(headSha)) {
+              setEmptyOutputs();
+              core.setFailed('workflow run head SHA is invalid');
+              return;
+            }
+            // A workflow_run payload lists no pull request for a fork head,
+            // so the open pull requests are the source.
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const matches = pulls.filter((pull) =>
+              (pull.head.sha || '').toLowerCase() === headSha);
+            if (matches.length === 0) {
+              // A stale revision with no open pull request is not a review.
+              setEmptyOutputs();
+              core.info('no open pull request matches the workflow run head');
+              return;
+            }
+            if (matches.length > 1) {
+              setEmptyOutputs();
+              core.setFailed(
+                `expected one pull request for workflow run head, found ${matches.length}`);
+              return;
+            }
+            const pull = matches[0];
+            core.setOutput('found', 'true');
+            core.setOutput('pr_number', String(pull.number));
+            core.setOutput('base_sha', pull.base.sha);
+            core.setOutput('head_sha', pull.head.sha);
+            core.setOutput('head_repo_url', pull.head.repo.clone_url);
+            core.setOutput('head_repo_full_name', pull.head.repo.full_name);
+
   foucault:
     # Every pull request CI outcome stays reviewable so a pull request author
     # cannot suppress the review by changing the CI workflow.
-    if: github.event.workflow_run.event == 'pull_request'
+    needs: resolve
+    if: >-
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.event == 'pull_request'
     permissions:
       checks: write
       contents: read
@@ -41,6 +112,11 @@ jobs:
     uses: abuzucom/agents-personas/.github/workflows/foucault-security-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
     with:
       personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      pr_number: ${{ needs.resolve.outputs.pr_number }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      head_repo_url: ${{ needs.resolve.outputs.head_repo_url }}
+      head_repo_full_name: ${{ needs.resolve.outputs.head_repo_full_name }}
       fork_review: true
       fail_on_block: true
       paths: |
@@ -51,7 +127,11 @@ jobs:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   euler:
-    if: github.event.workflow_run.event == 'pull_request'
+    needs: resolve
+    if: >-
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.event == 'pull_request'
     permissions:
       checks: write
       contents: read
@@ -59,6 +139,11 @@ jobs:
     uses: abuzucom/agents-personas/.github/workflows/euler-quality-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
     with:
       personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      pr_number: ${{ needs.resolve.outputs.pr_number }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      head_repo_url: ${{ needs.resolve.outputs.head_repo_url }}
+      head_repo_full_name: ${{ needs.resolve.outputs.head_repo_full_name }}
       fork_review: true
       fail_on_block: true
       # Test files hold flagged patterns on purpose.
@@ -71,12 +156,14 @@ jobs:
       MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
 
   annotate:
-    needs: [foucault, euler]
+    needs: [resolve, foucault, euler]
     # A status function keeps the job alive when a persona job is skipped.
+    # Either persona result is enough, so one skipped persona does not cost
+    # the other persona its annotation.
     if: >-
       !cancelled() &&
-      (needs.foucault.result == 'success' || needs.foucault.result == 'failure') &&
-      (needs.euler.result == 'success' || needs.euler.result == 'failure')
+      (needs.foucault.result == 'success' || needs.foucault.result == 'failure' ||
+       needs.euler.result == 'success' || needs.euler.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -91,45 +178,20 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Resolve pull request from the workflow run head
-        id: resolve
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        with:
-          script: |
-            // A workflow_run payload lists no pull request for a fork head,
-            // so the number comes from the open pull requests.
-            const headSha = (process.env.HEAD_SHA || '').toLowerCase();
-            const pulls = await github.paginate(github.rest.pulls.list, {
-              ...context.repo,
-              state: 'open',
-              per_page: 100,
-            });
-            const matches = pulls.filter((pull) =>
-              (pull.head.sha || '').toLowerCase() === headSha);
-            if (matches.length !== 1) {
-              core.setOutput('number', '');
-              core.warning(
-                `expected one pull request for workflow run head, found ${matches.length}`);
-              return;
-            }
-            core.setOutput('number', String(matches[0].number));
-
       - name: Annotate quality review comment with policy document link
-        if: steps.resolve.outputs.number != ''
+        if: needs.euler.result == 'success' || needs.euler.result == 'failure'
         uses: ./.github/actions/annotate-pr-review
         with:
-          pr-number: ${{ steps.resolve.outputs.number }}
+          pr-number: ${{ needs.resolve.outputs.pr_number }}
           doc-path: "docs/pr-quality-review.md"
           policy-name: "Quality review"
           markers: "persona-review: euler / quality,Euler quality review:"
 
       - name: Annotate security review comment with policy document link
-        if: steps.resolve.outputs.number != ''
+        if: needs.foucault.result == 'success' || needs.foucault.result == 'failure'
         uses: ./.github/actions/annotate-pr-review
         with:
-          pr-number: ${{ steps.resolve.outputs.number }}
+          pr-number: ${{ needs.resolve.outputs.pr_number }}
           doc-path: "docs/pr-security-review.md"
           policy-name: "Security review"
           markers: "persona-review: foucault / security,Foucault security review:"

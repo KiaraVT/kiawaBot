@@ -21,7 +21,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: persona-review-labels-${{ github.event.pull_request.number }}-${{ github.event.label.name || 'push' }}
+  # The group names the pull request alone. A newer event for the same pull
+  # request cancels the run in flight, so a push and a label event never
+  # review the same head at the same time.
+  group: persona-review-labels-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
