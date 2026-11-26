@@ -14,19 +14,15 @@ from pathlib import Path
 
 DEFAULT_UPSTREAM_HOST = "raw.githubusercontent.com"
 DEFAULT_POLICY_ORG = "abuzucom"
-DEFAULT_EULER_REPO = "euler"
-DEFAULT_FOUCAULT_REPO = "foucault"
-PINNED_EULER_REF = "aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44"
-PINNED_FOUCAULT_REF = "f58255c8d75658e62e7cff9b607c13aeab5f5e18"
+DEFAULT_PERSONAS_REPO = "agents-personas"
+QUALITY_POLICY_PATH = "reviewers/euler/QUALITY.md"
+AUDIT_POLICY_PATH = "reviewers/foucault/AUDIT.md"
+PINNED_PERSONAS_REF = "1649e5c9710fd85d6cca12006e344af27a5404a6"
 
-DEFAULT_EULER_REF = PINNED_EULER_REF
-DEFAULT_FOUCAULT_REF = PINNED_FOUCAULT_REF
+DEFAULT_PERSONAS_REF = PINNED_PERSONAS_REF
 
-PINNED_EULER_SHA256 = "73782cbc6ae30dab4ba561c77e5341671738e85a91dfd8a6a2ef02b02f44a300"
-# Upstream Foucault AUDIT.md policy specification content and SHA-256 digest are
-# unchanged between f59866d and f58255c. This drift check validates policy markdown
-# content only; reusable workflow behavioral updates at new pins are verified separately.
-PINNED_FOUCAULT_SHA256 = "bd252577fe7f4359f7bd6e3ea3f91c3bddf854dfc8d6c30a696986e91acf89a0"
+PINNED_QUALITY_SHA256 = "b12761bb1beec01de1e89e225069caf05dbf86353f7fe86bef4e36f5a8f2226d"
+PINNED_AUDIT_SHA256 = "98c66b3f1cae20312164d124b25df135046e7ca3896f8804ce4cee0659782ad1"
 
 REF_PATTERN = re.compile(r"^(?:[0-9a-fA-F]{40}|main|v[0-9]+(?:\.[0-9]+)*)$")
 
@@ -53,10 +49,10 @@ def validate_policy_url(
     if ".." in parsed.path or "%2e" in parsed.path.lower():
         raise ValueError(f"Path traversal detected in {name} URL: {url}")
     pattern = (
-        rf"^/{re.escape(DEFAULT_POLICY_ORG)}/"
-        rf"({re.escape(DEFAULT_EULER_REPO)}|{re.escape(DEFAULT_FOUCAULT_REPO)})/"
+        rf"^/{re.escape(expected_org)}/"
+        rf"{re.escape(DEFAULT_PERSONAS_REPO)}/"
         rf"([0-9a-fA-F]{{40}}|main|v[0-9]+(?:\.[0-9]+)*)/"
-        rf"(QUALITY|AUDIT)\.md$"
+        rf"({re.escape(QUALITY_POLICY_PATH)}|{re.escape(AUDIT_POLICY_PATH)})$"
     )
     if not re.fullmatch(pattern, parsed.path):
         raise ValueError(f"Invalid path for {name} URL: {url} (must target approved abuzucom policy document)")
@@ -95,40 +91,58 @@ def parse_float_env(name: str, default: float, min_val: float, max_val: float) -
         raise ValueError(f"Invalid {name}: {e}") from e
 
 
+RETIRED_POLICY_ENVIRONMENT_NAMES = (
+    "EULER_POLICY_URL",
+    "EULER_POLICY_REF",
+    "EULER_POLICY_PIN",
+    "FOUCAULT_POLICY_URL",
+    "FOUCAULT_POLICY_REF",
+    "FOUCAULT_POLICY_PIN",
+)
+
+
 def get_policy_config() -> tuple[str, str, int, float, float]:
     """Retrieve and validate policy URLs and parameters from the environment."""
-    euler_ref = validate_policy_ref(
-        os.getenv("EULER_POLICY_REF", os.getenv("EULER_POLICY_PIN", DEFAULT_EULER_REF)),
-        "Euler",
+    for retired_name in RETIRED_POLICY_ENVIRONMENT_NAMES:
+        if retired_name in os.environ:
+            raise ValueError(
+                f"{retired_name} names a retired upstream repository. "
+                "Use PERSONAS_QUALITY_URL, PERSONAS_QUALITY_REF, "
+                "PERSONAS_AUDIT_URL, and PERSONAS_AUDIT_REF."
+            )
+
+    quality_ref = validate_policy_ref(
+        os.getenv("PERSONAS_QUALITY_REF", os.getenv("PERSONAS_QUALITY_PIN", DEFAULT_PERSONAS_REF)),
+        "agents-personas quality policy",
     )
-    foucault_ref = validate_policy_ref(
-        os.getenv("FOUCAULT_POLICY_REF", os.getenv("FOUCAULT_POLICY_PIN", DEFAULT_FOUCAULT_REF)),
-        "Foucault",
+    audit_ref = validate_policy_ref(
+        os.getenv("PERSONAS_AUDIT_REF", os.getenv("PERSONAS_AUDIT_PIN", DEFAULT_PERSONAS_REF)),
+        "agents-personas audit policy",
     )
 
-    default_euler_url = (
+    default_quality_url = (
         f"https://{DEFAULT_UPSTREAM_HOST}/{DEFAULT_POLICY_ORG}/"
-        f"{DEFAULT_EULER_REPO}/{euler_ref}/QUALITY.md"
+        f"{DEFAULT_PERSONAS_REPO}/{quality_ref}/{QUALITY_POLICY_PATH}"
     )
-    default_foucault_url = (
+    default_audit_url = (
         f"https://{DEFAULT_UPSTREAM_HOST}/{DEFAULT_POLICY_ORG}/"
-        f"{DEFAULT_FOUCAULT_REPO}/{foucault_ref}/AUDIT.md"
+        f"{DEFAULT_PERSONAS_REPO}/{audit_ref}/{AUDIT_POLICY_PATH}"
     )
 
-    euler_url = validate_policy_url(
-        os.getenv("EULER_POLICY_URL", default_euler_url),
-        "Euler",
+    quality_url = validate_policy_url(
+        os.getenv("PERSONAS_QUALITY_URL", default_quality_url),
+        "agents-personas quality policy",
     )
-    foucault_url = validate_policy_url(
-        os.getenv("FOUCAULT_POLICY_URL", default_foucault_url),
-        "Foucault",
+    audit_url = validate_policy_url(
+        os.getenv("PERSONAS_AUDIT_URL", default_audit_url),
+        "agents-personas audit policy",
     )
 
     retries = parse_int_env("POLICY_DRIFT_RETRIES", DEFAULT_RETRIES, 1, 10)
     backoff = parse_float_env("POLICY_DRIFT_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS, 0.0, 60.0)
     timeout = parse_float_env("POLICY_DRIFT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS, 1.0, 300.0)
 
-    return euler_url, foucault_url, retries, backoff, timeout
+    return quality_url, audit_url, retries, backoff, timeout
 
 
 def fetch_text(
@@ -233,7 +247,7 @@ def verify_policy(
 
 def main() -> int:
     try:
-        euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
+        quality_url, audit_url, retries, backoff, timeout = get_policy_config()
     except ValueError as error:
         print(f"::error::Policy configuration error: {error}", file=sys.stderr)
         return 1
@@ -244,24 +258,24 @@ def main() -> int:
 
     ok_quality = verify_policy(
         quality_doc,
-        euler_url,
-        "Euler QUALITY.md",
-        expected_sha256=PINNED_EULER_SHA256,
+        quality_url,
+        "agents-personas QUALITY.md",
+        expected_sha256=PINNED_QUALITY_SHA256,
         retries=retries,
         backoff_seconds=backoff,
         timeout=timeout,
     )
-    ok_security = verify_policy(
+    ok_audit = verify_policy(
         security_doc,
-        foucault_url,
-        "Foucault AUDIT.md",
-        expected_sha256=PINNED_FOUCAULT_SHA256,
+        audit_url,
+        "agents-personas AUDIT.md",
+        expected_sha256=PINNED_AUDIT_SHA256,
         retries=retries,
         backoff_seconds=backoff,
         timeout=timeout,
     )
 
-    if not (ok_quality and ok_security):
+    if not (ok_quality and ok_audit):
         return 1
     return 0
 

@@ -127,58 +127,114 @@ class TestCheckPolicyDrift(unittest.TestCase):
 
     def test_validate_policy_ref(self) -> None:
         from scripts.check_policy_drift import validate_policy_ref
-        self.assertEqual(validate_policy_ref("main", "Euler"), "main")
-        self.assertEqual(validate_policy_ref("v1.0.0", "Euler"), "v1.0.0")
+        self.assertEqual(validate_policy_ref("main", "agents-personas"), "main")
+        self.assertEqual(validate_policy_ref("v1.0.0", "agents-personas"), "v1.0.0")
         with self.assertRaises(ValueError):
-            validate_policy_ref("../traversal", "Euler")
+            validate_policy_ref("../traversal", "agents-personas")
 
     def test_validate_policy_url(self) -> None:
         from scripts.check_policy_drift import validate_policy_url
-        valid_url = "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md"
-        self.assertEqual(validate_policy_url(valid_url, "Euler"), valid_url)
+        valid_url = (
+            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/"
+            "reviewers/euler/QUALITY.md"
+        )
+        self.assertEqual(validate_policy_url(valid_url, "agents-personas"), valid_url)
+        audit_url = (
+            "https://raw.githubusercontent.com/abuzucom/agents-personas/v1.0.0/"
+            "reviewers/foucault/AUDIT.md"
+        )
+        self.assertEqual(validate_policy_url(audit_url, "agents-personas"), audit_url)
         with self.assertRaises(ValueError):
-            validate_policy_url("http://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md", "Euler")
+            validate_policy_url(
+                "http://raw.githubusercontent.com/abuzucom/agents-personas/main/reviewers/euler/QUALITY.md",
+                "agents-personas",
+            )
         with self.assertRaises(ValueError):
-            validate_policy_url("https://attacker.com/abuzucom/euler/main/QUALITY.md", "Euler")
+            validate_policy_url(
+                "https://attacker.com/abuzucom/agents-personas/main/reviewers/euler/QUALITY.md",
+                "agents-personas",
+            )
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/malicious/euler/main/QUALITY.md", "Euler")
+            validate_policy_url(
+                "https://raw.githubusercontent.com/malicious/agents-personas/main/reviewers/euler/QUALITY.md",
+                "agents-personas",
+            )
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/abuzucom/", "Euler")
+            validate_policy_url(
+                "https://raw.githubusercontent.com/abuzucom/", "agents-personas"
+            )
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/abuzucom/unapproved_repo/main/QUALITY.md", "Euler")
+            validate_policy_url(
+                "https://raw.githubusercontent.com/abuzucom/unapproved_repo/main/reviewers/euler/QUALITY.md",
+                "agents-personas",
+            )
         with self.assertRaises(ValueError):
-            validate_policy_url("https://raw.githubusercontent.com/abuzucom/euler/main/../attacker/QUALITY.md", "Euler")
+            validate_policy_url(
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/main/../attacker/QUALITY.md",
+                "agents-personas",
+            )
+
+    def test_validate_policy_url_rejects_retired_repositories(self) -> None:
+        from scripts.check_policy_drift import validate_policy_url
+        retired_urls = [
+            "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md",
+            "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md",
+            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/QUALITY.md",
+            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/reviewers/euler/AUDIT.md",
+        ]
+        for retired_url in retired_urls:
+            with self.subTest(url=retired_url):
+                with self.assertRaises(ValueError):
+                    validate_policy_url(retired_url, "agents-personas")
 
     def test_get_policy_config(self) -> None:
         from scripts.check_policy_drift import get_policy_config
         with patch.dict("os.environ", {}, clear=True):
-            euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
+            quality_url, audit_url, retries, backoff, timeout = get_policy_config()
             self.assertEqual(
-                euler_url,
-                "https://raw.githubusercontent.com/abuzucom/euler/aac2d3fbc76e8671c32c54b4aa1a7c41c05b3f44/QUALITY.md",
+                quality_url,
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/"
+                "1649e5c9710fd85d6cca12006e344af27a5404a6/reviewers/euler/QUALITY.md",
             )
             self.assertEqual(
-                foucault_url,
-                "https://raw.githubusercontent.com/abuzucom/foucault/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md",
+                audit_url,
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/"
+                "1649e5c9710fd85d6cca12006e344af27a5404a6/reviewers/foucault/AUDIT.md",
             )
             self.assertEqual(retries, 3)
             self.assertEqual(backoff, 1.0)
             self.assertEqual(timeout, 30.0)
 
         custom_env = {
-            "EULER_POLICY_REF": "v2.0",
-            "FOUCAULT_POLICY_REF": "v3.0",
+            "PERSONAS_QUALITY_REF": "v2.0",
+            "PERSONAS_AUDIT_REF": "v3.0",
             "POLICY_DRIFT_RETRIES": "5",
             "POLICY_DRIFT_BACKOFF_SECONDS": "2.5",
             "POLICY_DRIFT_TIMEOUT_SECONDS": "45.0",
         }
         with patch.dict("os.environ", custom_env, clear=True):
-            euler_url, foucault_url, retries, backoff, timeout = get_policy_config()
-            self.assertEqual(euler_url, "https://raw.githubusercontent.com/abuzucom/euler/v2.0/QUALITY.md")
-            self.assertEqual(foucault_url, "https://raw.githubusercontent.com/abuzucom/foucault/v3.0/AUDIT.md")
+            quality_url, audit_url, retries, backoff, timeout = get_policy_config()
+            self.assertEqual(
+                quality_url,
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/v2.0/reviewers/euler/QUALITY.md",
+            )
+            self.assertEqual(
+                audit_url,
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/v3.0/reviewers/foucault/AUDIT.md",
+            )
             self.assertEqual(retries, 5)
             self.assertEqual(backoff, 2.5)
             self.assertEqual(timeout, 45.0)
+
+    def test_get_policy_config_rejects_retired_environment_names(self) -> None:
+        from scripts.check_policy_drift import get_policy_config
+        retired_env = {
+            "EULER_POLICY_URL": "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md",
+            "FOUCAULT_POLICY_URL": "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md",
+        }
+        with patch.dict("os.environ", retired_env, clear=True):
+            with self.assertRaises(ValueError):
+                get_policy_config()
 
     def test_parse_int_env(self) -> None:
         from scripts.check_policy_drift import parse_int_env

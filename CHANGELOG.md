@@ -14,9 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
 - Pinned the CI Node.js runtime to 26.13.1 to match the container runtime.
-- Pull request review workflows now run for every CI outcome and group concurrency by the resolved pull request number.
-- Superseded CI events skip before review dispatch, and removing `safe-to-review` cancels active fork reviews.
-- Stale pull request revisions skip without failing, while ambiguous revisions fail visibly.
+- Pull request review workflows now run for every CI outcome and group concurrency by the workflow run head revision.
+- Replaced the `abuzucom/euler` and `abuzucom/foucault` review integrations with the `abuzucom/agents-personas` review engine, pinned at commit `1649e5c9710fd85d6cca12006e344af27a5404a6`.
+- Consolidated the two review callers into `.github/workflows/persona-review.yml`. The check run names are now `euler / quality` and `foucault / security`.
+- Every review now runs through the protected `fork-review` environment. A maintainer approves the deployment before the provider key reaches a job. The `safe-to-review` maintainer label gate is no longer used.
+- A NEEDS-HUMAN verdict now concludes neutral and blocks no merge. Only a BLOCK verdict fails the check.
+- Both personas skip pull requests that change only `CHANGELOG.md`, `README.md`, or `docs/**`. The `euler-scan-requested` and `foucault-scan-requested` labels override that filter, and `stop-requested` pauses both personas.
+- The euler deterministic prescan skips `tests/**`, which hold flagged patterns on purpose.
+- The policy drift check now verifies the embedded policy against `abuzucom/agents-personas` and uses the `PERSONAS_QUALITY_URL`, `PERSONAS_QUALITY_REF`, `PERSONAS_AUDIT_URL`, and `PERSONAS_AUDIT_REF` environment names.
+- The embedded `QUALITY.md` and `AUDIT.md` policy text now matches the `agents-personas` release `v1.0.0`.
+
+### Removed
+- Removed the `ci/` model adapter directory. The `agents-personas` engine supplies the case builder, the model adapter, the model provider configuration, and the reply validator.
+- Removed `scripts/check_pr_review_response.py`. The engine validates each model reply.
+- Removed the `quality-review-pr.yml` and `security-review-pr.yml` caller workflows.
 
 ### Fixed
 - Closed the OAuth callback listener during test cleanup to prevent CI test runs from reaching the job timeout.

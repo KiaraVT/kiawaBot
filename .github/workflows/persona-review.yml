@@ -1,0 +1,135 @@
+---
+name: persona-review
+
+# Runs the agents-personas engine over pull requests. The workflow_run trigger
+# runs default-branch code after ci completes. Pull request files stay review
+# data. The engine resolves the pull request, builds the review case, calls the
+# model, and publishes one check run and one comment per persona.
+#
+# The engine replaces the former euler and foucault reusable workflows. The
+# `uses:` pin and the `personas_ref` input carry the same full commit SHA.
+#
+# Both personas run through the protected fork-review environment, so a
+# maintainer approves every review before the provider key reaches a job.
+#
+# The `paths` filter skips pull requests that touch only the changelog, the
+# readme, or the documentation. The `euler-scan-requested` and
+# `foucault-scan-requested` labels override that filter. The
+# `stop-requested` label pauses both personas.
+
+"on":
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persona-review-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  foucault:
+    # Every pull request CI outcome stays reviewable so a pull request author
+    # cannot suppress the review by changing the CI workflow.
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+    uses: abuzucom/agents-personas/.github/workflows/foucault-security-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
+    with:
+      personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      fork_review: true
+      fail_on_block: true
+      paths: |
+        !CHANGELOG.md
+        !README.md
+        !docs/**
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  euler:
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+    uses: abuzucom/agents-personas/.github/workflows/euler-quality-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
+    with:
+      personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      fork_review: true
+      fail_on_block: true
+      # Test files hold flagged patterns on purpose.
+      exclude_paths: "tests/**"
+      paths: |
+        !CHANGELOG.md
+        !README.md
+        !docs/**
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  annotate:
+    needs: [foucault, euler]
+    # A status function keeps the job alive when a persona job is skipped.
+    if: >-
+      !cancelled() &&
+      (needs.foucault.result == 'success' || needs.foucault.result == 'failure') &&
+      (needs.euler.result == 'success' || needs.euler.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The composite action below must come from trusted code. The
+          # workflow run head can be a pull request head, so the default
+          # branch is checked out explicitly.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Resolve pull request from the workflow run head
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        with:
+          script: |
+            // A workflow_run payload lists no pull request for a fork head,
+            // so the number comes from the open pull requests.
+            const headSha = (process.env.HEAD_SHA || '').toLowerCase();
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const matches = pulls.filter((pull) =>
+              (pull.head.sha || '').toLowerCase() === headSha);
+            if (matches.length !== 1) {
+              core.setOutput('number', '');
+              core.warning(
+                `expected one pull request for workflow run head, found ${matches.length}`);
+              return;
+            }
+            core.setOutput('number', String(matches[0].number));
+
+      - name: Annotate quality review comment with policy document link
+        if: steps.resolve.outputs.number != ''
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ steps.resolve.outputs.number }}
+          doc-path: "docs/pr-quality-review.md"
+          policy-name: "Quality review"
+          markers: "persona-review: euler / quality,Euler quality review:"
+
+      - name: Annotate security review comment with policy document link
+        if: steps.resolve.outputs.number != ''
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ steps.resolve.outputs.number }}
+          doc-path: "docs/pr-security-review.md"
+          policy-name: "Security review"
+          markers: "persona-review: foucault / security,Foucault security review:"
