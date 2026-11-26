@@ -26,7 +26,9 @@ The PR user interface reviewer applies the adorno persona policy to pull request
 
 The `pull_request_target` caller runs the default branch copy of the workflow file, so a pull request cannot edit it. Pull request files remain review data. The engine never executes pull request code. Every checkout sets `persist-credentials: false`. The engine reads the pull request head as git objects and never checks it out.
 
-Every review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret, and the caller maps it to `MODEL_API_KEY`.
+Every model review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret, and the caller maps it to `MODEL_API_KEY`.
+
+The annotation job runs outside that gate on purpose. It checks out the default branch, runs trusted composite action code, receives no provider key, and only updates the comment the engine posted.
 
 The engine treats the pull request title, description, and diff as untrusted text. It places them in the review envelope without evaluation or shell execution. Persona hooks run inside bubblewrap without network access.
 

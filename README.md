@@ -249,7 +249,9 @@ Only a person with triage access or higher can add a label. A new push to a labe
 The engine supplies its own model adapter. The callers map either `OLLAMA_API_KEY` or `MODEL_API_KEY` to the engine secret `MODEL_API_KEY`.
 
 ### Review Gating
-Every review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret.
+Every model review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret.
+
+The annotation job runs outside that gate on purpose. It checks out the default branch, runs trusted composite action code, receives no provider key, and only updates the comment the engine posted.
 
 Pull request files reach the engine as git objects and never execute. The engine reads the pull request title, description, and diff as untrusted text.
 
@@ -263,4 +265,6 @@ Local policy documentation incorporates exact upstream specifications. Run the d
 ```bash
 python scripts/check_policy_drift.py
 ```
+
+The script verifies five documents against the upstream `agents-personas` policy files. It reads the upstream commit from `PERSONAS_REF` and the upstream location from `PERSONAS_BASE_URL`. Both default to the pinned release.
 

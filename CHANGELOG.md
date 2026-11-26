@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The CI workflow no longer runs validation for a `safe-to-review` label event. The label no longer gates a review. Label events still start a workflow run so the persona review workflows re-resolve their state.
 - Replaced the `abuzucom/euler` and `abuzucom/foucault` review integrations with the `abuzucom/agents-personas` review engine, pinned at commit `1649e5c9710fd85d6cca12006e344af27a5404a6`.
 - Consolidated the two review callers into `.github/workflows/persona-review.yml`. The check run names are now `euler / quality` and `foucault / security`.
-- Every review now runs through the protected `fork-review` environment. A maintainer approves the deployment before the provider key reaches a job. The `safe-to-review` maintainer label gate is no longer used.
+- Every model review now runs through the protected `fork-review` environment. A maintainer approves the deployment before the provider key reaches a job. The annotation job stays outside that gate and never receives the provider key. The `safe-to-review` maintainer label gate is no longer used.
 - A NEEDS-HUMAN verdict now concludes neutral and blocks no merge. Only a BLOCK verdict fails the check.
 - Both personas skip pull requests that change only `CHANGELOG.md`, `README.md`, or `docs/**`. The `euler-scan-requested` and `foucault-scan-requested` labels override that filter, and `stop-requested` pauses both personas.
 - The euler deterministic prescan skips `tests/**`, which hold flagged patterns on purpose.

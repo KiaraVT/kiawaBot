@@ -17,19 +17,21 @@ The PR quality reviewer applies the euler persona policy to pull requests. The r
 - Trigger: fires on completion of `ci` (`workflow_run` event). The reviewer runs for every pull request CI outcome. Failed, canceled, and skipped CI runs remain reviewable so a pull request author cannot suppress the review by changing the CI workflow.
 - Concurrency: the workflow groups by the workflow run head revision with `cancel-in-progress: true`. A newer run cancels an obsolete review for the same head.
 - Permissions: the caller jobs declare `checks: write`, `contents: read`, and `pull-requests: write`.
-- Resolution: the engine resolves the pull request from the workflow run head, reads its live labels, and matches the changed files against the `paths` input. A pull request that changes only excluded files receives a skipped check named `euler / quality` and no model call.
+- Resolution (`resolve` job): the caller matches the workflow run head against the open pull requests. A stale revision with no matching pull request skips without a review. Multiple matching pull requests fail visibly. The job passes the pull request number, the base and head revisions, and the head repository to the engine, which reads the live labels and matches the changed files against the `paths` input. A pull request that changes only excluded files receives a skipped check named `euler / quality` and no model call.
 - Review (`euler` job): calls `euler-quality-review.yml` with `fork_review: true` and `fail_on_block: true`, mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}` to secret `MODEL_API_KEY`. The engine supplies its own model adapter.
 - Path filter: `paths` excludes `CHANGELOG.md`, `README.md`, and `docs/**`. The `euler-scan-requested` label overrides that filter. The `stop-requested` label pauses the persona.
 - Prescan filter: `exclude_paths` holds `tests/**`. The deterministic prescan skips test files, which hold flagged patterns on purpose. The model still reviews them.
 - Check run: the engine publishes `euler / quality`. A BLOCK verdict fails the check. A NEEDS-HUMAN verdict warns and concludes neutral.
 - Reuse: the engine reuses an earlier failing check run that carries the same review key. A passing result always reruns the review.
-- Comment annotation (`annotate` job): runs after both persona jobs complete. The job resolves the pull request number from the workflow run head, then runs `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-quality-review.md` on review comments matching marker `persona-review: euler / quality` or the heading `Euler quality review:`.
+- Comment annotation (`annotate` job): runs when either persona produced a result, so one skipped persona does not cost the other persona its annotation. The job uses the pull request number from the resolve job, then runs `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-quality-review.md` on review comments matching marker `persona-review: euler / quality` or the heading `Euler quality review:`. Each annotation step runs for its own persona.
 
 ## Trust Boundary and Gating
 
 The workflow-run caller runs default-branch code. Pull request files remain review data. The engine never executes pull request code. Every checkout sets `persist-credentials: false`. The engine reads the pull request head as git objects and never checks it out.
 
-Every review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret, and the caller maps it to `MODEL_API_KEY`.
+Every model review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret, and the caller maps it to `MODEL_API_KEY`.
+
+The annotation job runs outside that gate on purpose. It checks out the default branch, runs trusted composite action code, receives no provider key, and only updates the comment the engine posted.
 
 The engine treats the pull request title, description, and diff as untrusted text. It places them in the review envelope without evaluation or shell execution. Persona hooks run inside bubblewrap without network access.
 
