@@ -44,7 +44,8 @@
 - Languages and frameworks: Node.js 22 (ESM), Express 5.2, WebSocket (ws), tesjs, Python 3.12
 - Application entry points: `start.js` (bot supervisor), `Kiara_bot.js` (chat bot core), `webserver/server.js` (overlay dashboard)
 - JavaScript and HTML paths: `start.js`, `Kiara_bot.js`, `AuthDataHelper.js`, `IncentiveHelper.js`, `QuoteHelper.js`, `webserver/`
-- Python paths: `scripts/` (CI checks), `ci/` (review adapters), `tests/test_*.py`
+- Python paths: `scripts/` (CI checks), `tests/test_*.py`
+- Review workflow paths: `.github/workflows/persona-review.yml` (always-on personas), `.github/workflows/persona-review-labels.yml` (label-triggered personas), `.github/actions/annotate-pr-review/`
 - Dockerfiles and Compose paths: `Dockerfile`, `docker-compose.yml`
 - Public APIs: HTTP and WebSocket endpoints in `webserver/server.js`, helper classes `IncentiveHelper`, `QuoteHelper`, `AuthDataHelper`
 
@@ -52,12 +53,19 @@
 - Runtime versions: Node.js 22+, Python 3.12+
 - Required services: Twitch EventSub WebSocket/API, YouTube Data API, local overlay WebSocket
 - Build or test constraints: Exactly pinned dependencies, npm audit gate against `scripts/npm-audit-baseline.json`, Gitleaks history scanning
+- Pull request review: the `abuzucom/agents-personas` engine owns review resolution, fork gating, check publication, and reply validation. The repository holds no review adapter scripts.
 
 ### 1.5 Read before changing
 - Code quality review instructions:
   - Documentation path: `docs/pr-quality-review.md`
 - Security review instructions:
   - Documentation path: `docs/pr-security-review.md`
+- Time and synchronization review instructions:
+  - Documentation path: `docs/pr-time-review.md`
+- User interface review instructions:
+  - Documentation path: `docs/pr-ui-review.md`
+- Privacy review instructions:
+  - Documentation path: `docs/pr-privacy-review.md`
 - Upstream policy drift detection:
   - Documentation path: `scripts/check_policy_drift.py`
 
