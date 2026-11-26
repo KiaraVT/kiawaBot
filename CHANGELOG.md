@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated Express to 5.3.0 and `actions/setup-node` to 7.1.0.
 - Pinned the CI Node.js runtime to 26.13.1 to match the container runtime.
 - Pull request review workflows now run for every CI outcome and group concurrency by the workflow run head revision.
+- The CI workflow no longer runs validation for a `safe-to-review` label event. The label no longer gates a review. Label events still start a workflow run so the persona review workflows re-resolve their state.
 - Replaced the `abuzucom/euler` and `abuzucom/foucault` review integrations with the `abuzucom/agents-personas` review engine, pinned at commit `1649e5c9710fd85d6cca12006e344af27a5404a6`.
 - Consolidated the two review callers into `.github/workflows/persona-review.yml`. The check run names are now `euler / quality` and `foucault / security`.
 - Every review now runs through the protected `fork-review` environment. A maintainer approves the deployment before the provider key reaches a job. The `safe-to-review` maintainer label gate is no longer used.

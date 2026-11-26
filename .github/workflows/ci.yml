@@ -16,14 +16,13 @@ permissions:
 
 jobs:
   validate:
-    # Run on pushes and standard PR events (opened, synchronize, reopened). For label
-    # mutations (labeled, unlabeled), run validate only when safe-to-review is added;
-    # all other label mutations skip validate with zero runner minutes while still
-    # triggering state re-resolution and canceling obsolete in-progress reviews.
+    # Run on pushes and standard PR events (opened, synchronize, reopened). Label
+    # mutations (labeled, unlabeled) skip validate with zero runner minutes while
+    # the workflow run still starts, so the persona review workflows re-resolve
+    # their state and cancel obsolete in-progress reviews.
     if: |
       github.event_name != 'pull_request' ||
-      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-      (github.event.action == 'labeled' && github.event.label.name == 'safe-to-review')
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
