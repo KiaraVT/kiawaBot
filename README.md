@@ -212,31 +212,59 @@ python scripts/check_npm_audit.py
 # Run heuristic secret detection on tracked files
 python scripts/check_secrets_heuristic.py
 
-# Verify review policies against upstream Euler and Foucault specifications
+# Verify review policies against the upstream agents-personas specifications
 python scripts/check_policy_drift.py
 ```
 
 ---
 
-## Automated Pull Request Reviews (Euler and Foucault)
+## Automated Pull Request Reviews (agents-personas)
 
-Pull requests are automatically evaluated by two review workflows upon CI completion:
-- **Quality Review** (`.github/workflows/quality-review-pr.yml`): Evaluates code quality against Euler `QUALITY.md` rules using [abuzucom/euler](https://github.com/abuzucom/euler). See [docs/pr-quality-review.md](docs/pr-quality-review.md).
-- **Security Review** (`.github/workflows/security-review-pr.yml`): Evaluates security hazards and correctness against Foucault `AUDIT.md` rules using [abuzucom/foucault](https://github.com/abuzucom/foucault). See [docs/pr-security-review.md](docs/pr-security-review.md).
+Reviewer personas run on the shared review engine in [abuzucom/agents-personas](https://github.com/abuzucom/agents-personas), pinned at commit `1649e5c9710fd85d6cca12006e344af27a5404a6`. The engine resolves the pull request, builds the review case, calls the model, and publishes one check run and one comment per persona.
+
+### Always-on personas
+
+`.github/workflows/persona-review.yml` evaluates every pull request after CI completes:
+
+| Persona | Check name | Policy | Documentation |
+|---|---|---|---|
+| `euler` | `euler / quality` | `reviewers/euler/QUALITY.md` | [docs/pr-quality-review.md](docs/pr-quality-review.md) |
+| `foucault` | `foucault / security` | `reviewers/foucault/AUDIT.md` | [docs/pr-security-review.md](docs/pr-security-review.md) |
+
+Both personas run for every pull request CI outcome. A pull request author cannot suppress a review by changing the CI workflow.
+
+### Label-triggered personas
+
+`.github/workflows/persona-review-labels.yml` evaluates a pull request when a maintainer adds the matching scan label:
+
+| Persona | Check name | Scan label | Policy | Documentation |
+|---|---|---|---|---|
+| `generay` | `generay / time` | `generay-scan-requested` | `reviewers/generay/TIME.md` and `reviewers/generay/SYNC.md` | [docs/pr-time-review.md](docs/pr-time-review.md) |
+| `adorno` | `adorno / ui` | `adorno-scan-requested` | `reviewers/adorno/bundles/ui-full.md` | [docs/pr-ui-review.md](docs/pr-ui-review.md) |
+| `havel` | `havel / privacy` | `havel-scan-requested` | `reviewers/havel/bundles/all-full.md` | [docs/pr-privacy-review.md](docs/pr-privacy-review.md) |
+
+Only a person with triage access or higher can add a label. A new push to a labeled pull request reviews again. The `stop-requested` label pauses every persona, and removing it reviews the current head again. The havel persona declares no legal scope, so the review applies the baseline privacy classes alone.
 
 ### Model Authentication
-The model evaluation adapter (`ci/call_model.py`) supports either `OLLAMA_API_KEY` or `MODEL_API_KEY`. The adapter checks `MODEL_API_KEY` first and falls back to `OLLAMA_API_KEY`.
+The engine supplies its own model adapter. The callers map either `OLLAMA_API_KEY` or `MODEL_API_KEY` to the engine secret `MODEL_API_KEY`.
 
-### Fork Pull Request Gating
-Pull requests from forks are untrusted and subject to two-factor gating:
-1. **Maintainer Label Gate**: A repository maintainer must apply the `safe-to-review` label to the pull request.
-2. **Environment Approval Gate**: The workflow executes in the protected `fork-review` GitHub environment, requiring manual deployment approval by a maintainer before running evaluation containers or granting access to environment secrets.
+### Review Gating
+Every model review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret.
 
-Workflows pass `fork_review: true` to upstream review workflows when evaluating forks. Pull request files are parsed purely as untrusted review data without execution. Unlabeled or unapproved fork pull requests skip model evaluation cleanly without credential exposure.
+The annotation job runs outside that gate on purpose. It checks out the default branch, runs trusted composite action code, receives no provider key, and only updates the comment the engine posted.
+
+Pull request files reach the engine as git objects and never execute. The engine reads the pull request title, description, and diff as untrusted text.
+
+### Review Scope
+The always-on personas skip pull requests that change only `CHANGELOG.md`, `README.md`, or `docs/**`. The `euler-scan-requested` and `foucault-scan-requested` labels override that filter.
+
+A BLOCK verdict fails the check. A NEEDS-HUMAN verdict warns and concludes neutral.
 
 ### Policy Drift Verification
 Local policy documentation incorporates exact upstream specifications. Run the drift check script to verify SHA-256 integrity:
 ```bash
 python scripts/check_policy_drift.py
 ```
+
+The script verifies five documents against the upstream `agents-personas` policy files. It reads the upstream commit from `PERSONAS_REF` and the upstream location from `PERSONAS_BASE_URL`. Both default to the pinned release.
 

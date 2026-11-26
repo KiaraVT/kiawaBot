@@ -1,0 +1,130 @@
+---
+name: persona-review-labels
+
+# Runs the generay, adorno, and havel personas when a maintainer adds the
+# matching scan label. The pull_request_target trigger runs this file from the
+# default branch, so a pull request cannot edit it. The engine reads the pull
+# request head as git objects and never executes it.
+#
+# The `stop-requested` label pauses every persona. Removing it reviews the
+# current head again with each persona whose scan label is on the pull request.
+# A new push to a labeled pull request reviews again.
+#
+# The engine replaces the former standalone persona workflows. The `uses:` pin
+# and the `personas_ref` input carry the same full commit SHA.
+
+"on":
+  pull_request_target:
+    types: [labeled, synchronize, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  # The group names the pull request alone. A newer event for the same pull
+  # request cancels the run in flight, so a push and a label event never
+  # review the same head at the same time.
+  group: persona-review-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  generay:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'generay-scan-requested') &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'stop-requested')
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+    uses: abuzucom/agents-personas/.github/workflows/generay-time-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
+    with:
+      personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      fork_review: true
+      fail_on_block: true
+      # Test files hold flagged patterns on purpose.
+      exclude_paths: "tests/**"
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  adorno:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'adorno-scan-requested') &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'stop-requested')
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+    uses: abuzucom/agents-personas/.github/workflows/adorno-ui-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
+    with:
+      personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      fork_review: true
+      fail_on_block: true
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  havel:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'havel-scan-requested') &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'stop-requested')
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+    uses: abuzucom/agents-personas/.github/workflows/havel-privacy-review.yml@1649e5c9710fd85d6cca12006e344af27a5404a6
+    with:
+      personas_ref: "1649e5c9710fd85d6cca12006e344af27a5404a6"
+      fork_review: true
+      fail_on_block: true
+      # The repository declares no legal scope. The review applies the baseline
+      # classes alone and marks every regime-conditional finding NEEDS-HUMAN.
+      regimes: ""
+    secrets:
+      MODEL_API_KEY: ${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}
+
+  annotate:
+    needs: [generay, adorno, havel]
+    # A status function keeps the job alive when a persona job is skipped.
+    if: >-
+      !cancelled() &&
+      (needs.generay.result == 'success' || needs.generay.result == 'failure' ||
+       needs.adorno.result == 'success' || needs.adorno.result == 'failure' ||
+       needs.havel.result == 'success' || needs.havel.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The composite action below must come from trusted code. The default
+          # branch is checked out explicitly.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Annotate time review comment with policy document link
+        if: needs.generay.result == 'success' || needs.generay.result == 'failure'
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          doc-path: "docs/pr-time-review.md"
+          policy-name: "Time review"
+          markers: "persona-review: generay / time,Generay time review:"
+
+      - name: Annotate ui review comment with policy document link
+        if: needs.adorno.result == 'success' || needs.adorno.result == 'failure'
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          doc-path: "docs/pr-ui-review.md"
+          policy-name: "UI review"
+          markers: "persona-review: adorno / ui,Adorno ui review:"
+
+      - name: Annotate privacy review comment with policy document link
+        if: needs.havel.result == 'success' || needs.havel.result == 'failure'
+        uses: ./.github/actions/annotate-pr-review
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          doc-path: "docs/pr-privacy-review.md"
+          policy-name: "Privacy review"
+          markers: "persona-review: havel / privacy,Havel privacy review:"

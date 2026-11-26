@@ -5,6 +5,36 @@ import re
 import unittest
 
 
+PERSONAS_REF = "1649e5c9710fd85d6cca12006e344af27a5404a6"
+PERSONA_WORKFLOW = "persona-review.yml"
+LABEL_WORKFLOW = "persona-review-labels.yml"
+RETIRED_WORKFLOWS = ("quality-review-pr.yml", "security-review-pr.yml")
+RETIRED_UPSTREAMS = ("abuzucom/euler", "abuzucom/foucault")
+RETIRED_ADAPTER_FILES = (
+    "ci/build_pr_case.py",
+    "ci/call_model.py",
+    "ci/run_model_command.py",
+    "ci/model_providers.json",
+    "scripts/check_pr_review_response.py",
+)
+# Persona name, wrapper file, check name, scan label, and policy document.
+PERSONAS = (
+    ("foucault", "foucault-security-review.yml", "foucault / security", "foucault-scan-requested",
+     "docs/pr-security-review.md"),
+    ("euler", "euler-quality-review.yml", "euler / quality", "euler-scan-requested",
+     "docs/pr-quality-review.md"),
+    ("generay", "generay-time-review.yml", "generay / time", "generay-scan-requested",
+     "docs/pr-time-review.md"),
+    ("adorno", "adorno-ui-review.yml", "adorno / ui", "adorno-scan-requested",
+     "docs/pr-ui-review.md"),
+    ("havel", "havel-privacy-review.yml", "havel / privacy", "havel-scan-requested",
+     "docs/pr-privacy-review.md"),
+)
+POLICY_DOCUMENTS = tuple(document for _persona, _wrapper, _check, _label, document in PERSONAS)
+ALWAYS_ON_PERSONAS = ("foucault", "euler")
+LABEL_PERSONAS = ("generay", "adorno", "havel")
+
+
 def extract_workflow_jobs(content: str) -> dict[str, str]:
     """Extract workflow job text blocks from a YAML workflow file."""
     jobs: dict[str, str] = {}
@@ -39,16 +69,68 @@ class WorkflowContractsTestCase(unittest.TestCase):
         """Locate repository workflow directory."""
         self.repo_root = Path(__file__).resolve().parent.parent
         self.workflows_dir = self.repo_root / ".github" / "workflows"
+        self.persona_workflow = self.workflows_dir / PERSONA_WORKFLOW
+        self.persona_content = self.persona_workflow.read_text(encoding="utf-8")
+        self.persona_jobs = extract_workflow_jobs(self.persona_content)
+        self.label_workflow = self.workflows_dir / LABEL_WORKFLOW
+        self.label_content = self.label_workflow.read_text(encoding="utf-8")
+        self.label_jobs = extract_workflow_jobs(self.label_content)
 
-    def test_reusable_workflow_callers_do_not_declare_environment(self) -> None:
-        """Reusable workflow caller jobs must not define environment key."""
-        workflow_files = [
-            self.workflows_dir / "quality-review-pr.yml",
-            self.workflows_dir / "security-review-pr.yml",
-        ]
-        for workflow_file in workflow_files:
+    def test_retired_review_workflows_are_removed(self) -> None:
+        """The superseded euler and foucault caller files must be gone."""
+        for retired in RETIRED_WORKFLOWS:
+            self.assertFalse(
+                (self.workflows_dir / retired).exists(),
+                f"{retired} must not exist after the agents-personas migration.",
+            )
+        self.assertTrue(
+            self.persona_workflow.exists(),
+            f"{PERSONA_WORKFLOW} must exist as the persona review caller.",
+        )
+
+    def test_retired_upstream_repositories_are_not_referenced(self) -> None:
+        """No workflow may call the superseded upstream repositories."""
+        for workflow_file in sorted(self.workflows_dir.glob("*.yml")):
             content = workflow_file.read_text(encoding="utf-8")
-            jobs = extract_workflow_jobs(content)
+            for retired in RETIRED_UPSTREAMS:
+                self.assertNotIn(
+                    retired,
+                    content,
+                    f"{workflow_file.name} must not reference {retired}.",
+                )
+
+    def test_persona_jobs_use_the_agents_personas_pin(self) -> None:
+        """Both persona jobs must call the agents-personas persona wrappers."""
+        expected = {
+            "foucault": "foucault-security-review.yml",
+            "euler": "euler-quality-review.yml",
+        }
+        for job_name, wrapper in expected.items():
+            self.assertIn(job_name, self.persona_jobs)
+            job_body = self.persona_jobs[job_name]
+            self.assertIn(
+                f"uses: abuzucom/agents-personas/.github/workflows/{wrapper}@{PERSONAS_REF}",
+                job_body,
+                f"Job '{job_name}' must pin the {wrapper} wrapper at the release commit.",
+            )
+
+    def test_persona_jobs_pass_the_same_commit_sha_to_personas_ref(self) -> None:
+        """The personas_ref input must match the uses pin exactly."""
+        for job_name in ("foucault", "euler"):
+            job_body = self.persona_jobs[job_name]
+            match = re.search(r'personas_ref:\s*"([0-9a-f]{40})"', job_body)
+            self.assertIsNotNone(
+                match,
+                f"Job '{job_name}' must pass a full commit SHA through personas_ref.",
+            )
+            self.assertEqual(match.group(1), PERSONAS_REF)
+            uses_pin = re.search(r"@([0-9a-f]{40})\s*$", job_body, re.MULTILINE)
+            self.assertIsNotNone(uses_pin)
+            self.assertEqual(uses_pin.group(1), match.group(1))
+
+    def test_persona_jobs_do_not_declare_environment(self) -> None:
+        """Reusable workflow caller jobs must not define environment key."""
+        for jobs in (self.persona_jobs, self.label_jobs):
             for job_name, job_body in jobs.items():
                 has_uses = bool(re.search(r"^\s+uses:", job_body, re.MULTILINE))
                 if has_uses:
@@ -58,103 +140,227 @@ class WorkflowContractsTestCase(unittest.TestCase):
                     self.assertFalse(
                         has_environment,
                         (
-                            f"Job '{job_name}' in {workflow_file.name} defines "
-                            "'environment' while invoking a reusable workflow. "
-                            "GitHub Actions rejects 'environment' on caller "
-                            "jobs with 'uses'."
+                            f"Job '{job_name}' defines 'environment' while invoking a "
+                            "reusable workflow. GitHub Actions rejects 'environment' "
+                            "on caller jobs with 'uses'."
                         ),
                     )
 
-    def test_security_review_uses_pulls_list_for_fork_resolution(self) -> None:
-        """Security review must use pulls.list instead of commit association."""
-        workflow_file = self.workflows_dir / "security-review-pr.yml"
-        content = workflow_file.read_text(encoding="utf-8")
-        self.assertNotIn(
-            "listPullRequestsAssociatedWithCommit",
-            content,
-            "security-review-pr.yml must not use "
-            "listPullRequestsAssociatedWithCommit because external fork "
-            "commits return empty candidate lists in the GitHub REST API.",
-        )
-        self.assertIn(
-            "github.rest.pulls.list",
-            content,
-            "security-review-pr.yml must paginate github.rest.pulls.list to "
-            "resolve fork pull requests reliably.",
-        )
+    def test_label_caller_uses_pull_request_target(self) -> None:
+        """The label caller must run from the default branch on a label event."""
+        self.assertIn("pull_request_target:", self.label_content)
+        self.assertIn("types: [labeled, synchronize, unlabeled]", self.label_content)
+        self.assertNotIn("workflow_run:", self.label_content)
 
-    def test_quality_review_grants_actions_read_permission(self) -> None:
-        """Quality review must grant actions: read to allow artifact downloads."""
-        workflow_file = self.workflows_dir / "quality-review-pr.yml"
-        content = workflow_file.read_text(encoding="utf-8")
-        jobs = extract_workflow_jobs(content)
-        for job_name in ("review", "review-fork"):
-            self.assertIn(
-                job_name,
-                jobs,
-                f"quality-review-pr.yml missing job '{job_name}'",
-            )
-            self.assertIn(
-                "actions: read",
-                jobs[job_name],
-                (
-                    f"Job '{job_name}' in quality-review-pr.yml must grant "
-                    "'actions: read' so downstream artifact download succeeds."
-                ),
-            )
+    def test_label_caller_jobs_require_their_scan_label(self) -> None:
+        """Each label persona must run only for its own scan label."""
+        for persona, _wrapper, _check, label, _document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            job_body = self.label_jobs[persona]
+            self.assertIn(f"'{label}'", job_body)
+            self.assertIn("github.event.label.name == 'stop-requested'", job_body)
 
-    def test_security_review_guards_base_sha_for_adopter_scripts(self) -> None:
-        """Security review must verify adopter scripts exist on base_sha."""
-        workflow_file = self.workflows_dir / "security-review-pr.yml"
-        content = workflow_file.read_text(encoding="utf-8")
-        required_scripts = [
-            "ci/build_pr_case.py",
-            "ci/run_model_command.py",
-            "scripts/check_pr_review_response.py",
-        ]
-        for script in required_scripts:
+    def test_label_caller_jobs_pin_the_persona_wrappers(self) -> None:
+        """Each label persona must call its wrapper at the release commit."""
+        for persona, wrapper, _check, _label, _document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            job_body = self.label_jobs[persona]
             self.assertIn(
-                script,
-                content,
-                f"security-review-pr.yml must check {script} existence on "
-                "base_sha before invoking foucault.",
+                f"uses: abuzucom/agents-personas/.github/workflows/{wrapper}@{PERSONAS_REF}",
+                job_body,
             )
-        self.assertIn(
-            "status === 404",
-            content,
-            "security-review-pr.yml must narrow fallback to 404 missing status.",
-        )
-        self.assertIn(
-            "baseSha = context.sha",
-            content,
-            "security-review-pr.yml must fallback baseSha to context.sha.",
-        )
+            match = re.search(r'personas_ref:\s*"([0-9a-f]{40})"', job_body)
+            self.assertIsNotNone(match)
+            self.assertEqual(match.group(1), PERSONAS_REF)
+
+    def test_generay_excludes_test_files_from_the_prescan(self) -> None:
+        """The generay prescan must skip test files."""
+        self.assertIn('exclude_paths: "tests/**"', self.label_jobs["generay"])
+
+    def test_havel_declares_no_legal_scope(self) -> None:
+        """The havel caller must not assert a legal regime scope."""
+        self.assertIn('regimes: ""', self.label_jobs["havel"])
+
+    def test_label_caller_annotate_job_links_the_policy_documents(self) -> None:
+        """The label caller must link each persona to its policy document."""
+        job_body = self.label_jobs["annotate"]
+        self.assertIn("!cancelled()", job_body)
+        for persona, _wrapper, check, _label, document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            self.assertIn(document, job_body)
+            self.assertIn(f"persona-review: {check}", job_body)
+
+    def test_local_policy_documents_exist(self) -> None:
+        """Each persona must have a local policy document."""
+        for document in POLICY_DOCUMENTS:
+            self.assertTrue(
+                (self.repo_root / document).is_file(),
+                f"{document} must exist for the policy drift check.",
+            )
 
     def test_review_jobs_support_ollama_and_model_api_keys(self) -> None:
-        """Both same-repo and fork review jobs must support OLLAMA_API_KEY."""
-        workflow_files = [
-            self.workflows_dir / "quality-review-pr.yml",
-            self.workflows_dir / "security-review-pr.yml",
-        ]
-        for workflow_file in workflow_files:
-            content = workflow_file.read_text(encoding="utf-8")
-            jobs = extract_workflow_jobs(content)
-            for job_name in ("review", "review-fork"):
-                self.assertIn(
-                    job_name,
-                    jobs,
-                    f"{workflow_file.name} missing job '{job_name}'",
-                )
+        """Every persona job must support OLLAMA_API_KEY."""
+        for jobs, job_names in (
+            (self.persona_jobs, ALWAYS_ON_PERSONAS),
+            (self.label_jobs, LABEL_PERSONAS),
+        ):
+            for job_name in job_names:
                 job_body = jobs[job_name]
                 self.assertIn(
                     "secrets.OLLAMA_API_KEY",
                     job_body,
                     (
-                        f"Job '{job_name}' in {workflow_file.name} must reference "
-                        "secrets.OLLAMA_API_KEY so environments using OLLAMA_API_KEY "
-                        "are supported."
+                        f"Job '{job_name}' must reference secrets.OLLAMA_API_KEY so "
+                        "environments using OLLAMA_API_KEY are supported."
                     ),
                 )
+                self.assertIn("secrets.MODEL_API_KEY", job_body)
+
+    def test_review_jobs_run_for_all_pull_request_ci_outcomes(self) -> None:
+        """Review jobs must not let a pull request author suppress reviews."""
+        for job_name in ("foucault", "euler"):
+            job_body = self.persona_jobs[job_name]
+            self.assertIn("github.event.workflow_run.event == 'pull_request'", job_body)
+            self.assertNotIn("github.event.workflow_run.conclusion", job_body)
+
+    def test_persona_jobs_route_reviews_through_the_fork_review_environment(self) -> None:
+        """Every persona job must opt into the protected fork-review path."""
+        for jobs, job_names in (
+            (self.persona_jobs, ALWAYS_ON_PERSONAS),
+            (self.label_jobs, LABEL_PERSONAS),
+        ):
+            for job_name in job_names:
+                job_body = jobs[job_name]
+                self.assertIn(
+                    "fork_review: true",
+                    job_body,
+                    f"Job '{job_name}' must set fork_review so every review waits "
+                    "for environment approval.",
+                )
+
+    def test_persona_jobs_declare_the_expected_path_filters(self) -> None:
+        """Both persona jobs must skip documentation-only pull requests."""
+        for job_name in ("foucault", "euler"):
+            job_body = self.persona_jobs[job_name]
+            for pattern in ("!CHANGELOG.md", "!README.md", "!docs/**"):
+                self.assertIn(pattern, job_body)
+        self.assertIn('exclude_paths: "tests/**"', self.persona_jobs["euler"])
+
+    def test_check_run_names_use_the_persona_layout(self) -> None:
+        """The engine publishes persona-scoped check names."""
+        combined = self.persona_content + self.label_content
+        for _persona, _wrapper, check, _label, _document in PERSONAS:
+            self.assertIn(check, combined)
+        self.assertNotIn("name: quality-review", combined)
+        self.assertNotIn("name: security-review", combined)
+
+    def test_annotate_job_keeps_a_status_function(self) -> None:
+        """The annotate job must survive a skipped persona job."""
+        job_body = self.persona_jobs["annotate"]
+        self.assertIn("!cancelled()", job_body)
+        self.assertIn("needs: [resolve, foucault, euler]", job_body)
+
+    def test_annotate_job_runs_when_either_persona_produced_a_result(self) -> None:
+        """One skipped persona must not cost the other persona its annotation."""
+        condition = " ".join(self.persona_jobs["annotate"].split())
+        self.assertIn(
+            "(needs.foucault.result == 'success' || needs.foucault.result == 'failure' || "
+            "needs.euler.result == 'success' || needs.euler.result == 'failure')",
+            condition,
+        )
+
+    def test_annotate_job_gates_each_step_on_its_own_persona(self) -> None:
+        """Each annotation step must run for its own persona only."""
+        job_body = self.persona_jobs["annotate"]
+        self.assertIn(
+            "if: needs.euler.result == 'success' || needs.euler.result == 'failure'",
+            job_body,
+        )
+        self.assertIn(
+            "if: needs.foucault.result == 'success' || needs.foucault.result == 'failure'",
+            job_body,
+        )
+
+    def test_resolve_job_matches_the_head_against_open_pull_requests(self) -> None:
+        """The caller must resolve the pull request from the open pull requests."""
+        job_body = self.persona_jobs["resolve"]
+        self.assertIn("github.rest.pulls.list", job_body)
+        self.assertIn("github.event.workflow_run.head_sha", job_body)
+        self.assertNotIn(
+            "listPullRequestsAssociatedWithCommit",
+            self.persona_content,
+            "The caller must not rely on the commit association API. It returns "
+            "an empty candidate list for a fork head.",
+        )
+
+    def test_resolve_job_fails_visibly_on_an_ambiguous_head(self) -> None:
+        """Several pull requests on one head must fail visibly."""
+        job_body = self.persona_jobs["resolve"]
+        self.assertIn("expected one pull request for workflow run head", job_body)
+        self.assertIn("core.setFailed", job_body)
+
+    def test_resolve_job_skips_a_stale_head_without_failing(self) -> None:
+        """A revision with no open pull request must not fail the run."""
+        job_body = self.persona_jobs["resolve"]
+        self.assertIn("if (matches.length === 0)", job_body)
+        self.assertIn("core.setOutput('found', 'false')", job_body)
+
+    def test_persona_jobs_receive_the_resolved_metadata(self) -> None:
+        """The engine must receive the resolved pull request metadata."""
+        for job_name in ("foucault", "euler"):
+            job_body = self.persona_jobs[job_name]
+            self.assertIn("needs: resolve", job_body)
+            for output in (
+                "pr_number",
+                "base_sha",
+                "head_sha",
+                "head_repo_url",
+                "head_repo_full_name",
+            ):
+                self.assertIn(
+                    f"${{{{ needs.resolve.outputs.{output} }}}}",
+                    job_body,
+                    f"Job '{job_name}' must pass {output} to the engine.",
+                )
+
+    def test_annotate_job_uses_the_resolved_pull_request_number(self) -> None:
+        """The annotation must target the resolved pull request."""
+        job_body = self.persona_jobs["annotate"]
+        self.assertIn("${{ needs.resolve.outputs.pr_number }}", job_body)
+
+    def test_annotate_job_uses_the_engine_comment_markers(self) -> None:
+        """The annotation must match the comment markers the engine writes."""
+        job_body = self.persona_jobs["annotate"]
+        self.assertIn("persona-review: euler / quality", job_body)
+        self.assertIn("persona-review: foucault / security", job_body)
+        self.assertIn("docs/pr-quality-review.md", job_body)
+        self.assertIn("docs/pr-security-review.md", job_body)
+
+    def test_workflow_checkouts_disable_persisted_credentials(self) -> None:
+        """Every checkout in the review workflows must drop its credentials."""
+        for workflow_file in sorted(self.workflows_dir.glob("*.yml")):
+            content = workflow_file.read_text(encoding="utf-8")
+            blocks = re.findall(
+                r"uses: actions/checkout@[^\n]*\n(?:.*\n)*?(?=\n\s*- name:|\Z)",
+                content,
+            )
+            for block in blocks:
+                self.assertIn(
+                    "persist-credentials: false",
+                    block,
+                    f"{workflow_file.name} has a checkout that persists credentials.",
+                )
+
+    def test_retired_adapter_files_are_removed(self) -> None:
+        """The engine supplies the adapter stack, so the local copies are gone."""
+        for retired in RETIRED_ADAPTER_FILES:
+            self.assertFalse(
+                (self.repo_root / retired).exists(),
+                f"{retired} must not exist after the agents-personas migration.",
+            )
 
     def test_ci_pins_node_version_and_bounds_node_tests(self) -> None:
         """CI must use the production Node version and bound the test step."""
@@ -167,100 +373,6 @@ class WorkflowContractsTestCase(unittest.TestCase):
             content,
         )
 
-    def test_review_resolvers_run_for_all_pull_request_ci_outcomes(self) -> None:
-        """Review jobs must not let a pull request author suppress reviews."""
-        workflow_files = [
-            self.workflows_dir / "quality-review-pr.yml",
-            self.workflows_dir / "security-review-pr.yml",
-        ]
-        for workflow_file in workflow_files:
-            content = workflow_file.read_text(encoding="utf-8")
-            self.assertIn(
-                "github.event.workflow_run.event == 'pull_request'",
-                content,
-            )
-            self.assertNotIn(
-                "github.event.workflow_run.conclusion == 'success'",
-                content,
-            )
-
-    def test_review_concurrency_groups_use_resolved_pull_request_number(self) -> None:
-        """Review concurrency must cancel obsolete and label-revoked runs."""
-        workflow_files = [
-            self.workflows_dir / "quality-review-pr.yml",
-            self.workflows_dir / "security-review-pr.yml",
-        ]
-        expected_output = {
-            "quality-review-pr.yml": "needs.resolve.outputs.number",
-            "security-review-pr.yml": "needs.resolve-pr.outputs.pr_number",
-        }
-        expected_skip_job = {
-            "quality-review-pr.yml": "fork-skip",
-            "security-review-pr.yml": "fork-review-skipped",
-        }
-        for workflow_file in workflow_files:
-            content = workflow_file.read_text(encoding="utf-8")
-            jobs = extract_workflow_jobs(content)
-            for job_name in ("review", "review-fork", expected_skip_job[workflow_file.name]):
-                self.assertIn(
-                    expected_output[workflow_file.name],
-                    jobs[job_name],
-                )
-                self.assertIn("cancel-in-progress: true", jobs[job_name])
-            self.assertNotIn(
-                "github.event.workflow_run.head_repository.full_name",
-                content,
-            )
-            self.assertNotIn(
-                "github.event.workflow_run.head_branch",
-                content,
-            )
-
-    def test_review_resolvers_ignore_older_ci_run_events(self) -> None:
-        """Only the latest completed CI event may dispatch a review."""
-        workflow_files = [
-            self.workflows_dir / "quality-review-pr.yml",
-            self.workflows_dir / "security-review-pr.yml",
-        ]
-        for workflow_file in workflow_files:
-            content = workflow_file.read_text(encoding="utf-8")
-            self.assertIn("actions.listWorkflowRuns", content)
-            self.assertIn("ci.yml", content)
-            self.assertIn("latestCiRunId", content)
-            self.assertIn("sourceRunId", content)
-            self.assertLess(
-                content.index("actions.listWorkflowRuns"),
-                content.index("github.rest.pulls.list"),
-            )
-
-    def test_review_resolvers_distinguish_stale_and_ambiguous_heads(self) -> None:
-        """Zero matches must skip, while multiple matches must fail visibly."""
-        quality_file = self.workflows_dir / "quality-review-pr.yml"
-        quality_content = quality_file.read_text(encoding="utf-8")
-        security_file = self.workflows_dir / "security-review-pr.yml"
-        security_content = security_file.read_text(encoding="utf-8")
-
-        self.assertIn("if (matches.length === 0)", quality_content)
-        self.assertIn("if (matches.length > 1)", quality_content)
-        self.assertIn("if (candidates.length === 0)", security_content)
-        self.assertIn("if (candidates.length > 1)", security_content)
-        for content in (quality_content, security_content):
-            self.assertIn(
-                "expected one pull request for workflow run head",
-                content,
-            )
-
-    def test_security_review_sets_all_stale_outputs(self) -> None:
-        """The stale security resolver must publish a complete output set."""
-        workflow_file = self.workflows_dir / "security-review-pr.yml"
-        content = workflow_file.read_text(encoding="utf-8")
-
-        self.assertIn(
-            'core.setOutput("already_reviewed", "false");',
-            content,
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
-

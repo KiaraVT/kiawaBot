@@ -2,65 +2,60 @@
 
 ## Purpose
 
-The PR security reviewer applies `AUDIT.md` to pull requests. The reviewer produces findings and machine-readable verdicts.
+The PR security reviewer applies the foucault persona policy to pull requests. The reviewer produces findings and machine-readable verdicts.
 
 ## Pins
 
-- `AUDIT.md`: commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`, through `audit_ref`.
-- `security-review.yml`: the same commit, through the `uses:` pin.
+- `agents-personas`: commit `1649e5c9710fd85d6cca12006e344af27a5404a6`, release `v1.0.0`.
+- `foucault-security-review.yml`: the same commit, through the `uses:` pin.
+- `personas_ref`: the same commit, through the workflow input. The engine rejects a tag or a branch name.
+- `AUDIT.md`: `reviewers/foucault/AUDIT.md` at the same commit.
 
 ## Review Adapter and Execution Stack
 
-The security reviewer utilizes local adopter scripts to prepare context, invoke models, and normalize responses:
-- `ci/build_pr_case.py`: extracts pull request diffs, commits, and metadata into a review envelope.
-- `ci/run_model_command.py`: executes model invocation commands with environment variable propagation.
-- `ci/call_model.py`: model invocation adapter invoked by Foucault (`model_call_command: "python3 ci/call_model.py"`).
-  - Resolves credentials by checking `MODEL_API_KEY` first, falling back to `OLLAMA_API_KEY`.
-  - Normalizes raw model output (extracts JSON from markdown code fences or unformatted text blocks).
-  - Validates and maps finding categories to valid `FindingCategory` enums in `AUDIT.md`.
-- `ci/model_providers.json`: specifies provider configuration and model profiles.
-- `scripts/check_pr_review_response.py`: validates model output structure against the required reviewer schema.
+The engine in `abuzucom/agents-personas` supplies the complete review stack. This repository holds no adapter scripts.
+- `engine/build_pr_case.py`: builds the review envelope from the pull request diff and metadata.
+- `engine/run_review.py`: builds the case, runs the persona hooks, calls the model, and validates each reply.
+- `engine/call_model.py`: model invocation adapter. The engine selects it because the caller leaves `model_call_command` empty.
+- `engine/model_providers.json`: provider configuration and model profiles. The active profile is `ollama-large` with model `minimax-m3.1-flash`.
+- `engine/check_review_response.py`: validates each model reply against the report contract.
+
+The caller maps the repository-level `OLLAMA_API_KEY` secret to `MODEL_API_KEY`. The adapter reads `MODEL_API_KEY` first and falls back to `OLLAMA_API_KEY`.
 
 ## Wiring and Lifecycle
 
-- `.github/workflows/security-review-pr.yml` runs the caller workflow.
-- Trigger: fires on completion of `ci` (`workflow_run` event). The resolver runs for every pull request CI outcome. Failed, canceled, and skipped CI runs remain reviewable so a pull request author cannot suppress the review by changing the CI workflow.
-- Concurrency: review and fork-review-skipped jobs use the resolved pull request number with `cancel-in-progress: true`. A newer review cancels an obsolete review for the same pull request. Removing `safe-to-review` starts the fork-review-skipped job in the same group, which cancels an active fork review. Stale workflow events that resolve to no current pull request do not enter the review concurrency group.
-- Permissions: declares `actions: read`, `checks: write`, `contents: read`, and `pull-requests: write`.
-- Resolution (`resolve-pr` job):
-  - Ignores superseded CI events by comparing the source workflow-run ID with the latest completed CI run for the same head revision.
-  - Matches `head_sha` against open pull requests. A stale revision with no matching open pull request exits without a review. Multiple matching pull requests fail visibly.
-  - Base Commit Fallback: queries GitHub API for required adopter review scripts (`ci/build_pr_case.py`, `ci/run_model_command.py`, `scripts/check_pr_review_response.py`) on `base_sha`. If any script returns 404 (e.g. older forks predating reviewer adoption), falls back to `context.sha` on the default branch so the checkout step succeeds.
-  - Re-review Deduplication: checks for existing trusted verdict artifacts (`security-review-verdict-${head_sha}`) and completed checks from default-branch runs, setting `already_reviewed: true` to prevent redundant execution.
-  - Queries PR labels via GitHub API, checking for `safe-to-review`. Fails closed if label queries fail.
-- Same-repository review (`review` job): calls `security-review.yml` with default inputs (omitting `fork_review`), mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}`.
-- Approved fork review (`review-fork` job): calls `security-review.yml` with `fork_review: true` in the protected `fork-review` environment, mapping environment secret `OLLAMA_API_KEY` or `MODEL_API_KEY`.
-- Unapproved fork skip (`fork-review-skipped` job): executes when a fork PR lacks `safe-to-review`, publishing a GitHub Check Run with status `completed` and conclusion `skipped`.
-- Comment annotation (`annotate` job): executes upon review completion (success or failure), running `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-security-review.md` on review comments matching marker `<!-- foucault-security-review -->`.
+- `.github/workflows/persona-review.yml` runs the caller workflow.
+- Trigger: fires on completion of `ci` (`workflow_run` event). The reviewer runs for every pull request CI outcome. Failed, canceled, and skipped CI runs remain reviewable so a pull request author cannot suppress the review by changing the CI workflow.
+- Concurrency: the workflow groups by the workflow run head revision with `cancel-in-progress: true`. A newer run cancels an obsolete review for the same head.
+- Permissions: the caller jobs declare `checks: write`, `contents: read`, and `pull-requests: write`.
+- Resolution (`resolve` job): the caller matches the workflow run head against the open pull requests. A stale revision with no matching pull request skips without a review. Multiple matching pull requests fail visibly. The job passes the pull request number, the base and head revisions, and the head repository to the engine, which reads the live labels and matches the changed files against the `paths` input. A pull request that changes only excluded files receives a skipped check named `foucault / security` and no model call.
+- Review (`foucault` job): calls `foucault-security-review.yml` with `fork_review: true` and `fail_on_block: true`, mapping `${{ secrets.OLLAMA_API_KEY || secrets.MODEL_API_KEY }}` to secret `MODEL_API_KEY`.
+- Path filter: `paths` excludes `CHANGELOG.md`, `README.md`, and `docs/**`. The `foucault-scan-requested` label overrides that filter. The `stop-requested` label pauses the persona.
+- Check run: the engine publishes `foucault / security`. A BLOCK verdict fails the check. A NEEDS-HUMAN verdict warns and concludes neutral.
+- Reuse: the engine reuses an earlier failing check run that carries the same review key. A passing result always reruns the review.
+- Comment annotation (`annotate` job): runs when either persona produced a result, so one skipped persona does not cost the other persona its annotation. The job uses the pull request number from the resolve job, then runs `.github/actions/annotate-pr-review` to prepend a reference header pointing to `docs/pr-security-review.md` on review comments matching marker `persona-review: foucault / security` or the heading `Foucault security review:`. Each annotation step runs for its own persona.
 
 ## Trust Boundary and Gating
 
-The workflow-run caller runs default-branch code. Pull request files remain review data. The workflow never executes pull request code. Every checkout sets `persist-credentials: false`. Fork pull requests require maintainer label and environment approval before receiving provider credentials.
+The workflow-run caller runs default-branch code. Pull request files remain review data. The engine never executes pull request code. Every checkout sets `persist-credentials: false`. The engine reads the pull request head as git objects and never checks it out.
 
-Fork pull requests enforce two-factor gating:
-1. **Maintainer Label Gate**: A repository maintainer must verify the pull request contents and apply the `safe-to-review` label. Removing the label triggers CI cancellation of active review runs.
-2. **Environment Approval Gate**: The `review-fork` job targets the protected `fork-review` GitHub environment, requiring explicit maintainer deployment approval before releasing environment secrets or initiating evaluation containers.
+Every model review runs through the protected `fork-review` GitHub environment. A maintainer approves the deployment before the provider key reaches a job. The environment holds no secrets. The provider key is the repository-level `OLLAMA_API_KEY` secret, and the caller maps it to `MODEL_API_KEY`.
 
-Passing `fork_review: true` to upstream `security-review.yml` activates fork isolation: pull request files are parsed purely as untrusted data without execution, model prompts execute in restricted evaluation containers, and workflow write tokens are isolated from PR content.
+The annotation job runs outside that gate on purpose. It checks out the default branch, runs trusted composite action code, receives no provider key, and only updates the comment the engine posted.
 
-The `fork-review` environment must require at least one maintainer reviewer approval, forbid self-approval, and restrict deployments to trusted branches or pull request head references. The environment-level `OLLAMA_API_KEY` or `MODEL_API_KEY` must be provisioned as a distinct credential from repository-level secrets, ensuring independent secret lifecycle and preventing privilege escalation across review scopes.
+The engine treats the pull request title, description, and diff as untrusted text. It places them in the review envelope without evaluation or shell execution. Persona hooks run inside bubblewrap without network access.
 
-Pull request titles and descriptions are sanitized in `resolve-pr` to strip non-printable ASCII control characters. Upstream reusable workflows treat `pr_title` and `pr_body` as untrusted text inputs, escaping them into review context prompts without evaluation or shell execution. Label removal (`unlabeled` event) triggers CI state re-resolution, canceling in-progress review runs and ensuring stale approvals cannot execute against unapproved PRs.
+The engine replaces the former `safe-to-review` maintainer label gate. The environment approval gate covers the same trust decision.
 
 ## Policy Provenance and Drift Detection
 
-This document incorporates the exact policy specification from [abuzucom/foucault](https://github.com/abuzucom/foucault) pinned at commit `f58255c8d75658e62e7cff9b607c13aeab5f5e18`. Source file: [AUDIT.md](https://github.com/abuzucom/foucault/blob/f58255c8d75658e62e7cff9b607c13aeab5f5e18/AUDIT.md). Upstream policy specification content and SHA-256 digest remain unchanged from `f59866d`.
+This document incorporates the exact policy specification from [abuzucom/agents-personas](https://github.com/abuzucom/agents-personas) pinned at commit `1649e5c9710fd85d6cca12006e344af27a5404a6`. Source file: [reviewers/foucault/AUDIT.md](https://github.com/abuzucom/agents-personas/blob/1649e5c9710fd85d6cca12006e344af27a5404a6/reviewers/foucault/AUDIT.md).
 
-Run `python scripts/check_policy_drift.py` to verify local policy integrity against the upstream SHA-256 digest (`bd252577fe7f4359f7bd6e3ea3f91c3bddf854dfc8d6c30a696986e91acf89a0`).
+Run `python scripts/check_policy_drift.py` to verify local policy integrity against the upstream SHA-256 digest (`98c66b3f1cae20312164d124b25df135046e7ca3896f8804ce4cee0659782ad1`).
 
 ## License
 
-The embedded Foucault `AUDIT.md` policy specification is distributed under the BSD 3-Clause License:
+The embedded `AUDIT.md` policy specification from the foucault persona is distributed under the BSD 3-Clause License:
 
 ```text
 BSD 3-Clause License
@@ -95,6 +90,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
+<!-- upstream-policy: reviewers/foucault/AUDIT.md -->
 # SECURITY.md: AI Code Review Instructions
 
 > **Scope:** review a pull request, file, fragment, or whole codebase.
@@ -131,6 +127,15 @@ Apply diff, history, and manifest rules in PR mode. In other modes, inspect the 
 8. **Escalation.** Mark NEEDS-HUMAN when safety cannot be determined.
 9. **Declare context.** Establish the mode and visible material before review. State what remains
   unseen. Never infer safety from unseen code.
+
+### Process
+- Reuse trusted same-head green CI. If unavailable, mark CI out of view and move on.
+- Use complete diffs once. Reopen for context or line refs. Trace unchanged paths.
+- Reproduce defects once. Batch hypotheses. Reuse setup. If quoting fails, use a script.
+- Track active time. Pause for tool/human waits. Honor trusted
+  `active_work_elapsed_seconds`. At 10 minutes, publish partial results as
+  `NEEDS-HUMAN`. Set PR verdict. All modes add
+  `REVIEW STATUS: NEEDS-HUMAN - timeout`. List open checks and gaps.
 
 ## 2. Failure Modes in AI-Assisted Code
 
@@ -482,6 +487,11 @@ Required final human-readable line by mode:
 
 Immediately after that line, emit the machine-readable companion. CI gates on structure rather than prose:
 
+For PR mode, include only review conclusions, evidence, coverage, and prior-finding statuses. Complete
+steps 0-8 before drafting the report. Omit first-person process narration, self-directed questions or
+instructions, repeated reconsideration, and speculative work notes. State uncertainty as a review
+limitation and use NEEDS-HUMAN where section 1.8 applies. Put no text after the VERDICT_JSON line.
+
 ```
 VERDICT_JSON: {"mode": "PR|File|Piece|Wholesale", "verdict": "<the same verdict token as the line above>", "findings": [{"severity": "CRITICAL|HIGH|MEDIUM|LOW", "class": "2.x", "file": "path", "line": 123, "title": "short title"}]}
 ```
@@ -548,4 +558,3 @@ Before reporting zero findings, recheck section 2 against skimmed files and conf
 Do not manufacture findings or inflate severity. Classify only under section 1. Keep LOW as LOW. A
   clean result is valid when step 0 excludes most classes. In Piece mode, never report "safe" when
   safety depends on unseen code. Mark NEEDS-HUMAN.
-
