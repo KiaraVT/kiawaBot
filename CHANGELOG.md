@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The euler deterministic prescan skips `tests/**`, which hold flagged patterns on purpose.
 - The policy drift check now verifies the embedded policy against `abuzucom/agents-personas` and uses the `PERSONAS_QUALITY_URL`, `PERSONAS_QUALITY_REF`, `PERSONAS_AUDIT_URL`, and `PERSONAS_AUDIT_REF` environment names.
 - The embedded `QUALITY.md` and `AUDIT.md` policy text now matches the `agents-personas` release `v1.0.0`.
+- Added the `generay` time persona, the `adorno` user interface persona, and the `havel` privacy persona. A maintainer requests each review with the matching `generay-scan-requested`, `adorno-scan-requested`, or `havel-scan-requested` label. The caller workflow is `.github/workflows/persona-review-labels.yml`.
+- The havel persona declares no legal scope. The review applies the baseline privacy classes alone and marks every regime-conditional finding NEEDS-HUMAN.
+- The policy drift check now verifies five documents against the upstream `agents-personas` policy files. Each document embeds its upstream files behind a `<!-- upstream-policy: ... -->` marker. The override names are `PERSONAS_REF` and `PERSONAS_BASE_URL`.
 
 ### Removed
 - Removed the `ci/` model adapter directory. The `agents-personas` engine supplies the case builder, the model adapter, the model provider configuration, and the reply validator.

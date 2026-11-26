@@ -7,6 +7,7 @@ import unittest
 
 PERSONAS_REF = "1649e5c9710fd85d6cca12006e344af27a5404a6"
 PERSONA_WORKFLOW = "persona-review.yml"
+LABEL_WORKFLOW = "persona-review-labels.yml"
 RETIRED_WORKFLOWS = ("quality-review-pr.yml", "security-review-pr.yml")
 RETIRED_UPSTREAMS = ("abuzucom/euler", "abuzucom/foucault")
 RETIRED_ADAPTER_FILES = (
@@ -16,6 +17,20 @@ RETIRED_ADAPTER_FILES = (
     "ci/model_providers.json",
     "scripts/check_pr_review_response.py",
 )
+# Persona name, wrapper file, check name, scan label, and policy document.
+PERSONAS = (
+    ("foucault", "foucault-security-review.yml", "foucault / security", "foucault-scan-requested",
+     "docs/pr-security-review.md"),
+    ("euler", "euler-quality-review.yml", "euler / quality", "euler-scan-requested",
+     "docs/pr-quality-review.md"),
+    ("generay", "generay-time-review.yml", "generay / time", "generay-scan-requested",
+     "docs/pr-time-review.md"),
+    ("adorno", "adorno-ui-review.yml", "adorno / ui", "adorno-scan-requested",
+     "docs/pr-ui-review.md"),
+    ("havel", "havel-privacy-review.yml", "havel / privacy", "havel-scan-requested",
+     "docs/pr-privacy-review.md"),
+)
+POLICY_DOCUMENTS = tuple(document for _persona, _wrapper, _check, _label, document in PERSONAS)
 
 
 def extract_workflow_jobs(content: str) -> dict[str, str]:
@@ -55,6 +70,9 @@ class WorkflowContractsTestCase(unittest.TestCase):
         self.persona_workflow = self.workflows_dir / PERSONA_WORKFLOW
         self.persona_content = self.persona_workflow.read_text(encoding="utf-8")
         self.persona_jobs = extract_workflow_jobs(self.persona_content)
+        self.label_workflow = self.workflows_dir / LABEL_WORKFLOW
+        self.label_content = self.label_workflow.read_text(encoding="utf-8")
+        self.label_jobs = extract_workflow_jobs(self.label_content)
 
     def test_retired_review_workflows_are_removed(self) -> None:
         """The superseded euler and foucault caller files must be gone."""
@@ -110,35 +128,92 @@ class WorkflowContractsTestCase(unittest.TestCase):
 
     def test_persona_jobs_do_not_declare_environment(self) -> None:
         """Reusable workflow caller jobs must not define environment key."""
-        for job_name, job_body in self.persona_jobs.items():
-            has_uses = bool(re.search(r"^\s+uses:", job_body, re.MULTILINE))
-            if has_uses:
-                has_environment = bool(
-                    re.search(r"^\s+environment:", job_body, re.MULTILINE)
-                )
-                self.assertFalse(
-                    has_environment,
-                    (
-                        f"Job '{job_name}' defines 'environment' while invoking a "
-                        "reusable workflow. GitHub Actions rejects 'environment' "
-                        "on caller jobs with 'uses'."
-                    ),
-                )
+        for jobs in (self.persona_jobs, self.label_jobs):
+            for job_name, job_body in jobs.items():
+                has_uses = bool(re.search(r"^\s+uses:", job_body, re.MULTILINE))
+                if has_uses:
+                    has_environment = bool(
+                        re.search(r"^\s+environment:", job_body, re.MULTILINE)
+                    )
+                    self.assertFalse(
+                        has_environment,
+                        (
+                            f"Job '{job_name}' defines 'environment' while invoking a "
+                            "reusable workflow. GitHub Actions rejects 'environment' "
+                            "on caller jobs with 'uses'."
+                        ),
+                    )
+
+    def test_label_caller_uses_pull_request_target(self) -> None:
+        """The label caller must run from the default branch on a label event."""
+        self.assertIn("pull_request_target:", self.label_content)
+        self.assertIn("types: [labeled, synchronize, unlabeled]", self.label_content)
+        self.assertNotIn("workflow_run:", self.label_content)
+
+    def test_label_caller_jobs_require_their_scan_label(self) -> None:
+        """Each label persona must run only for its own scan label."""
+        for persona, _wrapper, _check, label, _document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            job_body = self.label_jobs[persona]
+            self.assertIn(f"'{label}'", job_body)
+            self.assertIn("github.event.label.name == 'stop-requested'", job_body)
+
+    def test_label_caller_jobs_pin_the_persona_wrappers(self) -> None:
+        """Each label persona must call its wrapper at the release commit."""
+        for persona, wrapper, _check, _label, _document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            job_body = self.label_jobs[persona]
+            self.assertIn(
+                f"uses: abuzucom/agents-personas/.github/workflows/{wrapper}@{PERSONAS_REF}",
+                job_body,
+            )
+            match = re.search(r'personas_ref:\s*"([0-9a-f]{40})"', job_body)
+            self.assertIsNotNone(match)
+            self.assertEqual(match.group(1), PERSONAS_REF)
+
+    def test_generay_excludes_test_files_from_the_prescan(self) -> None:
+        """The generay prescan must skip test files."""
+        self.assertIn('exclude_paths: "tests/**"', self.label_jobs["generay"])
+
+    def test_havel_declares_no_legal_scope(self) -> None:
+        """The havel caller must not assert a legal regime scope."""
+        self.assertIn('regimes: ""', self.label_jobs["havel"])
+
+    def test_label_caller_annotate_job_links_the_policy_documents(self) -> None:
+        """The label caller must link each persona to its policy document."""
+        job_body = self.label_jobs["annotate"]
+        self.assertIn("!cancelled()", job_body)
+        for persona, _wrapper, check, _label, document in PERSONAS:
+            if persona not in self.label_jobs:
+                continue
+            self.assertIn(document, job_body)
+            self.assertIn(f"persona-review: {check}", job_body)
+
+    def test_local_policy_documents_exist(self) -> None:
+        """Each persona must have a local policy document."""
+        for document in POLICY_DOCUMENTS:
+            self.assertTrue(
+                (self.repo_root / document).is_file(),
+                f"{document} must exist for the policy drift check.",
+            )
 
     def test_review_jobs_support_ollama_and_model_api_keys(self) -> None:
-        """Both persona jobs must support OLLAMA_API_KEY."""
-        for job_name in ("foucault", "euler"):
-            self.assertIn(job_name, self.persona_jobs)
-            job_body = self.persona_jobs[job_name]
-            self.assertIn(
-                "secrets.OLLAMA_API_KEY",
-                job_body,
-                (
-                    f"Job '{job_name}' must reference secrets.OLLAMA_API_KEY so "
-                    "environments using OLLAMA_API_KEY are supported."
-                ),
-            )
-            self.assertIn("secrets.MODEL_API_KEY", job_body)
+        """Every persona job must support OLLAMA_API_KEY."""
+        for jobs in (self.persona_jobs, self.label_jobs):
+            for job_name, job_body in jobs.items():
+                if job_name == "annotate":
+                    continue
+                self.assertIn(
+                    "secrets.OLLAMA_API_KEY",
+                    job_body,
+                    (
+                        f"Job '{job_name}' must reference secrets.OLLAMA_API_KEY so "
+                        "environments using OLLAMA_API_KEY are supported."
+                    ),
+                )
+                self.assertIn("secrets.MODEL_API_KEY", job_body)
 
     def test_review_jobs_run_for_all_pull_request_ci_outcomes(self) -> None:
         """Review jobs must not let a pull request author suppress reviews."""
@@ -148,15 +223,17 @@ class WorkflowContractsTestCase(unittest.TestCase):
             self.assertNotIn("github.event.workflow_run.conclusion", job_body)
 
     def test_persona_jobs_route_reviews_through_the_fork_review_environment(self) -> None:
-        """Both persona jobs must opt into the protected fork-review path."""
-        for job_name in ("foucault", "euler"):
-            job_body = self.persona_jobs[job_name]
-            self.assertIn(
-                "fork_review: true",
-                job_body,
-                f"Job '{job_name}' must set fork_review so every review waits "
-                "for environment approval.",
-            )
+        """Every persona job must opt into the protected fork-review path."""
+        for jobs in (self.persona_jobs, self.label_jobs):
+            for job_name, job_body in jobs.items():
+                if job_name == "annotate":
+                    continue
+                self.assertIn(
+                    "fork_review: true",
+                    job_body,
+                    f"Job '{job_name}' must set fork_review so every review waits "
+                    "for environment approval.",
+                )
 
     def test_persona_jobs_declare_the_expected_path_filters(self) -> None:
         """Both persona jobs must skip documentation-only pull requests."""
@@ -168,10 +245,11 @@ class WorkflowContractsTestCase(unittest.TestCase):
 
     def test_check_run_names_use_the_persona_layout(self) -> None:
         """The engine publishes persona-scoped check names."""
-        self.assertIn("euler / quality", self.persona_content)
-        self.assertIn("foucault / security", self.persona_content)
-        self.assertNotIn("name: quality-review", self.persona_content)
-        self.assertNotIn("name: security-review", self.persona_content)
+        combined = self.persona_content + self.label_content
+        for _persona, _wrapper, check, _label, _document in PERSONAS:
+            self.assertIn(check, combined)
+        self.assertNotIn("name: quality-review", combined)
+        self.assertNotIn("name: security-review", combined)
 
     def test_annotate_job_keeps_a_status_function(self) -> None:
         """The annotate job must survive a skipped persona job."""

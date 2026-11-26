@@ -76,6 +76,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
+<!-- upstream-policy: reviewers/euler/QUALITY.md -->
 # QUALITY.md: AI Code Quality Review Instructions
 
 > **Scope:** review a pull request, file, fragment, or whole codebase for code quality and conventions.

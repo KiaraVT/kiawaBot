@@ -7,21 +7,60 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts.check_policy_drift import (
+    APPROVED_POLICY_PATHS,
+    DOCUMENTS,
+    POLICY_MARKER_PREFIX,
+    POLICY_MARKER_SUFFIX,
     SEPARATOR,
+    PolicyDocument,
     extract_embedded_policy,
     fetch_text,
+    get_policy_config,
+    policy_file_url,
+    validate_policy_base_url,
+    validate_policy_ref,
     verify_policy,
 )
+
+PERSONAS_REF = "1649e5c9710fd85d6cca12006e344af27a5404a6"
+BASE_URL = f"https://raw.githubusercontent.com/abuzucom/agents-personas/{PERSONAS_REF}"
+
+
+def marker(path: str) -> str:
+    """Return the policy marker line for one upstream path."""
+    return f"{POLICY_MARKER_PREFIX}{path}{POLICY_MARKER_SUFFIX}"
+
+
+def digest(text: str) -> str:
+    """Return the SHA-256 digest of one policy text."""
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class TestCheckPolicyDrift(unittest.TestCase):
     def test_extract_embedded_policy(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nSome text{SEPARATOR}# Policy Content\nRules here\n")
+            f.write(f"# Preamble\nSome text{SEPARATOR}{marker('reviewers/euler/QUALITY.md')}\nPolicy Content\nRules here\n")
             temp_path = Path(f.name)
         try:
             extracted = extract_embedded_policy(temp_path)
-            self.assertEqual(extracted, "# Policy Content\nRules here\n")
+            self.assertEqual(extracted, {"reviewers/euler/QUALITY.md": "Policy Content\nRules here\n"})
+        finally:
+            temp_path.unlink()
+
+    def test_extract_embedded_policy_returns_one_block_per_marker(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            f.write(
+                f"# Preamble{SEPARATOR}{marker('reviewers/euler/QUALITY.md')}\nFirst\n{marker('reviewers/foucault/AUDIT.md')}\nSecond\n"
+            )
+            temp_path = Path(f.name)
+        try:
+            extracted = extract_embedded_policy(temp_path)
+            self.assertEqual(
+                extracted,
+                {"reviewers/euler/QUALITY.md": "First\n", "reviewers/foucault/AUDIT.md": "Second\n"},
+            )
         finally:
             temp_path.unlink()
 
@@ -35,75 +74,92 @@ class TestCheckPolicyDrift(unittest.TestCase):
         finally:
             temp_path.unlink()
 
-    def test_verify_policy_matching(self) -> None:
+    def test_extract_embedded_policy_missing_marker_raises(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nInfo{SEPARATOR}Policy text\n")
+            f.write(f"# Preamble{SEPARATOR}Policy without a marker\n")
             temp_path = Path(f.name)
         try:
-            with patch("scripts.check_policy_drift.fetch_text", return_value="Policy text\n"):
-                ok = verify_policy(temp_path, "https://example.com/policy", "Test Policy")
-                self.assertTrue(ok)
+            with self.assertRaises(ValueError):
+                extract_embedded_policy(temp_path)
         finally:
             temp_path.unlink()
 
-    def test_verify_policy_sha256_integrity_matching(self) -> None:
-        import hashlib
+    def test_verify_policy_matching(self) -> None:
         policy_content = "Policy text\n"
-        expected_sha = hashlib.sha256(policy_content.encode("utf-8")).hexdigest()
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nInfo{SEPARATOR}{policy_content}")
-            temp_path = Path(f.name)
-        try:
-            with patch("scripts.check_policy_drift.fetch_text", return_value=policy_content):
-                ok = verify_policy(
-                    temp_path,
-                    "https://example.com/policy",
-                    "Test Policy",
-                    expected_sha256=expected_sha,
-                )
-                self.assertTrue(ok)
-        finally:
-            temp_path.unlink()
+        document = PolicyDocument(
+            "doc.md",
+            "Test Policy",
+            ("reviewers/euler/QUALITY.md",),
+            (digest(policy_content),),
+        )
+        with patch("scripts.check_policy_drift.fetch_text", return_value=policy_content):
+            ok = verify_policy(
+                document,
+                {"reviewers/euler/QUALITY.md": policy_content},
+                BASE_URL,
+            )
+            self.assertTrue(ok)
 
     def test_verify_policy_sha256_integrity_mismatch_fails(self) -> None:
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nInfo{SEPARATOR}Policy text\n")
-            temp_path = Path(f.name)
-        try:
-            with patch("scripts.check_policy_drift.fetch_text", return_value="Policy text\n"):
-                wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000"
-                ok = verify_policy(
-                    temp_path,
-                    "https://example.com/policy",
-                    "Test Policy",
-                    expected_sha256=wrong_sha,
-                )
-                self.assertFalse(ok)
-        finally:
-            temp_path.unlink()
+        policy_content = "Policy text\n"
+        document = PolicyDocument(
+            "doc.md",
+            "Test Policy",
+            ("reviewers/euler/QUALITY.md",),
+            ("0" * 64,),
+        )
+        with patch("scripts.check_policy_drift.fetch_text", return_value=policy_content):
+            ok = verify_policy(
+                document,
+                {"reviewers/euler/QUALITY.md": policy_content},
+                BASE_URL,
+            )
+            self.assertFalse(ok)
 
-    def test_verify_policy_mismatch(self) -> None:
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nInfo{SEPARATOR}Local text\n")
-            temp_path = Path(f.name)
-        try:
-            with patch("scripts.check_policy_drift.fetch_text", return_value="Upstream text\n"):
-                ok = verify_policy(temp_path, "https://example.com/policy", "Test Policy")
-                self.assertFalse(ok)
-        finally:
-            temp_path.unlink()
+    def test_verify_policy_content_mismatch_fails(self) -> None:
+        upstream_content = "Upstream text\n"
+        document = PolicyDocument(
+            "doc.md",
+            "Test Policy",
+            ("reviewers/euler/QUALITY.md",),
+            (digest(upstream_content),),
+        )
+        with patch("scripts.check_policy_drift.fetch_text", return_value=upstream_content):
+            ok = verify_policy(
+                document,
+                {"reviewers/euler/QUALITY.md": "Local text\n"},
+                BASE_URL,
+            )
+            self.assertFalse(ok)
+
+    def test_verify_policy_missing_embedded_block_fails(self) -> None:
+        policy_content = "Policy text\n"
+        document = PolicyDocument(
+            "doc.md",
+            "Test Policy",
+            ("reviewers/euler/QUALITY.md",),
+            (digest(policy_content),),
+        )
+        with patch("scripts.check_policy_drift.fetch_text", return_value=policy_content):
+            ok = verify_policy(document, {}, BASE_URL)
+            self.assertFalse(ok)
 
     def test_verify_policy_fetch_error(self) -> None:
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            f.write(f"# Preamble\nInfo{SEPARATOR}Policy text\n")
-            temp_path = Path(f.name)
-        try:
-            error = urllib.error.URLError("Network connection failed")
-            with patch("scripts.check_policy_drift.fetch_text", side_effect=error):
-                ok = verify_policy(temp_path, "https://example.com/policy", "Test Policy")
-                self.assertFalse(ok)
-        finally:
-            temp_path.unlink()
+        policy_content = "Policy text\n"
+        document = PolicyDocument(
+            "doc.md",
+            "Test Policy",
+            ("reviewers/euler/QUALITY.md",),
+            (digest(policy_content),),
+        )
+        error = urllib.error.URLError("Network connection failed")
+        with patch("scripts.check_policy_drift.fetch_text", side_effect=error):
+            ok = verify_policy(
+                document,
+                {"reviewers/euler/QUALITY.md": policy_content},
+                BASE_URL,
+            )
+            self.assertFalse(ok)
 
     def test_fetch_text_retries_and_succeeds(self) -> None:
         mock_response = MagicMock()
@@ -126,108 +182,92 @@ class TestCheckPolicyDrift(unittest.TestCase):
                     fetch_text("https://example.com/policy", retries=3, backoff_seconds=0.1)
 
     def test_validate_policy_ref(self) -> None:
-        from scripts.check_policy_drift import validate_policy_ref
         self.assertEqual(validate_policy_ref("main", "agents-personas"), "main")
         self.assertEqual(validate_policy_ref("v1.0.0", "agents-personas"), "v1.0.0")
         with self.assertRaises(ValueError):
             validate_policy_ref("../traversal", "agents-personas")
 
-    def test_validate_policy_url(self) -> None:
-        from scripts.check_policy_drift import validate_policy_url
-        valid_url = (
-            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/"
-            "reviewers/euler/QUALITY.md"
-        )
-        self.assertEqual(validate_policy_url(valid_url, "agents-personas"), valid_url)
-        audit_url = (
-            "https://raw.githubusercontent.com/abuzucom/agents-personas/v1.0.0/"
-            "reviewers/foucault/AUDIT.md"
-        )
-        self.assertEqual(validate_policy_url(audit_url, "agents-personas"), audit_url)
+    def test_validate_policy_base_url(self) -> None:
+        valid_url = f"{BASE_URL}"
+        self.assertEqual(validate_policy_base_url(valid_url, "agents-personas"), valid_url)
         with self.assertRaises(ValueError):
-            validate_policy_url(
-                "http://raw.githubusercontent.com/abuzucom/agents-personas/main/reviewers/euler/QUALITY.md",
+            validate_policy_base_url(
+                "http://raw.githubusercontent.com/abuzucom/agents-personas/main",
                 "agents-personas",
             )
         with self.assertRaises(ValueError):
-            validate_policy_url(
-                "https://attacker.com/abuzucom/agents-personas/main/reviewers/euler/QUALITY.md",
+            validate_policy_base_url(
+                "https://attacker.com/abuzucom/agents-personas/main",
                 "agents-personas",
             )
         with self.assertRaises(ValueError):
-            validate_policy_url(
-                "https://raw.githubusercontent.com/malicious/agents-personas/main/reviewers/euler/QUALITY.md",
+            validate_policy_base_url(
+                "https://raw.githubusercontent.com/malicious/agents-personas/main",
                 "agents-personas",
             )
         with self.assertRaises(ValueError):
-            validate_policy_url(
+            validate_policy_base_url(
                 "https://raw.githubusercontent.com/abuzucom/", "agents-personas"
             )
         with self.assertRaises(ValueError):
-            validate_policy_url(
-                "https://raw.githubusercontent.com/abuzucom/unapproved_repo/main/reviewers/euler/QUALITY.md",
+            validate_policy_base_url(
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/main/../attacker",
                 "agents-personas",
             )
         with self.assertRaises(ValueError):
-            validate_policy_url(
-                "https://raw.githubusercontent.com/abuzucom/agents-personas/main/../attacker/QUALITY.md",
+            validate_policy_base_url(
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/main?ref=other",
+                "agents-personas",
+            )
+        with self.assertRaises(ValueError):
+            validate_policy_base_url(
+                "https://user:pass@raw.githubusercontent.com/abuzucom/agents-personas/main",
                 "agents-personas",
             )
 
-    def test_validate_policy_url_rejects_retired_repositories(self) -> None:
-        from scripts.check_policy_drift import validate_policy_url
-        retired_urls = [
-            "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md",
-            "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md",
-            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/QUALITY.md",
-            "https://raw.githubusercontent.com/abuzucom/agents-personas/main/reviewers/euler/AUDIT.md",
-        ]
-        for retired_url in retired_urls:
-            with self.subTest(url=retired_url):
-                with self.assertRaises(ValueError):
-                    validate_policy_url(retired_url, "agents-personas")
+    def test_policy_file_url_rejects_unapproved_paths(self) -> None:
+        self.assertEqual(
+            policy_file_url(BASE_URL, "reviewers/euler/QUALITY.md"),
+            f"{BASE_URL}/reviewers/euler/QUALITY.md",
+        )
+        with self.assertRaises(ValueError):
+            policy_file_url(BASE_URL, "reviewers/euler/other.md")
+        with self.assertRaises(ValueError):
+            policy_file_url(BASE_URL, "../../etc/passwd")
 
     def test_get_policy_config(self) -> None:
-        from scripts.check_policy_drift import get_policy_config
         with patch.dict("os.environ", {}, clear=True):
-            quality_url, audit_url, retries, backoff, timeout = get_policy_config()
-            self.assertEqual(
-                quality_url,
-                "https://raw.githubusercontent.com/abuzucom/agents-personas/"
-                "1649e5c9710fd85d6cca12006e344af27a5404a6/reviewers/euler/QUALITY.md",
-            )
-            self.assertEqual(
-                audit_url,
-                "https://raw.githubusercontent.com/abuzucom/agents-personas/"
-                "1649e5c9710fd85d6cca12006e344af27a5404a6/reviewers/foucault/AUDIT.md",
-            )
+            base_url, ref, retries, backoff, timeout = get_policy_config()
+            self.assertEqual(base_url, BASE_URL)
+            self.assertEqual(ref, PERSONAS_REF)
             self.assertEqual(retries, 3)
             self.assertEqual(backoff, 1.0)
             self.assertEqual(timeout, 30.0)
 
         custom_env = {
-            "PERSONAS_QUALITY_REF": "v2.0",
-            "PERSONAS_AUDIT_REF": "v3.0",
+            "PERSONAS_REF": "v2.0",
             "POLICY_DRIFT_RETRIES": "5",
             "POLICY_DRIFT_BACKOFF_SECONDS": "2.5",
             "POLICY_DRIFT_TIMEOUT_SECONDS": "45.0",
         }
         with patch.dict("os.environ", custom_env, clear=True):
-            quality_url, audit_url, retries, backoff, timeout = get_policy_config()
+            base_url, ref, retries, backoff, timeout = get_policy_config()
             self.assertEqual(
-                quality_url,
-                "https://raw.githubusercontent.com/abuzucom/agents-personas/v2.0/reviewers/euler/QUALITY.md",
+                base_url,
+                "https://raw.githubusercontent.com/abuzucom/agents-personas/v2.0",
             )
-            self.assertEqual(
-                audit_url,
-                "https://raw.githubusercontent.com/abuzucom/agents-personas/v3.0/reviewers/foucault/AUDIT.md",
-            )
+            self.assertEqual(ref, "v2.0")
             self.assertEqual(retries, 5)
             self.assertEqual(backoff, 2.5)
             self.assertEqual(timeout, 45.0)
 
+    def test_get_policy_config_accepts_a_base_url_override(self) -> None:
+        custom_env = {"PERSONAS_BASE_URL": BASE_URL}
+        with patch.dict("os.environ", custom_env, clear=True):
+            base_url, _ref, _retries, _backoff, _timeout = get_policy_config()
+            self.assertEqual(base_url, BASE_URL)
+
     def test_get_policy_config_rejects_retired_environment_names(self) -> None:
-        from scripts.check_policy_drift import get_policy_config
         retired_env = {
             "EULER_POLICY_URL": "https://raw.githubusercontent.com/abuzucom/euler/main/QUALITY.md",
             "FOUCAULT_POLICY_URL": "https://raw.githubusercontent.com/abuzucom/foucault/main/AUDIT.md",
@@ -235,6 +275,21 @@ class TestCheckPolicyDrift(unittest.TestCase):
         with patch.dict("os.environ", retired_env, clear=True):
             with self.assertRaises(ValueError):
                 get_policy_config()
+
+    def test_every_policy_document_uses_approved_paths(self) -> None:
+        for document in DOCUMENTS:
+            for path in document.upstream_paths:
+                self.assertIn(path, APPROVED_POLICY_PATHS)
+            self.assertEqual(len(document.upstream_paths), len(document.digests))
+
+    def test_local_policy_documents_embed_every_upstream_file(self) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        for document in DOCUMENTS:
+            doc_path = repo_root / document.doc_path
+            self.assertTrue(doc_path.is_file(), f"{document.doc_path} must exist")
+            blocks = extract_embedded_policy(doc_path)
+            for path in document.upstream_paths:
+                self.assertIn(path, blocks, f"{document.doc_path} must embed {path}")
 
     def test_parse_int_env(self) -> None:
         from scripts.check_policy_drift import parse_int_env
